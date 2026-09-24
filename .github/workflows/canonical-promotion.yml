@@ -3,17 +3,16 @@ name: Ownspace canonical source promotion
 on:
   push:
     branches:
-      - "promotion/f4-canonical"
+      - promotion/f4-canonical
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  promote-and-validate:
+  promote:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
-
     steps:
       - name: Checkout promotion carrier
         uses: actions/checkout@v4
@@ -21,14 +20,14 @@ jobs:
           fetch-depth: 0
 
       - name: Verify promotion preconditions
+        shell: bash
         run: |
           set -euo pipefail
-          EXPECTED_MAIN="d8abc22100e75a0eafd6a4b9a7c20aef7157b99c"
+          EXPECTED_MAIN=d8abc22100e75a0eafd6a4b9a7c20aef7157b99c
           git fetch origin main
           ACTUAL_MAIN="$(git rev-parse origin/main)"
           test "$ACTUAL_MAIN" = "$EXPECTED_MAIN"
           echo "EXPECTED_MAIN=$EXPECTED_MAIN" >> "$GITHUB_ENV"
-
           echo "6b981dde40d5675620b7030b8b76c28fadfd89121caf0e5845f487ceeaaf87c4  source/Ownspace_Source_Current_2026-09-24.tar.gz" | sha256sum -c -
           echo "b2c137728846635c2f872fd3f2f8b059655505856b1988a5cac92f9268896742  source/OWNSPACE_SOURCE_MANIFEST_SHA256.txt" | sha256sum -c -
           echo "13608ead93378aad8fea2f76b9fd0b63bb8cee5dcf0512a54d4e60b6c8a1fb9f  candidate/OWNSPACE_TEMP_STARTUP_AUTHORITY_V4.patch" | sha256sum -c -
@@ -41,83 +40,69 @@ jobs:
           echo "e5807076a51243b40994cd3f0968074e4758010ef1cb522866e2e33c75902338  candidate/OWNSPACE_TEMP_COMBINED_V4_A1_B1_F4_MANIFEST_SHA256.txt" | sha256sum -c -
 
       - name: Reconstruct exact Drive-authoritative source
+        shell: bash
         run: |
           set -euo pipefail
           mkdir -p promotion-work/source canonical-output
           tar -xzf source/Ownspace_Source_Current_2026-09-24.tar.gz -C promotion-work/source
           cd promotion-work/source
-
           test "$(find . -type f | wc -l | tr -d ' ')" = "372"
           sha256sum -c "$GITHUB_WORKSPACE/source/OWNSPACE_SOURCE_MANIFEST_SHA256.txt" >/dev/null
-
-          for patch_file in             "$GITHUB_WORKSPACE/candidate/OWNSPACE_TEMP_STARTUP_AUTHORITY_V4.patch"             "$GITHUB_WORKSPACE/candidate/OWNSPACE_TEMP_ANDROID_UI_A1.patch"             "$GITHUB_WORKSPACE/candidate/OWNSPACE_TEMP_DESKTOP_UI_B1.patch"             "$GITHUB_WORKSPACE/candidate/OWNSPACE_TEMP_FORMAT_F1.patch"             "$GITHUB_WORKSPACE/candidate/OWNSPACE_TEMP_CLIPPY_F2.patch"             "$GITHUB_WORKSPACE/candidate/OWNSPACE_TEMP_CLIPPY_F3.patch"             "$GITHUB_WORKSPACE/candidate/OWNSPACE_TEMP_CLIPPY_F4.patch"
-          do
+          patches=(
+            "$GITHUB_WORKSPACE/candidate/OWNSPACE_TEMP_STARTUP_AUTHORITY_V4.patch"
+            "$GITHUB_WORKSPACE/candidate/OWNSPACE_TEMP_ANDROID_UI_A1.patch"
+            "$GITHUB_WORKSPACE/candidate/OWNSPACE_TEMP_DESKTOP_UI_B1.patch"
+            "$GITHUB_WORKSPACE/candidate/OWNSPACE_TEMP_FORMAT_F1.patch"
+            "$GITHUB_WORKSPACE/candidate/OWNSPACE_TEMP_CLIPPY_F2.patch"
+            "$GITHUB_WORKSPACE/candidate/OWNSPACE_TEMP_CLIPPY_F3.patch"
+            "$GITHUB_WORKSPACE/candidate/OWNSPACE_TEMP_CLIPPY_F4.patch"
+          )
+          for patch_file in "${patches[@]}"; do
             patch -p1 --dry-run < "$patch_file" >/dev/null
             patch -p1 < "$patch_file" >/dev/null
           done
-
-          if find . -type f \( -name '*.rej' -o -name '*.orig' \) -print -quit | grep -q .; then
-            echo "unexpected patch artifact" >&2
-            exit 65
-          fi
-
+          if find . -type f -name '*.rej' -print -quit | grep -q .; then exit 65; fi
+          if find . -type f -name '*.orig' -print -quit | grep -q .; then exit 65; fi
           test "$(find . -type f | wc -l | tr -d ' ')" = "372"
           sha256sum -c "$GITHUB_WORKSPACE/candidate/OWNSPACE_TEMP_COMBINED_V4_A1_B1_F4_MANIFEST_SHA256.txt" >/dev/null
-
           find . -type f -print0 | sort -z | xargs -0 sha256sum > "$GITHUB_WORKSPACE/canonical-output/reconstructed-manifest.txt"
           cmp "$GITHUB_WORKSPACE/canonical-output/reconstructed-manifest.txt" "$GITHUB_WORKSPACE/candidate/OWNSPACE_TEMP_COMBINED_V4_A1_B1_F4_MANIFEST_SHA256.txt"
           echo "e5807076a51243b40994cd3f0968074e4758010ef1cb522866e2e33c75902338  $GITHUB_WORKSPACE/canonical-output/reconstructed-manifest.txt" | sha256sum -c -
 
-      - name: Create and push exact canonical main commit
+      - name: Create exact canonical commit locally
+        shell: bash
         run: |
           set -euo pipefail
           export GIT_INDEX_FILE="$RUNNER_TEMP/ownspace-canonical.index"
           rm -f "$GIT_INDEX_FILE"
-
           git read-tree --empty
-          git --git-dir="$GITHUB_WORKSPACE/.git"               --work-tree="$GITHUB_WORKSPACE/promotion-work/source"               add -A
-
+          git --git-dir="$GITHUB_WORKSPACE/.git" --work-tree="$GITHUB_WORKSPACE/promotion-work/source" add -A
           TREE_SHA="$(git write-tree)"
-          TREE_FILES="$(git ls-tree -r --name-only "$TREE_SHA" | wc -l | tr -d ' ')"
-          test "$TREE_FILES" = "372"
-
-          COMMIT_SHA="$(
-            printf '%s
-' 'chore: promote verified Ownspace source' |
-            git -c user.name='Ownspace Validation'                 -c user.email='actions@users.noreply.github.com'                 commit-tree "$TREE_SHA" -p "$EXPECTED_MAIN"
-          )"
-
+          test "$(git ls-tree -r --name-only "$TREE_SHA" | wc -l | tr -d ' ')" = "372"
+          COMMIT_SHA="$(echo 'chore: promote verified Ownspace source' | git -c user.name='Ownspace Validation' -c user.email='actions@users.noreply.github.com' commit-tree "$TREE_SHA" -p "$EXPECTED_MAIN")"
           test "$(git rev-parse "$COMMIT_SHA^")" = "$EXPECTED_MAIN"
           test "$(git ls-tree -r --name-only "$COMMIT_SHA" | wc -l | tr -d ' ')" = "372"
-
           mkdir -p canonical-checkout
           git archive "$COMMIT_SHA" | tar -x -C canonical-checkout
-          (
-            cd canonical-checkout
-            test "$(find . -type f | wc -l | tr -d ' ')" = "372"
-            sha256sum -c "$GITHUB_WORKSPACE/candidate/OWNSPACE_TEMP_COMBINED_V4_A1_B1_F4_MANIFEST_SHA256.txt" >/dev/null
-          )
-
-          git push origin "$COMMIT_SHA:refs/heads/main"
-
-          REMOTE_MAIN="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
-          test "$REMOTE_MAIN" = "$COMMIT_SHA"
-
+          cd canonical-checkout
+          test "$(find . -type f | wc -l | tr -d ' ')" = "372"
+          sha256sum -c "$GITHUB_WORKSPACE/candidate/OWNSPACE_TEMP_COMBINED_V4_A1_B1_F4_MANIFEST_SHA256.txt" >/dev/null
+          cd "$GITHUB_WORKSPACE"
           echo "OWNSPACE_CANONICAL_COMMIT=$COMMIT_SHA" >> "$GITHUB_ENV"
           echo "OWNSPACE_CANONICAL_TREE=$TREE_SHA" >> "$GITHUB_ENV"
-          {
-            echo "CANONICAL_COMMIT=$COMMIT_SHA"
-            echo "CANONICAL_TREE=$TREE_SHA"
-            echo "SOURCE_FILES=372"
-            echo "SOURCE_MANIFEST_SHA256=e5807076a51243b40994cd3f0968074e4758010ef1cb522866e2e33c75902338"
-          } > canonical-output/canonical-revision.txt
+          echo "CANONICAL_COMMIT=$COMMIT_SHA" > canonical-output/canonical-revision.txt
+          echo "CANONICAL_TREE=$TREE_SHA" >> canonical-output/canonical-revision.txt
+          echo "SOURCE_FILES=372" >> canonical-output/canonical-revision.txt
+          echo "SOURCE_MANIFEST_SHA256=e5807076a51243b40994cd3f0968074e4758010ef1cb522866e2e33c75902338" >> canonical-output/canonical-revision.txt
 
       - name: Install native build dependencies
+        shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends             ca-certificates             clang             cmake             desktop-file-utils             libadwaita-1-dev             libgtk-4-dev             libssl-dev             ninja-build             perl             pkg-config             protobuf-compiler
+          sudo apt-get install -y --no-install-recommends ca-certificates clang cmake desktop-file-utils libadwaita-1-dev libgtk-4-dev libssl-dev ninja-build perl pkg-config protobuf-compiler
 
       - name: Install exact Rust toolchain
+        shell: bash
         run: |
           rustup toolchain install 1.97.1 --profile minimal --component rustfmt --component clippy
           rustup default 1.97.1
@@ -128,6 +113,7 @@ jobs:
           cargo clippy --version
 
       - name: Install cargo-ndk
+        shell: bash
         run: |
           cargo +1.97.1 install cargo-ndk --version 4.1.2 --locked
           cargo ndk --version
@@ -144,8 +130,9 @@ jobs:
           gradle-version: "9.5.0"
 
       - name: Use runner Android SDK
+        shell: bash
         run: |
-          ANDROID_SDK="/usr/local/lib/android/sdk"
+          ANDROID_SDK=/usr/local/lib/android/sdk
           SDKMANAGER="$(find "$ANDROID_SDK/cmdline-tools" -type f -name sdkmanager -perm -u+x -print -quit)"
           test -n "$SDKMANAGER"
           echo "ANDROID_HOME=$ANDROID_SDK" >> "$GITHUB_ENV"
@@ -155,44 +142,43 @@ jobs:
           "$SDKMANAGER" --version
 
       - name: Install Android platform and NDK
+        shell: bash
         run: |
           yes | "$OWNSPACE_SDKMANAGER" --licenses >/dev/null || true
-          "$OWNSPACE_SDKMANAGER"             "platforms;android-36"             "build-tools;36.0.0"             "platform-tools"             "ndk;28.2.13676358"
+          "$OWNSPACE_SDKMANAGER" "platforms;android-36" "build-tools;36.0.0" "platform-tools" "ndk;28.2.13676358"
           test -d "$ANDROID_HOME/platforms/android-36"
           test -d "$ANDROID_HOME/ndk/28.2.13676358"
 
-      - name: Validate exact canonical revision
+      - name: Validate exact canonical commit
+        shell: bash
         run: |
           set -euo pipefail
           cd canonical-checkout
-
           test "$(find . -type f | wc -l | tr -d ' ')" = "372"
           sha256sum -c "$GITHUB_WORKSPACE/candidate/OWNSPACE_TEMP_COMBINED_V4_A1_B1_F4_MANIFEST_SHA256.txt" >/dev/null
-
           cargo +1.97.1 metadata --locked --no-deps --format-version 1 >/dev/null
           cargo +1.97.1 fmt --all -- --check
           cargo +1.97.1 clippy --locked --workspace --all-targets --all-features -- -D warnings
           cargo +1.97.1 test --locked --workspace --all-targets
           cargo +1.97.1 build --locked --workspace --all-targets
-
           cd "$GITHUB_WORKSPACE"
           chmod +x validation/validate_ownspace_android_candidate.sh
-          validation/validate_ownspace_android_candidate.sh             --workspace "$GITHUB_WORKSPACE/canonical-checkout"             --output "$GITHUB_WORKSPACE/canonical-output/android"             --expected-main-sha256 6af8b3ee3ffa40bf8614594b827b442d93f611c06f4735dce7ed19d217fe37f7
+          validation/validate_ownspace_android_candidate.sh --workspace "$GITHUB_WORKSPACE/canonical-checkout" --output "$GITHUB_WORKSPACE/canonical-output/android" --expected-main-sha256 6af8b3ee3ffa40bf8614594b827b442d93f611c06f4735dce7ed19d217fe37f7
 
-      - name: Verify remote main after validation
+      - name: Push validated canonical commit to main
+        shell: bash
         run: |
           set -euo pipefail
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$EXPECTED_MAIN"
+          git push origin "$OWNSPACE_CANONICAL_COMMIT:refs/heads/main"
           REMOTE_MAIN="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
           test "$REMOTE_MAIN" = "$OWNSPACE_CANONICAL_COMMIT"
-
-          {
-            echo "VALIDATION_RESULT=PASS"
-            echo "REMOTE_MAIN=$REMOTE_MAIN"
-            echo "RUST_TOOLCHAIN=1.97.1"
-            echo "ANDROID_LINT=PASS"
-            echo "ANDROID_ASSEMBLE_DEBUG=PASS"
-          } >> canonical-output/canonical-revision.txt
-
+          echo "VALIDATION_RESULT=PASS" >> canonical-output/canonical-revision.txt
+          echo "REMOTE_MAIN=$REMOTE_MAIN" >> canonical-output/canonical-revision.txt
+          echo "RUST_TOOLCHAIN=1.97.1" >> canonical-output/canonical-revision.txt
+          echo "ANDROID_LINT=PASS" >> canonical-output/canonical-revision.txt
+          echo "ANDROID_ASSEMBLE_DEBUG=PASS" >> canonical-output/canonical-revision.txt
           cat canonical-output/canonical-revision.txt
 
       - name: Upload canonical promotion evidence
