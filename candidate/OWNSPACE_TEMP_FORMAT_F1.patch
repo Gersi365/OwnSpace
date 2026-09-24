@@ -1,0 +1,57 @@
+--- a/apps/desktop/src/ui.rs
++++ b/apps/desktop/src/ui.rs
+@@ -131,7 +131,9 @@
+ 
+ const fn placeholder_description(destination: NavigationDestination) -> &'static str {
+     match destination {
+-        NavigationDestination::Overview => "Overview is implemented as a read-only local status surface.",
++        NavigationDestination::Overview => {
++            "Overview is implemented as a read-only local status surface."
++        }
+         NavigationDestination::Machines => {
+             "Reserved for enrolled-device and reachability presentation. Endpoint data is not identity or authorization."
+         }
+--- a/crates/prw-agent/src/lib.rs
++++ b/crates/prw-agent/src/lib.rs
+@@ -198,9 +198,9 @@
+         Err(owner_startup_state_dispatch::OwnerStartupStateDispatchError::FirstRun(_)) => {
+             Err(OwnerStartupAuthorityFailureStage::FirstRun)
+         }
+-        Err(owner_startup_state_dispatch::OwnerStartupStateDispatchError::EstablishedRestart(_)) => {
+-            Err(OwnerStartupAuthorityFailureStage::EstablishedRestart)
+-        }
++        Err(owner_startup_state_dispatch::OwnerStartupStateDispatchError::EstablishedRestart(
++            _,
++        )) => Err(OwnerStartupAuthorityFailureStage::EstablishedRestart),
+     }
+ }
+ 
+--- a/crates/prw-agent/src/linux_signal_aware_runtime.rs
++++ b/crates/prw-agent/src/linux_signal_aware_runtime.rs
+@@ -929,7 +929,8 @@
+             inputs(&dns),
+             |_shutdown| {
+                 queued_client = Some(UnixStream::connect(&path).expect("queued client connects"));
+-                raise(signal).expect("termination signal posts to current masked runtime test thread");
++                raise(signal)
++                    .expect("termination signal posts to current masked runtime test thread");
+             },
+         )
+         .expect("signal-aware runtime starts");
+--- a/crates/prw-agent/tests/phase125_device_identity_bootstrap.rs
++++ b/crates/prw-agent/tests/phase125_device_identity_bootstrap.rs
+@@ -59,11 +59,9 @@
+         fs::set_permissions(&path, fs::Permissions::from_mode(0o700))
+             .expect("secure isolated credential directory");
+ 
+-        let key = EcdsaKeyPair::generate_pkcs8(
+-            &ECDSA_P256_SHA256_ASN1_SIGNING,
+-            &SystemRandom::new(),
+-        )
+-        .expect("generate disposable Phase 125 device identity");
++        let key =
++            EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, &SystemRandom::new())
++                .expect("generate disposable Phase 125 device identity");
+         let credential = path.join(SYSTEMD_DEVICE_IDENTITY_CREDENTIAL_NAME);
+         fs::write(&credential, key.as_ref()).expect("write disposable device identity credential");
+         fs::set_permissions(&credential, fs::Permissions::from_mode(0o400))

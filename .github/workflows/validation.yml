@@ -1,4 +1,4 @@
-name: Ownspace validation
+name: Ownspace validation F1
 
 on:
   workflow_dispatch:
@@ -89,20 +89,22 @@ jobs:
           echo "13608ead93378aad8fea2f76b9fd0b63bb8cee5dcf0512a54d4e60b6c8a1fb9f  candidate/OWNSPACE_TEMP_STARTUP_AUTHORITY_V4.patch" | sha256sum -c -
           echo "11eb59d62cfcb9da3057e3debcc10e4d48ff77a5279b30cfb2ee7244ef12c4f0  candidate/OWNSPACE_TEMP_ANDROID_UI_A1.patch" | sha256sum -c -
           echo "40b4655c51cbf33618830c8c2cef73ca2051049e1dd2dba23d3e4b65874deb96  candidate/OWNSPACE_TEMP_DESKTOP_UI_B1.patch" | sha256sum -c -
-          echo "8fb1683427fc57884a018b591a1482483ea30f6716185198af2ce2913894f57c  candidate/OWNSPACE_TEMP_COMBINED_V4_A1_B1_MANIFEST_SHA256.txt" | sha256sum -c -
+          echo "27d6b520d6e2e290913f7f86bbb5f0339e9b6735e259f70eea5fcf36ee44243e  candidate/OWNSPACE_TEMP_FORMAT_F1.patch
+          echo "1188609b3bf9e1486fc1b13da91391c0a98cf75c18ce49214ac748e8c54e2226  candidate/OWNSPACE_TEMP_COMBINED_V4_A1_B1_F1_MANIFEST_SHA256.txt" | sha256sum -c -" | sha256sum -c -
           echo "f35257e4816889dfaeec05d48ad65ff2c72d5d11eeb49259a04fcb18be197065  validation/validate_ownspace_android_candidate.sh" | sha256sum -c -
-          echo "eee53ccb5749bb4757217a88094f878198107a3b9fd32eb2713ddc4146e8e026  validation/validate_ownspace_combined_v4_a1_b1.sh" | sha256sum -c -
+          echo "cb1b269e0fe9773244ae6f33d9f038d5cbd11b7ede415b9052b91f2fc1d299f1  validation/validate_ownspace_combined_v4_a1_b1_f1.sh" | sha256sum -c -
 
       - name: Run exact combined validation
         run: |
           chmod +x validation/*.sh
-          validation/validate_ownspace_combined_v4_a1_b1.sh \
+          validation/validate_ownspace_combined_v4_a1_b1_f1.sh \
             --base-archive source/Ownspace_Source_Current_2026-09-24.tar.gz \
             --base-manifest source/OWNSPACE_SOURCE_MANIFEST_SHA256.txt \
             --v4-patch candidate/OWNSPACE_TEMP_STARTUP_AUTHORITY_V4.patch \
             --a1-patch candidate/OWNSPACE_TEMP_ANDROID_UI_A1.patch \
             --b1-patch candidate/OWNSPACE_TEMP_DESKTOP_UI_B1.patch \
-            --combined-manifest candidate/OWNSPACE_TEMP_COMBINED_V4_A1_B1_MANIFEST_SHA256.txt \
+            --f1-patch candidate/OWNSPACE_TEMP_FORMAT_F1.patch \
+            --combined-manifest candidate/OWNSPACE_TEMP_COMBINED_V4_A1_B1_F1_MANIFEST_SHA256.txt \
             --android-runner validation/validate_ownspace_android_candidate.sh \
             --output validation-output \
             --mode full
