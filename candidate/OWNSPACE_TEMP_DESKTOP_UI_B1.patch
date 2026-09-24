@@ -1,0 +1,49 @@
+--- a/apps/desktop/src/ui.rs
++++ b/apps/desktop/src/ui.rs
+@@ -115,9 +115,12 @@
+     title.add_css_class("title-1");
+     page.append(&title);
+ 
+-    let detail = gtk::Label::new(Some(
+-        "Not implemented in Phase 151. No capability is implied by this navigation surface.",
+-    ));
++    let status = gtk::Label::new(Some("Placeholder — no capability active"));
++    status.set_xalign(0.0);
++    status.add_css_class("title-3");
++    page.append(&status);
++
++    let detail = gtk::Label::new(Some(placeholder_description(destination)));
+     detail.set_xalign(0.0);
+     detail.set_wrap(true);
+     detail.add_css_class("dim-label");
+@@ -126,6 +129,30 @@
+     page
+ }
+ 
++const fn placeholder_description(destination: NavigationDestination) -> &'static str {
++    match destination {
++        NavigationDestination::Overview => "Overview is implemented as a read-only local status surface.",
++        NavigationDestination::Machines => {
++            "Reserved for enrolled-device and reachability presentation. Endpoint data is not identity or authorization."
++        }
++        NavigationDestination::Sessions => {
++            "Reserved for authorized terminal, Remote Desktop, and forwarding session presentation when runtime state is available."
++        }
++        NavigationDestination::Files => {
++            "Reserved for remote browsing and file operations through the existing authenticated file authority."
++        }
++        NavigationDestination::Transfers => {
++            "Reserved for verified upload/download progress and completion state."
++        }
++        NavigationDestination::Activity => {
++            "Reserved for locally available Ownspace activity and diagnostics. No external telemetry is implied."
++        }
++        NavigationDestination::Settings => {
++            "Reserved for explicit owner-controlled local settings and diagnostics; no cloud account dependency is implied."
++        }
++    }
++}
++
+ fn start_startup_probe(agent_label: gtk::Label, dns_label: gtk::Label, detail_label: gtk::Label) {
+     let (sender, receiver) = mpsc::sync_channel(1);
+     let spawn_result = std::thread::Builder::new()

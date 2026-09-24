@@ -1,0 +1,1220 @@
+--- a/crates/prw-agent/src/bin/prw-first-run.rs
++++ b/crates/prw-agent/src/bin/prw-first-run.rs
+@@ -1,4 +1,4 @@
+-//! Thin executable boundary for the dormant `prw-first-run` authoring tool.
++//! Thin executable boundary for the explicit `prw-first-run` setup-intent authoring tool.
+ 
+ use std::process::ExitCode;
+ 
+--- a/crates/prw-agent/src/lib.rs
++++ b/crates/prw-agent/src/lib.rs
+@@ -24,74 +24,70 @@
+ #[cfg(target_os = "linux")]
+ #[allow(
+     dead_code,
+-    reason = "C03e-ZO materializes dormant established-startup authority verification before separately gated executable startup composition"
++    reason = "established-startup authority is active through the gate while additional crate-internal proof helpers remain intentionally bounded"
+ )]
+ pub(crate) mod owner_established_startup_authority;
+ #[cfg(target_os = "linux")]
+ #[allow(
+     dead_code,
+-    reason = "C03e-ZC materializes the dormant first-run orchestrator before separately gated setup-intent source and executable startup activation"
++    reason = "first-run authority is active through the dispatcher while legacy helper entrypoints remain crate-internal"
+ )]
+ pub(crate) mod owner_first_run_orchestration;
+ #[cfg(target_os = "linux")]
+ #[allow(
+     dead_code,
+-    reason = "C03e-ZF materializes the owner-locked dormant XDG-state setup-intent typed adapter before separately gated writer/authoring and startup composition"
++    reason = "setup-intent reader/classifier is active while writer and compatibility helper seams remain separately bounded"
+ )]
+ pub(crate) mod owner_first_run_setup_intent;
+ #[cfg(target_os = "linux")]
+ #[allow(
+     dead_code,
+-    reason = "C03e-YV materializes dormant final bootstrap-input composition before separately gated production provisioning and YL transaction invocation"
++    reason = "first-run authority uses the selected bootstrap composition while additional pure helper seams remain crate-internal"
+ )]
+ pub(crate) mod owner_first_setup_bootstrap_input_composition;
+ #[cfg(target_os = "linux")]
+ #[allow(
+     dead_code,
+-    reason = "C03e-YP materializes dormant first-setup bootstrap input loaders before separately gated startup composition"
++    reason = "first-run authority uses selected bootstrap inputs while auxiliary loaders and codecs remain crate-internal"
+ )]
+ pub(crate) mod owner_first_setup_bootstrap_inputs;
+ #[cfg(target_os = "linux")]
+ #[allow(
+     dead_code,
+-    reason = "C03e-YT materializes dormant first-time-setup custody-policy orchestration before separately gated provisioning execution and bootstrap transaction invocation"
++    reason = "first-run authority uses the custody-policy plan while auxiliary policy helpers remain crate-internal"
+ )]
+ pub(crate) mod owner_first_setup_custody_policy_orchestration;
+ #[cfg(target_os = "linux")]
+ #[allow(
+     dead_code,
+-    reason = "C03e-YW materializes dormant first-time-setup execution composition before separately gated production call-site and YL transaction invocation"
++    reason = "first-run authority reaches transport composition while validation-only helper seams remain crate-internal"
+ )]
+ pub(crate) mod owner_first_setup_execution_composition;
+ #[cfg(target_os = "linux")]
+ #[allow(
+     dead_code,
+-    reason = "C03e-ZA materializes the explicitly authorized local-authority bootstrap execution seam before separately gated startup/first-run activation"
++    reason = "local-authority bootstrap is active only through validated first-run dispatch while helper seams remain crate-internal"
+ )]
+ pub(crate) mod owner_first_setup_local_authority_bootstrap_execution;
+ #[cfg(target_os = "linux")]
+ #[allow(
+     dead_code,
+-    reason = "C03e-YZ materializes dormant first-time-setup retry call-site composition before separately gated YL invocation and runtime activation"
++    reason = "first-run authority uses retry classification while auxiliary retry helpers remain crate-internal"
+ )]
+ pub(crate) mod owner_first_setup_retry_call_site_composition;
+ #[cfg(target_os = "linux")]
+ #[allow(
+     dead_code,
+-    reason = "C03e-YY materializes dormant established transport-credential recovery before separately gated production first-time-setup and YL invocation"
++    reason = "first-run retry may recover established transport custody while auxiliary recovery helpers remain crate-internal"
+ )]
+ pub(crate) mod owner_first_setup_transport_identity_recovery;
+ #[cfg(target_os = "linux")]
+ #[allow(
+     dead_code,
+-    reason = "C03e-YU materializes dormant transport provisioning execution dispatch before separately gated first production invocation and bootstrap transaction invocation"
++    reason = "transport provisioning is reachable only through validated first-run authority while the module remains crate-internal"
+ )]
+ pub(crate) mod owner_first_setup_transport_provisioning_execution;
+ #[cfg(target_os = "linux")]
+-#[allow(
+-    dead_code,
+-    reason = "C03e-ZP materializes dormant startup-state dispatch before separately gated executable startup call-site composition"
+-)]
+ pub(crate) mod owner_startup_state_dispatch;
+ #[cfg(target_os = "linux")]
+ #[allow(
+@@ -153,6 +149,60 @@
+ pub mod remote_session_authentication_transaction;
+ pub mod remote_session_capability_runtime;
+ pub mod remote_transport_runtime;
++
++#[cfg(target_os = "linux")]
++/// Bounded executable failure stage for the owner startup-authority gate.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum OwnerStartupAuthorityFailureStage {
++    /// Setup-intent presence could not be classified safely.
++    SetupIntentClassification,
++    /// A validated pending first-run transaction failed.
++    FirstRun,
++    /// Exact validated setup-intent absence reached established-restart proof, which failed.
++    EstablishedRestart,
++}
++
++#[cfg(target_os = "linux")]
++impl OwnerStartupAuthorityFailureStage {
++    /// Returns the stable bounded diagnostic token emitted by executable startup.
++    #[must_use]
++    pub const fn token(self) -> &'static str {
++        match self {
++            Self::SetupIntentClassification => "setup_intent_classification",
++            Self::FirstRun => "first_run",
++            Self::EstablishedRestart => "established_restart",
++        }
++    }
++}
++
++#[cfg(target_os = "linux")]
++/// Proves or completes owner startup authority before executable runtime-lane selection.
++///
++/// The underlying dispatcher remains crate-private so its detailed first-run and established-state
++/// outcome/error types do not become part of the public library interface.
++///
++/// # Errors
++///
++/// Returns only the bounded authority failure stage. Detailed internal errors remain inside the
++/// authority implementation boundary and are not exposed by the executable-facing API.
++pub fn gate_owner_startup_authority(
++    public_device_identity: &prw_control_plane::PublicIdentityMaterial,
++) -> Result<(), OwnerStartupAuthorityFailureStage> {
++    match owner_startup_state_dispatch::dispatch_owner_startup_authority(public_device_identity) {
++        Ok(_) => Ok(()),
++        Err(
++            owner_startup_state_dispatch::OwnerStartupStateDispatchError::SetupIntentClassification(
++                _,
++            ),
++        ) => Err(OwnerStartupAuthorityFailureStage::SetupIntentClassification),
++        Err(owner_startup_state_dispatch::OwnerStartupStateDispatchError::FirstRun(_)) => {
++            Err(OwnerStartupAuthorityFailureStage::FirstRun)
++        }
++        Err(owner_startup_state_dispatch::OwnerStartupStateDispatchError::EstablishedRestart(_)) => {
++            Err(OwnerStartupAuthorityFailureStage::EstablishedRestart)
++        }
++    }
++}
+ 
+ use std::fmt;
+ use std::path::{Path, PathBuf};
+--- a/crates/prw-agent/src/linux_signal_aware_runtime.rs
++++ b/crates/prw-agent/src/linux_signal_aware_runtime.rs
+@@ -897,8 +897,29 @@
+     }
+ 
+     fn run_signal_precedence_subprocess() {
++        for (label, signal, expected) in [
++            (
++                "sigterm",
++                Signal::SIGTERM,
++                LocalLinuxTerminationSignal::SigTerm,
++            ),
++            (
++                "sigint",
++                Signal::SIGINT,
++                LocalLinuxTerminationSignal::SigInt,
++            ),
++        ] {
++            run_signal_precedence_case(label, signal, expected);
++        }
++    }
++
++    fn run_signal_precedence_case(
++        label: &str,
++        signal: Signal,
++        expected: LocalLinuxTerminationSignal,
++    ) {
+         let original_mask = SigSet::thread_get_mask().expect("original mask reads");
+-        let root = create_root("signal-precedence");
++        let root = create_root(&format!("signal-precedence-{label}"));
+         let path = socket_path(&root);
+         let dns = dns_snapshot();
+         let mut queued_client = None;
+@@ -908,17 +929,14 @@
+             inputs(&dns),
+             |_shutdown| {
+                 queued_client = Some(UnixStream::connect(&path).expect("queued client connects"));
+-                raise(Signal::SIGTERM)
+-                    .expect("SIGTERM posts to current masked runtime test thread");
++                raise(signal).expect("termination signal posts to current masked runtime test thread");
+             },
+         )
+         .expect("signal-aware runtime starts");
+ 
+         assert_eq!(
+             report.reason(),
+-            LocalLinuxSignalAwareRuntimeTerminalReason::TerminationSignal(
+-                LocalLinuxTerminationSignal::SigTerm
+-            )
++            LocalLinuxSignalAwareRuntimeTerminalReason::TerminationSignal(expected)
+         );
+         assert_eq!(report.counters().scheduling_attempts(), 0);
+         assert_eq!(report.counters().workers_registered(), 0);
+--- a/crates/prw-agent/src/main.rs
++++ b/crates/prw-agent/src/main.rs
+@@ -1,9 +1,9 @@
+ //! Headless Ownspace Agent binary bootstrap.
+ //!
+-//! Phase 125 extends the thin executable boundary with one fail-closed
+-//! device-identity custody preflight before entering the already-validated
+-//! Phase 102 Linux runtime facade. Missing or invalid systemd-delivered
+-//! identity material therefore fails before the Agent runtime directory,
++//! The executable boundary performs fail-closed device-identity custody first,
++//! then proves or completes owner startup authority with that exact public identity
++//! before selecting or entering either Linux runtime lane. Invalid identity or
++//! startup-authority state therefore fails before the Agent runtime directory,
+ //! instance lock, or local socket can be created.
+ 
+ use std::process::ExitCode;
+@@ -33,6 +33,16 @@
+         "prw-agent event=device_identity_loaded public_spki_sha256={}",
+         sha256_hex(device_identity_signer.public_identity_sha256())
+     );
++
++    if let Err(stage) =
++        prw_agent::gate_owner_startup_authority(device_identity_signer.public_identity())
++    {
++        eprintln!(
++            "prw-agent event=startup_failure kind=startup_authority stage={} exit=failure signal_mask_restore=not_applicable",
++            stage.token(),
++        );
++        return ExitCode::FAILURE;
++    }
+ 
+     let Ok(execution_mode) = prw_agent::linux_bootstrap::load_linux_agent_execution_mode_from_env()
+     else {
+--- a/crates/prw-agent/src/owner_established_startup_authority.rs
++++ b/crates/prw-agent/src/owner_established_startup_authority.rs
+@@ -1,8 +1,8 @@
+-//! Dormant established-state startup authority verifier.
++//! Established-state startup authority verifier.
+ //!
+-//! C03e-ZO materializes only the ZN-authorized post-retirement restart proof.
+-//! It accepts no setup-intent custody choice, performs no first-run transaction,
+-//! and remains unreferenced by executable startup.
++//! This path performs only the post-retirement restart proof. It accepts no
++//! setup-intent custody choice, performs no first-run transaction, and is reached
++//! only through the fail-closed startup-state dispatcher.
+ 
+ use std::fmt;
+ 
+--- a/crates/prw-agent/src/owner_first_run_orchestration.rs
++++ b/crates/prw-agent/src/owner_first_run_orchestration.rs
+@@ -1,9 +1,9 @@
+-//! Dormant first-run orchestration for the owner PC.
++//! First-run authority orchestration for the owner PC.
+ //!
+-//! C03e-ZC materializes the ZB-authorized orchestration from an already-typed
+-//! transport-custody selection. C03e-ZL adds the dormant composition from the
+-//! validated setup-intent reader into that existing ZC seam. C03e-ZM adds only
+-//! the dormant post-success composition into the already-validated retirement seam.
++//! C03e-ZC materialized the ZB-authorized orchestration from an already-typed
++//! transport-custody selection. C03e-ZL added reader composition and C03e-ZM added
++//! post-success retirement. The current startup-state dispatcher activates that
++//! validated chain only for a valid present setup-intent record.
+ //!
+ //! The module remains crate-internal and has no caller in `main.rs`,
+ //! `linux_bootstrap`, systemd, installer, certificate, or network activation code.
+@@ -33,7 +33,7 @@
+     },
+ };
+ 
+-/// Fail-closed error for the dormant first-run orchestration seam.
++/// Fail-closed error for the first-run orchestration seam.
+ #[derive(Debug)]
+ pub enum OwnerFirstRunOrchestrationError {
+     /// The fixed first-run setup-intent record could not be loaded fail-closed.
+@@ -87,7 +87,7 @@
+     }
+ }
+ 
+-/// Result of dormant ZC success followed by the bounded setup-intent retirement transaction.
++/// Result of first-run authority success followed by the bounded setup-intent retirement transaction.
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+ pub struct OwnerFirstRunOrchestrationAndRetirementOutcome {
+     local_authority_outcome: OwnerPcLocalAuthorityBootstrapOutcome,
+@@ -110,7 +110,7 @@
+     }
+ }
+ 
+-/// Executes the dormant first-run composition from the fixed setup-intent reader.
++/// Executes first-run authority composition from the fixed setup-intent reader.
+ ///
+ /// This C03e-ZL wrapper performs exactly one fail-closed setup-intent read and
+ /// forwards the resulting typed selection unchanged into the existing C03e-ZC
+@@ -133,13 +133,13 @@
+     )
+ }
+ 
+-/// Executes dormant reader-to-ZC orchestration and retires setup intent only after ZC success.
++/// Executes reader-to-first-run orchestration and retires setup intent only after authority success.
+ ///
+ /// The exact typed selection read from the fixed setup-intent record is preserved
+ /// through both ZC and the retirement seam. Retirement is invoked only after ZC
+ /// returns one of the two successful local-authority outcomes.
+ ///
+-/// This function remains dormant and has no executable/startup caller.
++/// The startup-state dispatcher invokes this function only for validated present setup intent.
+ ///
+ /// # Errors
+ ///
+@@ -156,7 +156,7 @@
+     )
+ }
+ 
+-/// Executes the dormant first-run composition selected by C03e-ZB.
++/// Executes the first-run composition selected by the validated custody choice.
+ ///
+ /// The caller must provide one explicit typed custody selection plus the public
+ /// identity already derived from the previously loaded device-identity signer.
+@@ -170,9 +170,9 @@
+ /// `ExplicitHostKeyOnlyFallback` is reachable only when the caller supplies it
+ /// explicitly.
+ ///
+-/// This function is production-capable but remains dormant in C03e-ZC. It is not
+-/// referenced by `main.rs`, `linux_bootstrap`, systemd, installer, certificate,
+-/// or network activation code.
++/// The startup-state dispatcher reaches this production seam only through the validated
++/// first-run path. It remains isolated from `linux_bootstrap`, installer, certificate,
++/// service-lifecycle, and network-activation code.
+ ///
+ /// # Errors
+ ///
+--- a/crates/prw-agent/src/owner_first_run_setup_intent.rs
++++ b/crates/prw-agent/src/owner_first_run_setup_intent.rs
+@@ -1,8 +1,8 @@
+-//! Dormant XDG-state setup-intent adapter for the owner PC.
++//! XDG-state setup-intent adapter for owner-PC first-run authority.
+ //!
+-//! C03e-ZF implements the owner-locked read-only representation, C03e-ZG adds
+-//! the dormant create-once writer, and C03e-ZK adds the dormant post-success
+-//! retirement transaction for that same fixed versioned record.
++//! C03e-ZF implements the owner-locked representation, C03e-ZG adds the explicit
++//! create-once writer, and C03e-ZK adds post-success retirement for the same fixed
++//! versioned record. Startup uses only the fail-closed reader/classifier and retirement path.
+ //! None of these functions is referenced by Agent startup, ZC, installer,
+ //! Desktop, systemd, or another production activation call site.
+ 
+@@ -195,9 +195,10 @@
+ /// is reused only when it represents that exact same selection. A different
+ /// valid selection is a conflict and is never overwritten.
+ ///
+-/// This function is deliberately dormant. It is not referenced by Agent startup,
+-/// Desktop, installer/package hooks, systemd, ZC, or any production authoring
+-/// surface.
++/// This explicit authoring seam is used by the dedicated `prw-first-run` command.
++/// Agent startup only reads/classifies and retires the resulting record; it never
++/// authors or silently replaces setup intent. Desktop, installer/package hooks and
++/// systemd do not call this writer.
+ ///
+ /// # Errors
+ ///
+--- a/crates/prw-agent/src/owner_first_setup_bootstrap_input_composition.rs
++++ b/crates/prw-agent/src/owner_first_setup_bootstrap_input_composition.rs
+@@ -17,7 +17,7 @@
+     owner_first_setup_custody_policy_orchestration::OwnerFirstSetupCustodyPolicyPlan,
+ };
+ 
+-/// Purely composes the final dormant YL bootstrap input from already-authoritative values.
++/// Purely composes the final fresh-owner YL bootstrap input from already-authoritative values.
+ ///
+ /// The caller must supply the public device identity from an already-authorized
+ /// custody boundary and the `TransportIdentity` associated with the already-selected
+--- a/crates/prw-agent/src/owner_first_setup_bootstrap_inputs.rs
++++ b/crates/prw-agent/src/owner_first_setup_bootstrap_inputs.rs
+@@ -1,9 +1,10 @@
+-//! Dormant first-setup bootstrap input sources for the owner PC.
++//! First-setup bootstrap input sources for the owner PC.
+ //!
+ //! This module materializes typed generation, codec, loading, atomic creation and
+-//! composition for first-time owner bootstrap inputs. Nothing here is called by
+-//! Agent startup. The creation seam is explicit and dormant; validation uses only
+-//! disposable roots. This module does not generate a production transport key,
++//! composition for first-time owner bootstrap inputs. Executable startup reaches
++//! these sources only through the validated first-run dispatcher path. The creation
++//! seam is explicit; validation uses only disposable roots. This module does not
++//! generate a production transport key,
+ //! open `SQLite`, invoke the fresh-owner transaction, or change service/network state.
+ 
+ use std::{
+@@ -107,7 +108,7 @@
+     }
+ }
+ 
+-/// Fully composed input required by the dormant fresh-owner `SQLite` transaction.
++/// Fully composed input required by the fresh-owner `SQLite` transaction.
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ pub struct OwnerFirstSetupBootstrapInputs {
+     binding: DeviceIdentityBinding,
+@@ -134,7 +135,7 @@
+     }
+ }
+ 
+-/// Fail-closed error for dormant first-setup bootstrap input materialization.
++/// Fail-closed error for first-setup bootstrap input materialization.
+ #[derive(Debug)]
+ pub enum OwnerFirstSetupBootstrapInputError {
+     /// OS cryptographic randomness was unavailable.
+@@ -228,7 +229,7 @@
+ /// Generates a fresh opaque logical identity tuple from independent 128-bit values.
+ ///
+ /// This function only returns the in-memory non-secret record. It does not persist
+-/// anything and is not called by Agent startup.
++/// anything; executable startup can reach it only through the bounded first-run ensure path.
+ ///
+ /// # Errors
+ ///
+@@ -308,7 +309,7 @@
+ /// generated locally, written to a same-directory temporary file, fsynced, and
+ /// committed with an atomic no-replace rename.
+ ///
+-/// This function is deliberately dormant and is not referenced by Agent startup.
++/// This function is reached only through validated first-run startup authority composition.
+ ///
+ /// # Errors
+ ///
+@@ -324,7 +325,7 @@
+     ensure_owner_logical_identity_record_at_state_root(&state_root, geteuid().as_raw())
+ }
+ 
+-/// Purely composes already-authoritative identity parts into the dormant YL transaction input.
++/// Purely composes already-authoritative identity parts into the fresh-owner YL transaction input.
+ #[must_use]
+ pub fn compose_owner_first_setup_bootstrap_inputs_from_identity_parts(
+     workspace_id: &WorkspaceId,
+@@ -345,7 +346,7 @@
+     }
+ }
+ 
+-/// Purely composes an authoritative owner logical-identity record into the dormant YL input.
++/// Purely composes an authoritative owner logical-identity record into the fresh-owner YL input.
+ #[must_use]
+ pub fn compose_owner_first_setup_bootstrap_inputs(
+     record: &OwnerLogicalIdentityRecord,
+@@ -363,7 +364,7 @@
+ 
+ /// Loads all current authoritative owner bootstrap inputs without mutating authority.
+ ///
+-/// This function is deliberately dormant and not referenced by Agent startup.
++/// This function is reached only through validated first-run startup authority composition.
+ ///
+ /// # Errors
+ ///
+--- a/crates/prw-agent/src/owner_first_setup_custody_policy_orchestration.rs
++++ b/crates/prw-agent/src/owner_first_setup_custody_policy_orchestration.rs
+@@ -3,8 +3,8 @@
+ //! C03e-YT composes an already-authoritative owner logical-identity record with
+ //! one explicit transport-identity provisioning selection. It is pure in-memory
+ //! orchestration: no environment reads, capability probes, key generation,
+-//! credential persistence, `SQLite` access, bootstrap transaction, or startup
+-//! wiring occur here.
++//! credential persistence, `SQLite` access, or bootstrap transaction occur here.
++//! Validated first-run startup authority now consumes this plan.
+ 
+ use prw_core::{DeviceId, UserId, WorkspaceId};
+ use prw_transport_identity_provisioning::TransportIdentityProvisioningPolicy;
+--- a/crates/prw-agent/src/owner_first_setup_execution_composition.rs
++++ b/crates/prw-agent/src/owner_first_setup_execution_composition.rs
+@@ -2,7 +2,7 @@
+ //!
+ //! C03e-YW composes the already-validated YU transport-provisioning dispatcher
+ //! with the YV bootstrap-input composer. The production entrypoint remains
+-//! crate-internal and has no startup, installer, service, or CI call site.
++//! crate-internal and is reachable only through validated first-run startup authority.
+ //!
+ //! If a future explicitly authorized caller invokes this seam, exactly one
+ //! transport provisioner selected by the YT plan runs first. Only a successful
+--- a/crates/prw-agent/src/owner_first_setup_local_authority_bootstrap_execution.rs
++++ b/crates/prw-agent/src/owner_first_setup_local_authority_bootstrap_execution.rs
+@@ -5,8 +5,9 @@
+ //! fixed YK owner-PC `SQLite` custody adapter and the existing YL atomic fresh-owner
+ //! bootstrap transaction.
+ //!
+-//! This module remains crate-internal and is not wired into Agent startup, systemd,
+-//! installer flow, certificate issuance, or network activation.
++//! This module remains crate-internal. Agent startup reaches it only through validated
++//! first-run authority; it remains isolated from installer, certificate, service-lifecycle,
++//! and network-activation code.
+ 
+ use std::fmt;
+ 
+@@ -78,8 +79,9 @@
+ /// Exact replay is allowed only through YL's existing `AlreadyCurrent` outcome.
+ /// Partial or conflicting authority is not repaired or overwritten.
+ ///
+-/// This function is production-capable but remains dormant in C03e-ZA. It is not
+-/// called from Agent startup, systemd, installer, networking, or certificate code.
++/// This production-capable function is invoked only through the validated first-run
++/// authority chain. It is not a general startup/runtime, installer, networking, certificate,
++/// or service-lifecycle entrypoint.
+ ///
+ /// # Errors
+ ///
+--- a/crates/prw-agent/src/owner_first_setup_retry_call_site_composition.rs
++++ b/crates/prw-agent/src/owner_first_setup_retry_call_site_composition.rs
+@@ -5,8 +5,8 @@
+ //! that the YT plan still matches the persisted owner logical identity, classifies
+ //! the fixed transport-custody artifact pair, and dispatches exactly one branch.
+ //!
+-//! This module is crate-internal and has no Agent startup, installer, service, or
+-//! CI production call site.
++//! This module is crate-internal. Agent startup reaches it only through validated
++//! first-run authority; installer, service and unrelated runtime code do not call it.
+ 
+ use std::fmt;
+ 
+@@ -30,7 +30,7 @@
+     },
+ };
+ 
+-/// Fail-closed error for dormant first-time-setup retry dispatch.
++/// Fail-closed error for first-time-setup retry dispatch.
+ #[derive(Debug)]
+ pub enum OwnerFirstSetupRetryCallSiteError {
+     /// The authoritative persisted owner logical-identity record could not be loaded.
+@@ -90,8 +90,8 @@
+ 
+ /// Selects exactly one validated first-time-setup transport branch and composes YV inputs.
+ ///
+-/// This is a production-capable source seam but remains dormant in C03e-YZ. It has
+-/// no startup or installer caller and does not invoke YL.
++/// This production-capable seam is reached only through validated first-run startup
++/// authority. It has no installer or unrelated runtime caller and does not itself invoke YL.
+ ///
+ /// Ordering is fail-closed:
+ /// 1. reload and match the authoritative owner logical identity;
+--- a/crates/prw-agent/src/owner_first_setup_transport_identity_recovery.rs
++++ b/crates/prw-agent/src/owner_first_setup_transport_identity_recovery.rs
+@@ -6,8 +6,8 @@
+ //! transport credential validation/decryption to the provisioning crate's
+ //! dedicated recovery boundary.
+ //!
+-//! This module has no startup, installer, service, or CI call site. It never
+-//! provisions, replaces, rekeys, downgrades, or deletes transport identity state
++//! Agent startup reaches this module only through validated first-run retry of established
++//! custody. It never provisions, replaces, rekeys, downgrades, or deletes transport identity state
+ //! and does not open `SQLite` or invoke the YL bootstrap transaction.
+ 
+ use std::fmt;
+@@ -25,7 +25,7 @@
+     owner_first_setup_custody_policy_orchestration::OwnerFirstSetupCustodyPolicyPlan,
+ };
+ 
+-/// Fail-closed error for dormant owner first-time-setup transport recovery.
++/// Fail-closed error for owner first-time-setup transport recovery.
+ #[derive(Debug)]
+ pub enum OwnerFirstSetupTransportIdentityRecoveryError {
+     /// The authoritative persisted owner logical-identity record could not be loaded.
+@@ -69,7 +69,7 @@
+ /// policy carried by the same plan is then required to match the persisted
+ /// transport service binding before authenticated credential decryption occurs.
+ ///
+-/// This function is deliberately dormant and has no production call site.
++/// This function is reachable only through validated first-run retry of established custody.
+ ///
+ /// # Errors
+ ///
+--- a/crates/prw-agent/src/owner_first_setup_transport_provisioning_execution.rs
++++ b/crates/prw-agent/src/owner_first_setup_transport_provisioning_execution.rs
+@@ -2,8 +2,8 @@
+ //!
+ //! C03e-YU is source-only execution wiring. It consumes the explicit policy already
+ //! carried by the YT first-time-setup plan and dispatches to exactly one existing
+-//! transport provisioning entrypoint. This module has no startup/runtime call site,
+-//! and validation must never invoke the production provisioning function.
++//! transport provisioning entrypoint. Validated first-run startup authority may reach it,
++//! but validation itself must never invoke the production provisioning function.
+ 
+ use prw_transport_identity_provisioning::{
+     ProvisionedTransportIdentity, TransportIdentityProvisioningError,
+@@ -19,8 +19,8 @@
+ /// directly and is never retried as host-key-only. Likewise, an explicit
+ /// host-key-only selection never attempts the preferred entrypoint first.
+ ///
+-/// This function is intentionally dormant: C03e-YU adds the source seam only and
+-/// does not wire it into Agent startup, first-time setup runtime, or CI.
++/// This function is reachable only through validated first-run authority when transport
++/// custody is absent. Validation and unrelated runtime/CI paths must not invoke it.
+ ///
+ /// # Errors
+ ///
+--- a/crates/prw-agent/src/owner_startup_state_dispatch.rs
++++ b/crates/prw-agent/src/owner_startup_state_dispatch.rs
+@@ -1,8 +1,10 @@
+-//! Dormant startup-state dispatch between pending first-run completion and established restart.
++//! Startup-state authority dispatch between pending first-run completion and established restart.
+ //!
+-//! C03e-ZP composes only already-validated seams. It classifies the fixed
+-//! setup-intent record fail-closed, routes valid present intent to ZM, and routes
+-//! exact validated absence to ZO. It does not call either Agent runtime lane.
++//! The dispatcher composes only already-validated seams. It classifies the fixed
++//! setup-intent record fail-closed, routes valid present intent to the first-run
++//! authority path, and routes exact validated absence to established-state proof.
++//! It completes before either Agent runtime lane is allowed to begin. Legacy helper
++//! identifiers containing `dormant` are retained to minimize compatibility-sensitive source churn.
+ 
+ use std::fmt;
+ 
+@@ -23,7 +25,7 @@
+     },
+ };
+ 
+-/// Exact authority path selected by the dormant startup-state dispatcher.
++/// Exact authority path selected by the startup-state dispatcher.
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+ pub enum OwnerStartupStateDispatchOutcome {
+     /// A valid pending first-run transaction completed through ZM.
+@@ -32,7 +34,7 @@
+     EstablishedRestartVerified(OwnerEstablishedStartupAuthorityProof),
+ }
+ 
+-/// Fail-closed error stage for dormant startup-state dispatch.
++/// Fail-closed error stage for startup-state dispatch.
+ #[derive(Debug)]
+ pub enum OwnerStartupStateDispatchError {
+     /// Setup-intent presence could not be classified safely.
+@@ -80,13 +82,13 @@
+ /// A valid present setup-intent record routes only to ZM. Exact validated absence
+ /// routes only to ZO. No ZM error falls back to ZO, and no ZO error retries ZM.
+ ///
+-/// This function remains dormant in C03e-ZP and is not referenced by executable
+-/// Agent startup.
++/// Executable Agent startup invokes this seam after device-identity signer custody
++/// succeeds and before execution enters either runtime lane.
+ ///
+ /// # Errors
+ ///
+ /// Returns the exact fail-closed classification, ZM, or ZO failure stage.
+-pub fn dispatch_dormant_owner_startup_authority(
++pub(crate) fn dispatch_owner_startup_authority(
+     public_device_identity: &PublicIdentityMaterial,
+ ) -> Result<OwnerStartupStateDispatchOutcome, OwnerStartupStateDispatchError> {
+     match dispatch_startup_state_with(
+--- a/crates/prw-agent/src/prw_first_run.rs
++++ b/crates/prw-agent/src/prw_first_run.rs
+@@ -1,4 +1,4 @@
+-//! Dormant command-line interface for the dedicated `prw-first-run` tool.
++//! Command-line interface for the dedicated `prw-first-run` setup-intent authoring tool.
+ //!
+ //! C03e-ZI materializes only the explicit setup-intent authoring grammar.
+ //! It does not invoke first-run bootstrap, Agent startup, systemd, `SQLite`,
+--- a/crates/prw-agent/tests/phase125_device_identity_bootstrap.rs
++++ b/crates/prw-agent/tests/phase125_device_identity_bootstrap.rs
+@@ -7,6 +7,12 @@
+     process::{self, Command},
+     sync::atomic::{AtomicU64, Ordering},
+ };
++
++use aws_lc_rs::{
++    rand::SystemRandom,
++    signature::{ECDSA_P256_SHA256_ASN1_SIGNING, EcdsaKeyPair},
++};
++use prw_device_identity_custody::SYSTEMD_DEVICE_IDENTITY_CREDENTIAL_NAME;
+ 
+ static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(1);
+ 
+@@ -38,6 +44,45 @@
+     }
+ }
+ 
++struct TestCredentialDirectory {
++    path: PathBuf,
++}
++
++impl TestCredentialDirectory {
++    fn new() -> Self {
++        let id = NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed);
++        let path = std::env::temp_dir().join(format!(
++            "prw-phase125-device-identity-credential-{}-{id}",
++            process::id()
++        ));
++        fs::create_dir(&path).expect("create isolated Phase 125 credential directory");
++        fs::set_permissions(&path, fs::Permissions::from_mode(0o700))
++            .expect("secure isolated credential directory");
++
++        let key = EcdsaKeyPair::generate_pkcs8(
++            &ECDSA_P256_SHA256_ASN1_SIGNING,
++            &SystemRandom::new(),
++        )
++        .expect("generate disposable Phase 125 device identity");
++        let credential = path.join(SYSTEMD_DEVICE_IDENTITY_CREDENTIAL_NAME);
++        fs::write(&credential, key.as_ref()).expect("write disposable device identity credential");
++        fs::set_permissions(&credential, fs::Permissions::from_mode(0o400))
++            .expect("secure disposable device identity credential");
++
++        Self { path }
++    }
++
++    fn path(&self) -> &Path {
++        &self.path
++    }
++}
++
++impl Drop for TestCredentialDirectory {
++    fn drop(&mut self) {
++        let _ = fs::remove_dir_all(&self.path);
++    }
++}
++
+ #[test]
+ fn missing_systemd_identity_fails_before_runtime_socket_creation() {
+     let runtime = TestRuntimeRoot::new();
+@@ -54,3 +99,23 @@
+     );
+     assert!(!runtime.path().join("private-remote-workspace").exists());
+ }
++
++#[test]
++fn valid_identity_reaches_startup_authority_before_execution_mode_or_runtime() {
++    let runtime = TestRuntimeRoot::new();
++    let credential = TestCredentialDirectory::new();
++    let output = Command::new(env!("CARGO_BIN_EXE_prw-agent"))
++        .env("XDG_RUNTIME_DIR", runtime.path())
++        .env("XDG_STATE_HOME", runtime.path())
++        .env("CREDENTIALS_DIRECTORY", credential.path())
++        .env_remove("PRW_AGENT_EXECUTION_MODE")
++        .output()
++        .expect("execute startup-authority-gated Agent bootstrap");
++
++    assert!(!output.status.success());
++    assert_eq!(
++        String::from_utf8(output.stderr).expect("bounded Agent stderr is UTF-8"),
++        "prw-agent event=startup_failure kind=startup_authority stage=setup_intent_classification exit=failure signal_mask_restore=not_applicable\n"
++    );
++    assert!(!runtime.path().join("private-remote-workspace").exists());
++}
+--- a/crates/prw-agent/tests/phase_102_binary_bootstrap.rs
++++ b/crates/prw-agent/tests/phase_102_binary_bootstrap.rs
+@@ -1,58 +1,44 @@
+ #![cfg(target_os = "linux")]
+ 
+ use std::fs::{self, Permissions};
+-use std::io::Write;
+ use std::os::unix::fs::PermissionsExt;
+-use std::os::unix::net::UnixStream;
+ use std::path::{Path, PathBuf};
+-use std::process::{Child, Command, Output, Stdio};
++use std::process::{Command, Output};
+ use std::sync::atomic::{AtomicU64, Ordering};
+-use std::thread;
+-use std::time::{Duration, Instant};
+ 
+-use aws_lc_rs::{
+-    rand::SystemRandom,
+-    signature::{ECDSA_P256_SHA256_ASN1_SIGNING, EcdsaKeyPair},
++use prw_agent::linux_bootstrap::{
++    LinuxAgentExecutionModeSourceError, PRW_AGENT_EXECUTION_MODE_ENV,
+ };
+-use nix::sys::signal::{Signal, kill};
+-use nix::unistd::Pid;
+-use prw_agent::linux_bootstrap::PRW_AGENT_EXECUTION_MODE_ENV;
+-use prw_agent::local_commands::LocalAgentCommand;
+-use prw_agent::local_commands::request_frame::stream::write_local_command_request;
+-use prw_agent::local_commands::status_snapshot::LocalAgentRuntimeState;
+-use prw_agent::local_commands::status_snapshot::response_frame::stream::read_success_status_response;
+-use prw_agent::{AGENT_RUNTIME_SUBDIRECTORY, AGENT_SOCKET_FILENAME, LocalIpcRequestId};
+-use prw_device_identity_custody::SYSTEMD_DEVICE_IDENTITY_CREDENTIAL_NAME;
+ 
+ static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(1);
+-const STARTUP_DEADLINE: Duration = Duration::from_secs(5);
+-const POLL_INTERVAL: Duration = Duration::from_millis(10);
++
++const SUBPROCESS_ENV: &str = "PRW_PHASE_102_RUNTIME_FACADE_SUBPROCESS";
++const TEST_NAME: &str = "runtime_facade_failure_contract_is_proven_in_isolated_subprocesses";
++
++const CASE_MISSING_EXECUTION_MODE: &str = "missing_execution_mode";
++const CASE_INVALID_EXECUTION_MODE: &str = "invalid_execution_mode";
++const CASE_MISSING_RUNTIME_ROOT: &str = "missing_runtime_root";
++const CASE_WRONG_MODE_RUNTIME_ROOT: &str = "wrong_mode_runtime_root";
+ 
+ struct TempRuntimeRoot {
+     path: PathBuf,
+ }
+ 
+ impl TempRuntimeRoot {
+-    fn new(label: &str) -> Self {
++    fn new(label: &str, mode: u32) -> Self {
+         let sequence = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
+         let path = std::env::temp_dir().join(format!(
+-            "prw-phase-102-binary-{}-{sequence}-{label}",
++            "prw-phase-102-runtime-facade-{}-{sequence}-{label}",
+             std::process::id()
+         ));
+-        fs::create_dir(&path).expect("Phase 102 temporary XDG root creates");
+-        fs::set_permissions(&path, Permissions::from_mode(0o700))
+-            .expect("Phase 102 temporary XDG root mode sets");
++        fs::create_dir(&path).expect("Phase 102 temporary runtime root creates");
++        fs::set_permissions(&path, Permissions::from_mode(mode))
++            .expect("Phase 102 temporary runtime root mode sets");
+         Self { path }
+     }
+ 
+     fn path(&self) -> &Path {
+         &self.path
+-    }
+-
+-    fn socket_path(&self) -> PathBuf {
+-        self.path
+-            .join(AGENT_RUNTIME_SUBDIRECTORY)
+-            .join(AGENT_SOCKET_FILENAME)
+     }
+ }
+ 
+@@ -62,303 +48,114 @@
+     }
+ }
+ 
+-struct TempCredentialDirectory {
+-    path: PathBuf,
++fn run_isolated_case(
++    case: &str,
++    runtime_root: Option<&Path>,
++    execution_mode: Option<&str>,
++) -> Output {
++    let executable = std::env::current_exe().expect("Phase 102 test executable resolves");
++    let mut command = Command::new(executable);
++    command
++        .arg("--exact")
++        .arg(TEST_NAME)
++        .arg("--nocapture")
++        .env(SUBPROCESS_ENV, case);
++
++    match runtime_root {
++        Some(root) => {
++            command.env("XDG_RUNTIME_DIR", root);
++        }
++        None => {
++            command.env_remove("XDG_RUNTIME_DIR");
++        }
++    }
++
++    match execution_mode {
++        Some(mode) => {
++            command.env(PRW_AGENT_EXECUTION_MODE_ENV, mode);
++        }
++        None => {
++            command.env_remove(PRW_AGENT_EXECUTION_MODE_ENV);
++        }
++    }
++
++    command
++        .output()
++        .expect("Phase 102 isolated runtime-facade subprocess starts")
+ }
+ 
+-impl TempCredentialDirectory {
+-    fn new() -> Self {
+-        let sequence = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
+-        let path = std::env::temp_dir().join(format!(
+-            "prw-phase-125-binary-credential-{}-{sequence}",
+-            std::process::id()
+-        ));
+-        fs::create_dir(&path).expect("Phase 125 temporary credential directory creates");
+-        fs::set_permissions(&path, Permissions::from_mode(0o700))
+-            .expect("Phase 125 temporary credential directory mode sets");
++fn assert_subprocess_success(case: &str, output: &Output) {
++    assert!(
++        output.status.success(),
++        "Phase 102 isolated case {case:?} failed:\nstdout:\n{}\nstderr:\n{}",
++        String::from_utf8_lossy(&output.stdout),
++        String::from_utf8_lossy(&output.stderr),
++    );
++}
+ 
+-        let key =
+-            EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, &SystemRandom::new())
+-                .expect("Phase 125 disposable P-256 credential generates");
+-        let credential = path.join(SYSTEMD_DEVICE_IDENTITY_CREDENTIAL_NAME);
+-        fs::write(&credential, key.as_ref()).expect("Phase 125 disposable credential writes");
+-        fs::set_permissions(&credential, Permissions::from_mode(0o400))
+-            .expect("Phase 125 disposable credential mode sets");
+-
+-        Self { path }
+-    }
+-
+-    fn path(&self) -> &Path {
+-        &self.path
++fn run_subprocess_case(case: &str) {
++    match case {
++        CASE_MISSING_EXECUTION_MODE => {
++            assert_eq!(
++                prw_agent::linux_bootstrap::load_linux_agent_execution_mode_from_env(),
++                Err(LinuxAgentExecutionModeSourceError::Missing)
++            );
++        }
++        CASE_INVALID_EXECUTION_MODE => {
++            assert_eq!(
++                prw_agent::linux_bootstrap::load_linux_agent_execution_mode_from_env(),
++                Err(LinuxAgentExecutionModeSourceError::InvalidValue)
++            );
++        }
++        CASE_MISSING_RUNTIME_ROOT | CASE_WRONG_MODE_RUNTIME_ROOT => {
++            let failure = prw_agent::linux_bootstrap::run()
++                .expect_err("invalid runtime-root custody must fail before runtime starts");
++            assert_eq!(failure.kind().token(), "runtime_root");
++            assert_eq!(failure.signal_mask_restore().token(), "restored");
++        }
++        unexpected => panic!("unexpected Phase 102 subprocess case: {unexpected}"),
+     }
+ }
+ 
+-impl Drop for TempCredentialDirectory {
+-    fn drop(&mut self) {
+-        let _ = fs::remove_dir_all(&self.path);
+-    }
+-}
+-
+-struct AgentChild {
+-    child: Option<Child>,
+-    _credential: TempCredentialDirectory,
+-}
+-
+-impl AgentChild {
+-    fn spawn(root: &Path) -> Self {
+-        let credential = TempCredentialDirectory::new();
+-        let child = Command::new(env!("CARGO_BIN_EXE_prw-agent"))
+-            .env("XDG_RUNTIME_DIR", root)
+-            .env("CREDENTIALS_DIRECTORY", credential.path())
+-            .env(PRW_AGENT_EXECUTION_MODE_ENV, "local_only")
+-            .stdout(Stdio::null())
+-            .stderr(Stdio::piped())
+-            .spawn()
+-            .expect("Phase 102 Agent binary spawns");
+-        Self {
+-            child: Some(child),
+-            _credential: credential,
+-        }
++#[test]
++fn runtime_facade_failure_contract_is_proven_in_isolated_subprocesses() {
++    if let Some(case) = std::env::var_os(SUBPROCESS_ENV) {
++        run_subprocess_case(
++            case.to_str()
++                .expect("Phase 102 subprocess case is canonical UTF-8"),
++        );
++        return;
+     }
+ 
+-    fn spawn_without_runtime_env() -> Self {
+-        let credential = TempCredentialDirectory::new();
+-        let child = Command::new(env!("CARGO_BIN_EXE_prw-agent"))
+-            .env_remove("XDG_RUNTIME_DIR")
+-            .env("CREDENTIALS_DIRECTORY", credential.path())
+-            .env(PRW_AGENT_EXECUTION_MODE_ENV, "local_only")
+-            .stdout(Stdio::null())
+-            .stderr(Stdio::piped())
+-            .spawn()
+-            .expect("Phase 102 Agent binary spawns without XDG runtime env");
+-        Self {
+-            child: Some(child),
+-            _credential: credential,
+-        }
+-    }
++    let secure_root = TempRuntimeRoot::new("secure", 0o700);
++    let missing_execution_mode =
++        run_isolated_case(CASE_MISSING_EXECUTION_MODE, Some(secure_root.path()), None);
++    assert_subprocess_success(CASE_MISSING_EXECUTION_MODE, &missing_execution_mode);
+ 
+-    fn spawn_without_execution_mode(root: &Path) -> Self {
+-        let credential = TempCredentialDirectory::new();
+-        let child = Command::new(env!("CARGO_BIN_EXE_prw-agent"))
+-            .env("XDG_RUNTIME_DIR", root)
+-            .env("CREDENTIALS_DIRECTORY", credential.path())
+-            .env_remove(PRW_AGENT_EXECUTION_MODE_ENV)
+-            .stdout(Stdio::null())
+-            .stderr(Stdio::piped())
+-            .spawn()
+-            .expect("Phase 102 Agent binary spawns without execution mode");
+-        Self {
+-            child: Some(child),
+-            _credential: credential,
+-        }
+-    }
++    let invalid_execution_mode = run_isolated_case(
++        CASE_INVALID_EXECUTION_MODE,
++        Some(secure_root.path()),
++        Some("invalid"),
++    );
++    assert_subprocess_success(CASE_INVALID_EXECUTION_MODE, &invalid_execution_mode);
+ 
+-    const fn child_mut(&mut self) -> &mut Child {
+-        self.child.as_mut().expect("Phase 102 child remains owned")
+-    }
++    let missing_runtime_root =
++        run_isolated_case(CASE_MISSING_RUNTIME_ROOT, None, Some("local_only"));
++    assert_subprocess_success(CASE_MISSING_RUNTIME_ROOT, &missing_runtime_root);
+ 
+-    fn signal(&self, signal: Signal) {
+-        let raw_pid = self
+-            .child
+-            .as_ref()
+-            .expect("Phase 102 child remains owned")
+-            .id();
+-        let raw_pid = i32::try_from(raw_pid).expect("child PID fits Linux pid_t");
+-        kill(Pid::from_raw(raw_pid), signal).expect("Phase 102 signal delivery succeeds");
+-    }
++    let wrong_mode_root = TempRuntimeRoot::new("wrong-mode", 0o755);
++    let wrong_mode_runtime_root = run_isolated_case(
++        CASE_WRONG_MODE_RUNTIME_ROOT,
++        Some(wrong_mode_root.path()),
++        Some("local_only"),
++    );
++    assert_subprocess_success(CASE_WRONG_MODE_RUNTIME_ROOT, &wrong_mode_runtime_root);
+ 
+-    fn finish(mut self) -> Output {
+-        self.child
+-            .take()
+-            .expect("Phase 102 child finishes exactly once")
+-            .wait_with_output()
+-            .expect("Phase 102 Agent child wait succeeds")
+-    }
+-}
+-
+-impl Drop for AgentChild {
+-    fn drop(&mut self) {
+-        if let Some(mut child) = self.child.take() {
+-            let _ = child.kill();
+-            let _ = child.wait();
+-        }
+-    }
+-}
+-
+-fn connect_when_ready(child: &mut AgentChild, socket_path: &Path) -> UnixStream {
+-    let deadline = Instant::now() + STARTUP_DEADLINE;
+-    loop {
+-        match UnixStream::connect(socket_path) {
+-            Ok(stream) => return stream,
+-            Err(connect_error) => {
+-                if let Some(status) = child
+-                    .child_mut()
+-                    .try_wait()
+-                    .expect("Phase 102 child status remains observable")
+-                {
+-                    panic!(
+-                        "Agent exited before listener readiness: status={status}, connect_error={connect_error}"
+-                    );
+-                }
+-                assert!(
+-                    Instant::now() < deadline,
+-                    "Agent listener did not become connectable before bounded deadline: {connect_error}"
+-                );
+-                thread::sleep(POLL_INTERVAL);
+-            }
+-        }
+-    }
+-}
+-
+-fn assert_socket_absent(root: &TempRuntimeRoot) {
+     assert!(
+-        !root.socket_path().exists(),
+-        "Agent socket pathname must be absent after process exit"
++        fs::read_dir(wrong_mode_root.path())
++            .expect("wrong-mode temporary root remains readable")
++            .next()
++            .is_none(),
++        "runtime-root failure must not create Agent runtime state"
+     );
+ }
+-
+-fn stderr_line(output: &Output) -> String {
+-    let stderr = String::from_utf8(output.stderr.clone())
+-        .expect("Phase 102 stderr is valid UTF-8 bounded text");
+-    let lines: Vec<_> = stderr.lines().collect();
+-    assert_eq!(
+-        lines.len(),
+-        1,
+-        "Phase 102 binary emits exactly one bounded stderr record: {stderr:?}"
+-    );
+-    lines[0].to_owned()
+-}
+-
+-fn assert_success_terminal(output: &Output, terminal: &str) {
+-    assert!(
+-        output.status.success(),
+-        "handled termination exits successfully"
+-    );
+-    let line = stderr_line(output);
+-    assert!(line.starts_with("prw-agent event=terminal "));
+-    assert!(line.contains(&format!("terminal={terminal}")));
+-    assert!(line.contains("exit=success"));
+-    assert!(line.contains("cleanup=clean"));
+-    assert!(line.contains("signal_mask_restore=restored"));
+-    assert!(!line.contains("remote_companion="));
+-    assert!(!line.contains("payload="));
+-}
+-
+-fn request_ready_status(stream: &mut UnixStream, request_id: u64) {
+-    let request_id = LocalIpcRequestId::new(request_id).expect("request id is non-zero");
+-    write_local_command_request(stream, request_id, LocalAgentCommand::GetAgentStatus)
+-        .expect("real Agent status request writes");
+-    stream.flush().expect("real Agent request stream flushes");
+-    let response =
+-        read_success_status_response(stream).expect("real Agent status response reads and decodes");
+-    assert_eq!(response.request_id(), request_id);
+-    assert_eq!(
+-        response.snapshot().runtime_state(),
+-        LocalAgentRuntimeState::Ready
+-    );
+-    assert!(response.snapshot().protocol_version().is_supported());
+-}
+-
+-fn prove_sigterm() {
+-    let root = TempRuntimeRoot::new("sigterm");
+-    let mut child = AgentChild::spawn(root.path());
+-    let _connected = connect_when_ready(&mut child, &root.socket_path());
+-    child.signal(Signal::SIGTERM);
+-    let output = child.finish();
+-    assert_success_terminal(&output, "sigterm");
+-    assert_socket_absent(&root);
+-}
+-
+-fn prove_sigint() {
+-    let root = TempRuntimeRoot::new("sigint");
+-    let mut child = AgentChild::spawn(root.path());
+-    let _connected = connect_when_ready(&mut child, &root.socket_path());
+-    child.signal(Signal::SIGINT);
+-    let output = child.finish();
+-    assert_success_terminal(&output, "sigint");
+-    assert_socket_absent(&root);
+-}
+-
+-fn prove_real_local_request() {
+-    let root = TempRuntimeRoot::new("request");
+-    let mut child = AgentChild::spawn(root.path());
+-    let mut stream = connect_when_ready(&mut child, &root.socket_path());
+-    request_ready_status(&mut stream, 102);
+-    drop(stream);
+-    child.signal(Signal::SIGTERM);
+-    let output = child.finish();
+-    assert_success_terminal(&output, "sigterm");
+-    assert_socket_absent(&root);
+-}
+-
+-fn prove_second_instance_exclusion() {
+-    let root = TempRuntimeRoot::new("second-instance");
+-    let mut first = AgentChild::spawn(root.path());
+-    let mut stream = connect_when_ready(&mut first, &root.socket_path());
+-
+-    let second = AgentChild::spawn(root.path());
+-    let second_output = second.finish();
+-    assert!(!second_output.status.success());
+-    let second_line = stderr_line(&second_output);
+-    assert!(second_line.starts_with("prw-agent event=startup_failure "));
+-    assert!(second_line.contains("kind=already_running"));
+-    assert!(second_line.contains("exit=failure"));
+-    assert!(second_line.contains("signal_mask_restore=restored"));
+-
+-    request_ready_status(&mut stream, 103);
+-    drop(stream);
+-    first.signal(Signal::SIGTERM);
+-    let first_output = first.finish();
+-    assert_success_terminal(&first_output, "sigterm");
+-    assert_socket_absent(&root);
+-}
+-
+-fn prove_missing_runtime_root_failure() {
+-    let child = AgentChild::spawn_without_runtime_env();
+-    let output = child.finish();
+-    assert!(!output.status.success());
+-    let line = stderr_line(&output);
+-    assert!(line.starts_with("prw-agent event=startup_failure "));
+-    assert!(line.contains("kind=runtime_root"));
+-    assert!(line.contains("exit=failure"));
+-    assert!(line.contains("signal_mask_restore=restored"));
+-}
+-
+-fn prove_missing_execution_mode_failure() {
+-    let root = TempRuntimeRoot::new("missing-execution-mode");
+-    let child = AgentChild::spawn_without_execution_mode(root.path());
+-    let output = child.finish();
+-    assert!(!output.status.success());
+-    let line = stderr_line(&output);
+-    assert_eq!(
+-        line,
+-        "prw-agent event=startup_failure kind=execution_mode exit=failure signal_mask_restore=not_applicable"
+-    );
+-    assert_socket_absent(&root);
+-}
+-
+-fn prove_wrong_mode_runtime_root_failure() {
+-    let root = TempRuntimeRoot::new("wrong-mode");
+-    fs::set_permissions(root.path(), Permissions::from_mode(0o755))
+-        .expect("wrong-mode proof changes only temporary root permissions");
+-    let child = AgentChild::spawn(root.path());
+-    let output = child.finish();
+-    assert!(!output.status.success());
+-    let line = stderr_line(&output);
+-    assert!(line.contains("event=startup_failure"));
+-    assert!(line.contains("kind=runtime_root"));
+-    assert!(line.contains("exit=failure"));
+-    assert!(line.contains("signal_mask_restore=restored"));
+-    assert!(!root.socket_path().exists());
+-}
+-
+-#[test]
+-fn standalone_binary_bootstrap_contract_is_proven_sequentially() {
+-    prove_sigterm();
+-    prove_sigint();
+-    prove_real_local_request();
+-    prove_second_instance_exclusion();
+-    prove_missing_execution_mode_failure();
+-    prove_missing_runtime_root_failure();
+-    prove_wrong_mode_runtime_root_failure();
+-}
