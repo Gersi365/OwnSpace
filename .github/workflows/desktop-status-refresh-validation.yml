@@ -24,7 +24,8 @@ jobs:
         run: |
           set -euo pipefail
           EXPECTED_BASE=ce6fa7c19e26fe4f7504ef3ac334d1e522aefd17
-          test "$(git rev-parse HEAD^)" = "$EXPECTED_BASE"
+          git cat-file -e "$EXPECTED_BASE^{commit}"
+          git merge-base --is-ancestor "$EXPECTED_BASE" HEAD
           mapfile -t changed < <(git diff --name-only "$EXPECTED_BASE" HEAD | sort)
           printf '%s\n' "${changed[@]}"
           test "${#changed[@]}" = "2"

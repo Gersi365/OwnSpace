@@ -77,13 +77,7 @@ pub fn build(app: &adw::Application) {
     start_startup_probe(agent_label, dns_label, detail_label, refresh_button);
 }
 
-fn overview_page() -> (
-    gtk::Box,
-    gtk::Label,
-    gtk::Label,
-    gtk::Label,
-    gtk::Button,
-) {
+fn overview_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label, gtk::Button) {
     let page = gtk::Box::new(gtk::Orientation::Vertical, 18);
     page.set_margin_top(32);
     page.set_margin_bottom(32);
