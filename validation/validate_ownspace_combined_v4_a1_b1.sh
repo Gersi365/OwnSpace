@@ -66,9 +66,17 @@ for f in "$BASE_ARCHIVE" "$BASE_MANIFEST" "$V4_PATCH" "$A1_PATCH" "$B1_PATCH" "$
 done
 [[ ! -e "$OUTPUT" ]] || { printf 'ERROR: output already exists\n' >&2; exit 73; }
 
-for cmd in sha256sum tar patch find wc mktemp date; do
+for cmd in sha256sum tar patch find wc mktemp date realpath; do
   command -v "$cmd" >/dev/null 2>&1 || { printf 'ERROR: missing tool: %s\n' "$cmd" >&2; exit 69; }
 done
+
+BASE_ARCHIVE="$(realpath "$BASE_ARCHIVE")"
+BASE_MANIFEST="$(realpath "$BASE_MANIFEST")"
+V4_PATCH="$(realpath "$V4_PATCH")"
+A1_PATCH="$(realpath "$A1_PATCH")"
+B1_PATCH="$(realpath "$B1_PATCH")"
+COMBINED_MANIFEST="$(realpath "$COMBINED_MANIFEST")"
+ANDROID_RUNNER="$(realpath "$ANDROID_RUNNER")"
 
 sha() { sha256sum "$1" | awk '{print $1}'; }
 assert_sha() {
