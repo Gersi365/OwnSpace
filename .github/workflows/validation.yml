@@ -89,10 +89,10 @@ jobs:
           echo "13608ead93378aad8fea2f76b9fd0b63bb8cee5dcf0512a54d4e60b6c8a1fb9f  candidate/OWNSPACE_TEMP_STARTUP_AUTHORITY_V4.patch" | sha256sum -c -
           echo "11eb59d62cfcb9da3057e3debcc10e4d48ff77a5279b30cfb2ee7244ef12c4f0  candidate/OWNSPACE_TEMP_ANDROID_UI_A1.patch" | sha256sum -c -
           echo "40b4655c51cbf33618830c8c2cef73ca2051049e1dd2dba23d3e4b65874deb96  candidate/OWNSPACE_TEMP_DESKTOP_UI_B1.patch" | sha256sum -c -
-          echo "27d6b520d6e2e290913f7f86bbb5f0339e9b6735e259f70eea5fcf36ee44243e  candidate/OWNSPACE_TEMP_FORMAT_F1.patch
+          echo "27d6b520d6e2e290913f7f86bbb5f0339e9b6735e259f70eea5fcf36ee44243e  candidate/OWNSPACE_TEMP_FORMAT_F1.patch" | sha256sum -c -
           echo "fe9af5847028b9086aa6f24e8b170525f27053f2eff01c69e43677a5c01f6ee9  candidate/OWNSPACE_TEMP_CLIPPY_F2.patch" | sha256sum -c -
           echo "da958bab9e7acb61a5d4a067152f6c9bbe6a4d7dc5285a91b130afac20dc267b  candidate/OWNSPACE_TEMP_CLIPPY_F3.patch" | sha256sum -c -
-          echo "775bb380ac78a39f342c7fbe2d91ba351221497bb2e41f07e85e067f10e981bd  candidate/OWNSPACE_TEMP_COMBINED_V4_A1_B1_F3_MANIFEST_SHA256.txt" | sha256sum -c -" | sha256sum -c -
+          echo "775bb380ac78a39f342c7fbe2d91ba351221497bb2e41f07e85e067f10e981bd  candidate/OWNSPACE_TEMP_COMBINED_V4_A1_B1_F3_MANIFEST_SHA256.txt" | sha256sum -c -
           echo "f35257e4816889dfaeec05d48ad65ff2c72d5d11eeb49259a04fcb18be197065  validation/validate_ownspace_android_candidate.sh" | sha256sum -c -
           echo "0fa8a321ce6ef982f3300138da16d6bfede616fa506195cdc5ab94be8d9715ab  validation/validate_ownspace_combined_v4_a1_b1_f3.sh" | sha256sum -c -
 
