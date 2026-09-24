@@ -27,7 +27,7 @@ pub fn build(app: &adw::Application) {
     stack.set_vexpand(true);
     stack.set_transition_type(gtk::StackTransitionType::Crossfade);
 
-    let (overview, agent_label, dns_label, detail_label) = overview_page();
+    let (overview, agent_label, dns_label, detail_label, refresh_button) = overview_page();
     stack.add_titled(
         &overview,
         Some(NavigationDestination::Overview.stack_name()),
@@ -57,10 +57,33 @@ pub fn build(app: &adw::Application) {
         &dns_label,
         &detail_label,
     );
-    start_startup_probe(agent_label, dns_label, detail_label);
+    let refresh_agent_label = agent_label.clone();
+    let refresh_dns_label = dns_label.clone();
+    let refresh_detail_label = detail_label.clone();
+    refresh_button.connect_clicked(move |button| {
+        render_state(
+            &DesktopPresentationState::connecting(),
+            &refresh_agent_label,
+            &refresh_dns_label,
+            &refresh_detail_label,
+        );
+        start_startup_probe(
+            refresh_agent_label.clone(),
+            refresh_dns_label.clone(),
+            refresh_detail_label.clone(),
+            button.clone(),
+        );
+    });
+    start_startup_probe(agent_label, dns_label, detail_label, refresh_button);
 }
 
-fn overview_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label) {
+fn overview_page() -> (
+    gtk::Box,
+    gtk::Label,
+    gtk::Label,
+    gtk::Label,
+    gtk::Button,
+) {
     let page = gtk::Box::new(gtk::Orientation::Vertical, 18);
     page.set_margin_top(32);
     page.set_margin_bottom(32);
@@ -73,12 +96,16 @@ fn overview_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label) {
     page.append(&title);
 
     let subtitle = gtk::Label::new(Some(
-        "Read-only local Agent status. Phase 151 performs no production network mutation.",
+        "Read-only local Agent status. Refresh performs only bounded local IPC reads.",
     ));
     subtitle.set_xalign(0.0);
     subtitle.set_wrap(true);
     subtitle.add_css_class("dim-label");
     page.append(&subtitle);
+
+    let refresh_button = gtk::Button::with_label("Refresh status");
+    refresh_button.set_halign(gtk::Align::Start);
+    page.append(&refresh_button);
 
     let agent_label = section_label("Agent status");
     page.append(&agent_label);
@@ -92,7 +119,7 @@ fn overview_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label) {
     detail_label.add_css_class("dim-label");
     page.append(&detail_label);
 
-    (page, agent_label, dns_label, detail_label)
+    (page, agent_label, dns_label, detail_label, refresh_button)
 }
 
 fn section_label(title: &str) -> gtk::Label {
@@ -155,7 +182,13 @@ const fn placeholder_description(destination: NavigationDestination) -> &'static
     }
 }
 
-fn start_startup_probe(agent_label: gtk::Label, dns_label: gtk::Label, detail_label: gtk::Label) {
+fn start_startup_probe(
+    agent_label: gtk::Label,
+    dns_label: gtk::Label,
+    detail_label: gtk::Label,
+    refresh_button: gtk::Button,
+) {
+    refresh_button.set_sensitive(false);
     let (sender, receiver) = mpsc::sync_channel(1);
     let spawn_result = std::thread::Builder::new()
         .name("prw-desktop-readonly-agent-probe".to_owned())
@@ -169,6 +202,7 @@ fn start_startup_probe(agent_label: gtk::Label, dns_label: gtk::Label, detail_la
             "Unable to start the bounded local Agent probe worker",
         );
         render_state(&state, &agent_label, &dns_label, &detail_label);
+        refresh_button.set_sensitive(true);
         return;
     }
 
@@ -177,6 +211,7 @@ fn start_startup_probe(agent_label: gtk::Label, dns_label: gtk::Label, detail_la
             Ok(probe) => {
                 let state = probe.into_presentation();
                 render_state(&state, &agent_label, &dns_label, &detail_label);
+                refresh_button.set_sensitive(true);
                 glib::ControlFlow::Break
             }
             Err(TryRecvError::Empty) => glib::ControlFlow::Continue,
@@ -186,6 +221,7 @@ fn start_startup_probe(agent_label: gtk::Label, dns_label: gtk::Label, detail_la
                     "Local Agent probe worker ended without a result",
                 );
                 render_state(&state, &agent_label, &dns_label, &detail_label);
+                refresh_button.set_sensitive(true);
                 glib::ControlFlow::Break
             }
         }
