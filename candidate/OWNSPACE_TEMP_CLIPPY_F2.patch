@@ -1,0 +1,12 @@
+diff -ruN --exclude target a/crates/prw-agent/src/owner_startup_state_dispatch.rs b/crates/prw-agent/src/owner_startup_state_dispatch.rs
+--- a/crates/prw-agent/src/owner_startup_state_dispatch.rs	2026-09-24 17:04:05.267290638 +0000
++++ b/crates/prw-agent/src/owner_startup_state_dispatch.rs	2026-09-24 17:11:22.679029980 +0000
+@@ -88,7 +88,7 @@
+ /// # Errors
+ ///
+ /// Returns the exact fail-closed classification, ZM, or ZO failure stage.
+-pub(crate) fn dispatch_owner_startup_authority(
++pub(super) fn dispatch_owner_startup_authority(
+     public_device_identity: &PublicIdentityMaterial,
+ ) -> Result<OwnerStartupStateDispatchOutcome, OwnerStartupStateDispatchError> {
+     match dispatch_startup_state_with(
