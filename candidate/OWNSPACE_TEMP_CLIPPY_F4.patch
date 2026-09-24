@@ -1,0 +1,10 @@
+--- a/crates/prw-agent/src/main.rs
++++ b/crates/prw-agent/src/main.rs
+@@ -19,6 +19,7 @@
+ }
+ 
+ #[cfg(target_os = "linux")]
++#[allow(clippy::too_many_lines)]
+ fn main() -> ExitCode {
+     let Ok(device_identity_signer) =
+         prw_device_identity_custody::load_ubuntu_enrollment_signer_from_systemd_credential()

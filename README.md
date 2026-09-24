@@ -1,5 +1,3 @@
-# Ownspace
+# Ownspace F4 validation carrier
 
-Ownspace source and validation repository.
-
-Current authoritative source and promotion decisions remain governed by the Ownspace project validation records until an exact validated source state is promoted.
+This branch carries V4 + A1 + B1 + F1 + F2 + F3 + lint-scope F4 for full validation. It is not authoritative source until all required gates pass.
