@@ -1,0 +1,22 @@
+[package]
+name = "prw-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+adw = { package = "libadwaita", version = "=0.9.2", features = ["v1_5"] }
+gtk = { package = "gtk4", version = "=0.11.3", features = ["v4_14"] }
+prw-agent = { path = "../../crates/prw-agent" }
+prw-connectivity = { path = "../../crates/prw-connectivity" }
+prw-core = { path = "../../crates/prw-core" }
+prw-file-service = { path = "../../crates/prw-file-service" }
+prw-file-transfer = { path = "../../crates/prw-file-transfer" }
+prw-forwarding = { path = "../../crates/prw-forwarding" }
+prw-private-dns = { path = "../../crates/prw-private-dns" }
+prw-remote-bridge = { path = "../../crates/prw-remote-bridge" }
+prw-terminal = { path = "../../crates/prw-terminal" }
+rustix = { version = "=1.1.4", default-features = false, features = ["std", "process"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,331 @@
+package com.privateworkspace.prw
+
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewmodel.compose.viewModel
+
+internal class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContent {
+            MaterialTheme {
+                val model: MainViewModel = viewModel()
+                val state by model.uiState.collectAsState()
+                var developmentView by remember { mutableStateOf(false) }
+                var terminalInput by remember { mutableStateOf("") }
+
+                Surface(modifier = Modifier.fillMaxSize()) {
+                    Column(
+                        modifier = Modifier
+                            .padding(24.dp)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Text("Ownspace", style = MaterialTheme.typography.headlineMedium)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(onClick = { developmentView = false }) {
+                                Text("Overview")
+                            }
+                            Button(onClick = { developmentView = true }) {
+                                Text("Development")
+                            }
+                        }
+
+                        if (developmentView) {
+                            Text(
+                                "Development controls — disposable local validation only",
+                                style = MaterialTheme.typography.titleMedium,
+                            )
+                            Text("No production endpoint is enabled by this screen.")
+
+                            Text("Connection: ${state.connectionState}")
+                            Text("Identity ready: ${state.identityReady}")
+                            Text("Native bridge: ${state.nativeBridgeReady}")
+                            Text("Authenticated bootstrap: ${state.bootstrapValidated}")
+                            Text("Enrollment proof: ${state.enrollmentState}")
+                            Text(state.detail)
+                            Button(onClick = model::validateLocalBootstrap) {
+                                Text("Validate local bootstrap")
+                            }
+                            Button(onClick = model::validateLocalEnrollmentProof) {
+                                Text("Validate local enrollment proof")
+                            }
+                            Button(onClick = model::loadDisposableDeviceSnapshots) {
+                                Text("Load disposable device snapshots")
+                            }
+                            state.devices.forEach { device ->
+                                Text("${device.deviceId}: ${device.lifecycle}")
+                                if (device.lifecycle == DeviceLifecycleView.Enrolled) {
+                                    Button(onClick = { model.requestRevocation(device.deviceId) }) {
+                                        Text(
+                                            if (state.pendingRevocationDeviceId == device.deviceId) {
+                                                "Revocation pending"
+                                            } else {
+                                                "Request revocation"
+                                            },
+                                        )
+                                    }
+                                }
+                            }
+
+                            Text(
+                                "Disposable terminal — no production endpoint",
+                                style = MaterialTheme.typography.titleMedium,
+                            )
+                            Text("Lifecycle: ${state.terminal.lifecycle}")
+                            Text("Profile: ${state.terminal.profile}")
+                            Text("Geometry: ${state.terminal.columns}x${state.terminal.rows}")
+                            Text("Last PRWC payload: ${state.terminal.lastPayloadBytes} bytes")
+
+                            if (state.terminal.lifecycle == TerminalLifecycleView.Closed) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Button(onClick = {
+                                        model.requestDisposableTerminal(TerminalProfileView.PosixShell)
+                                    }) {
+                                        Text("Open POSIX")
+                                    }
+                                    Button(onClick = {
+                                        model.requestDisposableTerminal(TerminalProfileView.BashShell)
+                                    }) {
+                                        Text("Open Bash")
+                                    }
+                                }
+                            }
+
+                            if (state.terminal.lifecycle == TerminalLifecycleView.Opening) {
+                                Button(onClick = model::acceptDisposableTerminalOpen) {
+                                    Text("Apply disposable open acceptance")
+                                }
+                            }
+
+                            if (state.terminal.lifecycle == TerminalLifecycleView.Open) {
+                                OutlinedTextField(
+                                    value = terminalInput,
+                                    onValueChange = { terminalInput = it },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    label = { Text("Terminal input") },
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Button(onClick = {
+                                        if (model.sendDisposableTerminalInput(terminalInput)) {
+                                            terminalInput = ""
+                                        }
+                                    }) {
+                                        Text("Send input")
+                                    }
+                                    Button(onClick = model::requestDisposableTerminalRead) {
+                                        Text("Request output")
+                                    }
+                                }
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Button(onClick = model::injectDisposableTerminalOutput) {
+                                        Text("Apply disposable output")
+                                    }
+                                    Button(onClick = { model.resizeDisposableTerminal(120, 40) }) {
+                                        Text("Resize 120x40")
+                                    }
+                                }
+                                Button(onClick = model::requestDisposableTerminalClose) {
+                                    Text("Close terminal")
+                                }
+                            }
+
+                            if (state.terminal.lifecycle == TerminalLifecycleView.Closing) {
+                                Button(onClick = model::acceptDisposableTerminalClosed) {
+                                    Text("Apply disposable close completion")
+                                }
+                            }
+
+                            if (state.terminal.transcript.isNotEmpty()) {
+                                Text("Terminal transcript", style = MaterialTheme.typography.titleSmall)
+                                Text(state.terminal.transcript)
+                            }
+
+                            Text(
+                                "Disposable remote files — no production endpoint",
+                                style = MaterialTheme.typography.titleMedium,
+                            )
+                            Text("Browser path: ${state.files.browser.path.ifEmpty { "/" }}")
+                            Text("Browser entries: ${state.files.browser.entries.size}")
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(onClick = model::requestDisposableRootFiles) {
+                                    Text("Request root list")
+                                }
+                                Button(onClick = model::applyDisposableRootFiles) {
+                                    Text("Apply root snapshot")
+                                }
+                            }
+                            state.files.browser.entries.forEach { entry ->
+                                Text("${entry.name}: ${entry.type}")
+                            }
+
+                            Text("Upload: ${state.files.upload.lifecycle}")
+                            Text(
+                                "Upload progress: ${state.files.upload.acknowledgedBytes}/" +
+                                    "${state.files.upload.totalBytes} bytes",
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(onClick = model::prepareDisposableUpload) {
+                                    Text("Prepare upload")
+                                }
+                                Button(onClick = { model.requestDisposableUploadBegin(false) }) {
+                                    Text("Begin upload")
+                                }
+                                Button(onClick = model::acknowledgeDisposableUploadPlan) {
+                                    Text("Apply offset ack")
+                                }
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(onClick = model::sendDisposableUploadChunk) {
+                                    Text("Send chunk")
+                                }
+                                Button(onClick = model::acknowledgeDisposableUploadChunk) {
+                                    Text("Apply chunk ack")
+                                }
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(onClick = model::finalizeDisposableUpload) {
+                                    Text("Finalize upload")
+                                }
+                                Button(onClick = model::completeDisposableUpload) {
+                                    Text("Apply finalize ack")
+                                }
+                            }
+
+                            Text("Download: ${state.files.download.lifecycle}")
+                            Text(
+                                "Download progress: ${state.files.download.acknowledgedBytes}/" +
+                                    "${state.files.download.expectedBytes ?: "?"} bytes",
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(onClick = model::prepareDisposableDownload) {
+                                    Text("Prepare download")
+                                }
+                                Button(onClick = model::requestDisposableDownloadChunk) {
+                                    Text("Request chunk")
+                                }
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(onClick = model::applyDisposableDownloadChunk) {
+                                    Text("Apply bytes")
+                                }
+                                Button(onClick = model::applyDisposableDownloadEof) {
+                                    Text("Apply EOF")
+                                }
+                            }
+
+                            Text(
+                                "Disposable forwarding — no production socket",
+                                style = MaterialTheme.typography.titleMedium,
+                            )
+                            Text("Forward lifecycle: ${state.network.forwarding.lifecycle}")
+                            Text("Forward payload: ${state.network.forwarding.lastPayloadBytes} bytes")
+                            when (state.network.forwarding.lifecycle) {
+                                ForwardLifecycleView.Closed, ForwardLifecycleView.Failed -> {
+                                    Button(onClick = model::requestDisposableForwardOpen) {
+                                        Text("Request loopback forward")
+                                    }
+                                }
+
+                                ForwardLifecycleView.Opening -> {
+                                    Button(onClick = model::applyDisposableForwardOpen) {
+                                        Text("Apply disposable open acknowledgement")
+                                    }
+                                }
+
+                                ForwardLifecycleView.Active -> {
+                                    Button(onClick = model::requestDisposableForwardClose) {
+                                        Text("Request forward close")
+                                    }
+                                }
+
+                                ForwardLifecycleView.Closing -> {
+                                    Button(onClick = model::applyDisposableForwardClosed) {
+                                        Text("Apply disposable close acknowledgement")
+                                    }
+                                }
+                            }
+
+                            Text("Private-network status", style = MaterialTheme.typography.titleMedium)
+                            Text("Selected path: ${state.network.selectedPath}")
+                            Button(onClick = model::applyDisposableConnectivitySnapshot) {
+                                Text("Apply disposable connectivity snapshot")
+                            }
+
+                            Text("Optional private DNS", style = MaterialTheme.typography.titleMedium)
+                            Text("Requested enabled: ${state.network.privateDns.requestedEnabled}")
+                            Text("Validated: ${state.network.privateDns.validated}")
+                            Text("OS applied: ${state.network.privateDns.osApplied}")
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(onClick = model::validateDisposablePrivateDns) {
+                                    Text("Validate DNS draft")
+                                }
+                                Button(onClick = model::validateDisabledPrivateDns) {
+                                    Text("Validate DNS disabled")
+                                }
+                            }
+
+                            Button(onClick = model::disconnect) {
+                                Text("Disconnect")
+                            }
+                        } else {
+                            Text("Overview", style = MaterialTheme.typography.titleMedium)
+                            Text("Connection: ${state.connectionState}")
+                            Text("Identity: ${if (state.identityReady) "Ready" else "Not ready"}")
+                            Text(
+                                "Authenticated bootstrap: " +
+                                    if (state.bootstrapValidated) "Validated" else "Not validated",
+                            )
+                            Text("Enrollment: ${state.enrollmentState}")
+                            Text("Known devices: ${state.devices.size}")
+
+                            Text("Terminal", style = MaterialTheme.typography.titleMedium)
+                            Text("Session: ${state.terminal.lifecycle}")
+
+                            Text("Files", style = MaterialTheme.typography.titleMedium)
+                            Text("Path: ${state.files.browser.path.ifEmpty { "/" }}")
+                            Text("Entries: ${state.files.browser.entries.size}")
+                            Text("Upload: ${state.files.upload.lifecycle}")
+                            Text("Download: ${state.files.download.lifecycle}")
+
+                            Text("Network", style = MaterialTheme.typography.titleMedium)
+                            Text("Selected path: ${state.network.selectedPath}")
+                            Text("Forwarding: ${state.network.forwarding.lifecycle}")
+
+                            Text("Private DNS", style = MaterialTheme.typography.titleMedium)
+                            Text("Requested: ${state.network.privateDns.requestedEnabled}")
+                            Text("Validated: ${state.network.privateDns.validated}")
+                            Text("OS applied: ${state.network.privateDns.osApplied}")
+
+                            Text(
+                                "Production actions remain unavailable in this source state. " +
+                                    "Use Development only for disposable local validation.",
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

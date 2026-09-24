@@ -1,0 +1,16 @@
+[package]
+name = "prw-device-identity"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+aws-lc-rs = { version = "=1.18.0", default-features = false, features = ["alloc", "non-fips"] }
+prw-control-plane = { path = "../prw-control-plane" }
+
+[dev-dependencies]
+prw-core = { path = "../prw-core" }
+
+[lints]
+workspace = true

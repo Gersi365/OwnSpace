@@ -1,0 +1,31 @@
+[package]
+name = "prw-remote-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+path = "src/root.rs"
+
+[dependencies]
+prw-connectivity = { path = "../prw-connectivity" }
+prw-control-plane = { path = "../prw-control-plane" }
+prw-control-transport = { path = "../prw-control-transport" }
+prw-core = { path = "../prw-core" }
+prw-file-service = { path = "../prw-file-service" }
+prw-file-transfer = { path = "../prw-file-transfer" }
+prw-forwarding = { path = "../prw-forwarding" }
+prw-nat-traversal = { path = "../prw-nat-traversal" }
+prw-policy = { path = "../prw-policy" }
+prw-registry = { path = "../prw-registry" }
+prw-remote-transport = { path = "../prw-remote-transport" }
+prw-session = { path = "../prw-session" }
+prw-terminal = { path = "../prw-terminal" }
+
+[dev-dependencies]
+aws-lc-rs = { version = "=1.18.0", default-features = false, features = ["alloc", "non-fips"] }
+prw-device-identity-signer = { path = "../prw-device-identity-signer" }
+
+[lints]
+workspace = true

@@ -1,0 +1,16 @@
+[package]
+name = "prw-relay-service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+prw-connectivity = { path = "../prw-connectivity" }
+prw-relay = { path = "../prw-relay" }
+
+[dev-dependencies]
+prw-core = { path = "../prw-core" }
+
+[lints]
+workspace = true

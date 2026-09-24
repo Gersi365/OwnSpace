@@ -1,0 +1,32 @@
+[package]
+name = "prw-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+aws-lc-rs = { version = "=1.18.0", default-features = false, features = ["alloc", "non-fips"] }
+prw-agent-configuration = { path = "../prw-agent-configuration" }
+prw-connectivity = { path = "../prw-connectivity" }
+prw-control-plane = { path = "../prw-control-plane" }
+prw-core = { path = "../prw-core" }
+prw-device-identity-custody = { path = "../prw-device-identity-custody" }
+prw-file-service = { path = "../prw-file-service" }
+prw-file-transfer = { path = "../prw-file-transfer" }
+prw-files = { path = "../prw-files" }
+prw-forwarding = { path = "../prw-forwarding" }
+prw-network = { path = "../prw-network" }
+prw-policy = { path = "../prw-policy" }
+prw-reachability-custody = { path = "../prw-reachability-custody" }
+prw-registry = { path = "../prw-registry" }
+prw-remote-bridge = { path = "../prw-remote-bridge" }
+prw-session = { path = "../prw-session" }
+prw-terminal = { path = "../prw-terminal" }
+prw-transport-identity-custody = { path = "../prw-transport-identity-custody" }
+prw-transport-identity-provisioning = { path = "../prw-transport-identity-provisioning" }
+rustix = { version = "=1.1.4", default-features = false, features = ["std", "event", "fs", "net", "process"] }
+nix = { version = "=0.31.3", default-features = false, features = ["signal"] }
+tokio = { version = "=1.53.1", default-features = false, features = ["rt", "net", "time", "sync"] }
+
+[lints]
+workspace = true

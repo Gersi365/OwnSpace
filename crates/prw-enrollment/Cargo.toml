@@ -1,0 +1,18 @@
+[package]
+name = "prw-enrollment"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+aws-lc-rs = { version = "=1.18.0", default-features = false, features = ["alloc", "non-fips"] }
+prw-core = { path = "../prw-core" }
+prw-control-plane = { path = "../prw-control-plane" }
+prw-device-identity = { path = "../prw-device-identity" }
+
+[dev-dependencies]
+prw-device-identity-signer = { path = "../prw-device-identity-signer" }
+
+[lints]
+workspace = true

@@ -1,0 +1,51 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/prw-core",
+    "crates/prw-policy",
+    "crates/prw-files",
+    "crates/prw-file-service",
+    "crates/prw-file-transfer",
+    "crates/prw-network",
+    "crates/prw-control-plane",
+    "crates/prw-reachability-custody",
+    "crates/prw-control-transport",
+    "crates/prw-device-identity",
+    "crates/prw-device-identity-signer",
+    "crates/prw-device-identity-custody",
+    "crates/prw-device-identity-provisioning",
+    "crates/prw-transport-identity-custody",
+    "crates/prw-transport-identity-provisioning",
+    "crates/prw-enrollment",
+    "crates/prw-session",
+    "crates/prw-registry",
+    "crates/prw-terminal",
+    "crates/prw-forwarding",
+    "crates/prw-connectivity",
+    "crates/prw-nat-traversal",
+    "crates/prw-native-traversal",
+    "crates/prw-relay",
+    "crates/prw-relay-service",
+    "crates/prw-private-dns",
+    "crates/prw-remote-transport",
+    "crates/prw-remote-bridge",
+    "crates/prw-agent-configuration",
+    "crates/prw-agent-systemd-orchestration",
+    "crates/prw-agent-package-reconciliation",
+    "crates/prw-agent",
+    "apps/desktop",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Proprietary"
+authors = ["Ownspace"]
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"
+nursery = "warn"

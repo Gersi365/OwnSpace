@@ -1,0 +1,13 @@
+[package]
+name = "prw-file-service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+rustix = { version = "=1.1.4", features = ["fs", "process"] }
+aws-lc-rs = { version = "=1.18.0", default-features = false, features = ["alloc", "non-fips"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,20 @@
+[package]
+name = "prw-control-plane"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+aws-lc-rs = { version = "=1.18.0", default-features = false, features = ["alloc", "non-fips"] }
+etcd-client = { version = "=0.19.0", default-features = false, features = ["tls"] }
+google-cloud-gax = "=1.13.0"
+google-cloud-spanner = { version = "=0.34.4-preview", default-features = false }
+prw-connectivity = { path = "../prw-connectivity" }
+prw-core = { path = "../prw-core" }
+zeroize = "=1.9.0"
+
+[lints]
+workspace = true
+
+# Phase 152 C02f-BX exact-head validation marker; no dependency semantics.

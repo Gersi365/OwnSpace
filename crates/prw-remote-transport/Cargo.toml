@@ -1,0 +1,21 @@
+[package]
+name = "prw-remote-transport"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+rust-version = "1.97.1"
+
+[dependencies]
+prw-connectivity = { path = "../prw-connectivity" }
+quinn = { version = "=0.11.11", default-features = false, features = ["runtime-tokio", "rustls-aws-lc-rs"] }
+rustls = { version = "=0.23.43", default-features = false, features = ["std", "aws_lc_rs"] }
+tokio = { version = "=1.53.1", default-features = false, features = ["rt", "macros", "net", "time", "sync", "io-util"] }
+aws-lc-rs = { version = "=1.18.0", default-features = true }
+
+[dev-dependencies]
+rcgen = { version = "=0.14.8", default-features = false, features = ["aws_lc_rs"] }
+
+[lints]
+workspace = true

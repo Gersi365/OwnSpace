@@ -1,0 +1,15 @@
+[package]
+name = "prw-native-traversal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+prw-connectivity = { path = "../prw-connectivity" }
+
+[dev-dependencies]
+prw-core = { path = "../prw-core" }
+
+[lints]
+workspace = true

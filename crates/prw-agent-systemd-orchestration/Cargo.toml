@@ -1,0 +1,18 @@
+[package]
+name = "prw-agent-systemd-orchestration"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "prw-agent-configure"
+path = "src/main.rs"
+
+[dependencies]
+prw-agent = { path = "../prw-agent" }
+prw-agent-configuration = { path = "../prw-agent-configuration" }
+rustix = { version = "=1.1.4", default-features = false, features = ["std", "fs", "net", "process"] }
+
+[lints]
+workspace = true

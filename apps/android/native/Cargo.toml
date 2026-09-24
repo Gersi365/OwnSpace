@@ -1,0 +1,37 @@
+[workspace]
+
+[package]
+name = "prw-android-adapter"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97.1"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+jni = { version = "=0.22.4", default-features = false }
+prw-control-plane = { path = "../../../crates/prw-control-plane" }
+prw-core = { path = "../../../crates/prw-core" }
+prw-device-identity = { path = "../../../crates/prw-device-identity" }
+prw-remote-transport = { path = "../../../crates/prw-remote-transport" }
+prw-remote-bridge = { path = "../../../crates/prw-remote-bridge" }
+prw-file-service = { path = "../../../crates/prw-file-service" }
+prw-file-transfer = { path = "../../../crates/prw-file-transfer" }
+prw-forwarding = { path = "../../../crates/prw-forwarding" }
+prw-connectivity = { path = "../../../crates/prw-connectivity" }
+prw-private-dns = { path = "../../../crates/prw-private-dns" }
+prw-terminal = { path = "../../../crates/prw-terminal" }
+
+[dev-dependencies]
+prw-device-identity-signer = { path = "../../../crates/prw-device-identity-signer" }
+aws-lc-rs = { version = "=1.18.0", default-features = false, features = ["alloc", "non-fips"] }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
+nursery = "warn"

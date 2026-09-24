@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Ownspace
+Exec=/usr/lib/private-remote-workspace/prw-desktop
+TryExec=/usr/lib/private-remote-workspace/prw-desktop
+Terminal=false
+StartupNotify=true
