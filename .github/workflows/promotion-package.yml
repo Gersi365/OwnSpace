@@ -1,0 +1,91 @@
+name: Ownspace F4 promotion package
+
+on:
+  push:
+    branches:
+      - "promotion/f4-package"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout validated carrier
+        uses: actions/checkout@v4
+
+      - name: Verify exact inputs
+        run: |
+          set -euo pipefail
+          echo "6b981dde40d5675620b7030b8b76c28fadfd89121caf0e5845f487ceeaaf87c4  source/Ownspace_Source_Current_2026-09-24.tar.gz" | sha256sum -c -
+          echo "b2c137728846635c2f872fd3f2f8b059655505856b1988a5cac92f9268896742  source/OWNSPACE_SOURCE_MANIFEST_SHA256.txt" | sha256sum -c -
+          echo "13608ead93378aad8fea2f76b9fd0b63bb8cee5dcf0512a54d4e60b6c8a1fb9f  candidate/OWNSPACE_TEMP_STARTUP_AUTHORITY_V4.patch" | sha256sum -c -
+          echo "11eb59d62cfcb9da3057e3debcc10e4d48ff77a5279b30cfb2ee7244ef12c4f0  candidate/OWNSPACE_TEMP_ANDROID_UI_A1.patch" | sha256sum -c -
+          echo "40b4655c51cbf33618830c8c2cef73ca2051049e1dd2dba23d3e4b65874deb96  candidate/OWNSPACE_TEMP_DESKTOP_UI_B1.patch" | sha256sum -c -
+          echo "27d6b520d6e2e290913f7f86bbb5f0339e9b6735e259f70eea5fcf36ee44243e  candidate/OWNSPACE_TEMP_FORMAT_F1.patch" | sha256sum -c -
+          echo "fe9af5847028b9086aa6f24e8b170525f27053f2eff01c69e43677a5c01f6ee9  candidate/OWNSPACE_TEMP_CLIPPY_F2.patch" | sha256sum -c -
+          echo "da958bab9e7acb61a5d4a067152f6c9bbe6a4d7dc5285a91b130afac20dc267b  candidate/OWNSPACE_TEMP_CLIPPY_F3.patch" | sha256sum -c -
+          echo "cbd0594268cb98f04cb917cb42185b113b93b387ecd1b308283a1c9ceffedf1d  candidate/OWNSPACE_TEMP_CLIPPY_F4.patch" | sha256sum -c -
+          echo "e5807076a51243b40994cd3f0968074e4758010ef1cb522866e2e33c75902338  candidate/OWNSPACE_TEMP_COMBINED_V4_A1_B1_F4_MANIFEST_SHA256.txt" | sha256sum -c -
+
+      - name: Reconstruct exact validated source
+        run: |
+          set -euo pipefail
+          mkdir -p promotion-work/source promotion-output
+          tar -xzf source/Ownspace_Source_Current_2026-09-24.tar.gz -C promotion-work/source
+          cd promotion-work/source
+
+          test "$(find . -type f | wc -l | tr -d ' ')" = "372"
+          sha256sum -c "$GITHUB_WORKSPACE/source/OWNSPACE_SOURCE_MANIFEST_SHA256.txt" >/dev/null
+
+          for patch_file in             "$GITHUB_WORKSPACE/candidate/OWNSPACE_TEMP_STARTUP_AUTHORITY_V4.patch"             "$GITHUB_WORKSPACE/candidate/OWNSPACE_TEMP_ANDROID_UI_A1.patch"             "$GITHUB_WORKSPACE/candidate/OWNSPACE_TEMP_DESKTOP_UI_B1.patch"             "$GITHUB_WORKSPACE/candidate/OWNSPACE_TEMP_FORMAT_F1.patch"             "$GITHUB_WORKSPACE/candidate/OWNSPACE_TEMP_CLIPPY_F2.patch"             "$GITHUB_WORKSPACE/candidate/OWNSPACE_TEMP_CLIPPY_F3.patch"             "$GITHUB_WORKSPACE/candidate/OWNSPACE_TEMP_CLIPPY_F4.patch"
+          do
+            patch -p1 --dry-run < "$patch_file" >/dev/null
+            patch -p1 < "$patch_file" >/dev/null
+          done
+
+          if find . -type f \( -name '*.rej' -o -name '*.orig' \) -print -quit | grep -q .; then
+            echo "unexpected patch artifact" >&2
+            exit 65
+          fi
+
+          test "$(find . -type f | wc -l | tr -d ' ')" = "372"
+          sha256sum -c "$GITHUB_WORKSPACE/candidate/OWNSPACE_TEMP_COMBINED_V4_A1_B1_F4_MANIFEST_SHA256.txt" >/dev/null
+
+          find . -type f -print0 | sort -z | xargs -0 sha256sum > "$GITHUB_WORKSPACE/promotion-output/OWNSPACE_SOURCE_MANIFEST_SHA256.txt"
+          cmp "$GITHUB_WORKSPACE/promotion-output/OWNSPACE_SOURCE_MANIFEST_SHA256.txt" "$GITHUB_WORKSPACE/candidate/OWNSPACE_TEMP_COMBINED_V4_A1_B1_F4_MANIFEST_SHA256.txt"
+          echo "e5807076a51243b40994cd3f0968074e4758010ef1cb522866e2e33c75902338  $GITHUB_WORKSPACE/promotion-output/OWNSPACE_SOURCE_MANIFEST_SHA256.txt" | sha256sum -c -
+
+      - name: Build deterministic promotion archive
+        run: |
+          set -euo pipefail
+          tar --format=gnu             --sort=name             --mtime='2026-09-24 00:00:00Z'             --owner=0             --group=0             --numeric-owner             -cf promotion-output/Ownspace_Source_Current_2026-09-24.tar             -C promotion-work/source .
+          gzip -n -c promotion-output/Ownspace_Source_Current_2026-09-24.tar > promotion-output/Ownspace_Source_Current_2026-09-24.tar.gz
+          rm promotion-output/Ownspace_Source_Current_2026-09-24.tar
+
+          archive_sha="$(sha256sum promotion-output/Ownspace_Source_Current_2026-09-24.tar.gz | awk '{print $1}')"
+          manifest_sha="$(sha256sum promotion-output/OWNSPACE_SOURCE_MANIFEST_SHA256.txt | awk '{print $1}')"
+          archive_bytes="$(stat -c '%s' promotion-output/Ownspace_Source_Current_2026-09-24.tar.gz)"
+
+          {
+            echo "OWNSPACE F4 PROMOTION PACKAGE"
+            echo "VALIDATION_RUN_ID=36037144807"
+            echo "VALIDATED_F4_COMMIT=0df15d07d8390abfa82bbd12694c0a0609d8a28d"
+            echo "SOURCE_FILES=372"
+            echo "SOURCE_MANIFEST_SHA256=$manifest_sha"
+            echo "SOURCE_ARCHIVE_SHA256=$archive_sha"
+            echo "SOURCE_ARCHIVE_BYTES=$archive_bytes"
+          } > promotion-output/OWNSPACE_F4_PROMOTION_PACKAGE_INFO.txt
+
+          cat promotion-output/OWNSPACE_F4_PROMOTION_PACKAGE_INFO.txt
+
+      - name: Upload promotion package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ownspace-f4-promotion-package
+          path: promotion-output/
+          if-no-files-found: error
+          retention-days: 14
