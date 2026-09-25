@@ -15,7 +15,7 @@ The desktop shell provides:
 - read-only local Agent availability/runtime presentation;
 - read-only Private DNS summary presentation;
 - manual bounded local status refresh that preserves the last rendered status while the read-only probe is active and gives explicit `Refreshing…` progress feedback;
-- a read-only Settings diagnostics page that exposes both the compatibility-sensitive endpoint contract and the session-resolved candidate endpoint derived through the existing `LocalIpcContract`, without mutating Agent configuration;
+- a read-only Settings diagnostics page that exposes both the compatibility-sensitive endpoint contract and the session-resolved candidate endpoint derived through the existing `LocalIpcContract`, with a local-only copy action for the resolved path and no Agent configuration mutation;
 - explicit offline/error handling, including partial Private DNS query failure visibility;
 - a bounded worker thread so local Unix-socket reads do not block the GTK main thread.
 
@@ -25,7 +25,7 @@ The local control endpoint remains:
 
 `$XDG_RUNTIME_DIR/private-remote-workspace/agent.sock`
 
-Settings also displays the session-resolved candidate path when `XDG_RUNTIME_DIR` is available and absolute. That display is derivation-only; endpoint trust, availability, and connectivity remain governed by the existing validated IPC path.
+Settings also displays the session-resolved candidate path when `XDG_RUNTIME_DIR` is available and absolute. The resolved path can be copied to the local desktop clipboard for diagnostics; this is not Remote Desktop clipboard integration. The display remains derivation-only, and endpoint trust, availability, and connectivity remain governed by the existing validated IPC path.
 
 That socket path and existing `prw-*` package, service, protocol, filesystem, and related identifiers are compatibility-sensitive internal identifiers. Public product terminology is **Ownspace**; this documentation update does not rename compatibility surfaces.
 
