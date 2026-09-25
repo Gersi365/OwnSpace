@@ -183,10 +183,9 @@ impl DesktopPresentationState {
 
     #[must_use]
     pub(crate) fn agent_status_text(&self) -> String {
-        let runtime = self.runtime.map_or(
-            "Not reported",
-            AgentRuntimePresentation::label,
-        );
+        let runtime = self
+            .runtime
+            .map_or("Not reported", AgentRuntimePresentation::label);
         format!(
             "Agent status\nAvailability: {}\nRuntime: {runtime}",
             self.availability.label()
@@ -269,8 +268,9 @@ mod tests {
             "Private DNS\nNo validated snapshot available"
         );
 
-        let mut online = DesktopPresentationState::connecting()
-            .with_status(LocalAgentStatusSnapshot::current(LocalAgentRuntimeState::Ready));
+        let mut online = DesktopPresentationState::connecting().with_status(
+            LocalAgentStatusSnapshot::current(LocalAgentRuntimeState::Ready),
+        );
         online.private_dns = Some(PrivateDnsPresentation {
             enabled: true,
             device_naming: false,
