@@ -180,13 +180,43 @@ impl DesktopPresentationState {
         self.detail = detail.into();
         self
     }
+
+    #[must_use]
+    pub(crate) fn agent_status_text(&self) -> String {
+        let runtime = self.runtime.map_or(
+            "Not reported",
+            AgentRuntimePresentation::label,
+        );
+        format!(
+            "Agent status\nAvailability: {}\nRuntime: {runtime}",
+            self.availability.label()
+        )
+    }
+
+    #[must_use]
+    pub(crate) fn private_dns_status_text(&self) -> String {
+        match &self.private_dns {
+            Some(dns) => format!(
+                "Private DNS\nEnabled: {}\nDevice naming: {}\nResolvers: {}\nSplit domains: {}",
+                yes_no(dns.enabled),
+                yes_no(dns.device_naming),
+                dns.resolver_count,
+                dns.split_domain_count
+            ),
+            None => "Private DNS\nNo validated snapshot available".to_owned(),
+        }
+    }
+}
+
+const fn yes_no(value: bool) -> &'static str {
+    if value { "Yes" } else { "No" }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         AgentAvailability, AgentRuntimePresentation, DesktopPresentationState,
-        NavigationDestination,
+        NavigationDestination, PrivateDnsPresentation,
     };
     use prw_agent::local_commands::status_snapshot::{
         LocalAgentRuntimeState, LocalAgentStatusSnapshot,
@@ -225,5 +255,36 @@ mod tests {
             assert_eq!(state.availability, AgentAvailability::Online);
             assert_eq!(state.runtime, Some(expected));
         }
+    }
+
+    #[test]
+    fn status_text_projection_is_deterministic_and_read_only() {
+        let connecting = DesktopPresentationState::connecting();
+        assert_eq!(
+            connecting.agent_status_text(),
+            "Agent status\nAvailability: Connecting\nRuntime: Not reported"
+        );
+        assert_eq!(
+            connecting.private_dns_status_text(),
+            "Private DNS\nNo validated snapshot available"
+        );
+
+        let mut online = DesktopPresentationState::connecting()
+            .with_status(LocalAgentStatusSnapshot::current(LocalAgentRuntimeState::Ready));
+        online.private_dns = Some(PrivateDnsPresentation {
+            enabled: true,
+            device_naming: false,
+            resolver_count: 2,
+            split_domain_count: 1,
+        });
+
+        assert_eq!(
+            online.agent_status_text(),
+            "Agent status\nAvailability: Online\nRuntime: Ready"
+        );
+        assert_eq!(
+            online.private_dns_status_text(),
+            "Private DNS\nEnabled: Yes\nDevice naming: No\nResolvers: 2\nSplit domains: 1"
+        );
     }
 }
