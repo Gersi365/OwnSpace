@@ -1,0 +1,83 @@
+name: Ownspace desktop status refresh preservation source package
+
+on:
+  push:
+    branches:
+      - "promotion/desktop-status-refresh-preservation-r1"
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout packaging carrier
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify validated source input
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXPECTED_BASE=e95b882048c6e37a1698d3ee47bee4fc6356a01b
+          EXPECTED_STATE_BLOB=25eba3af7abd7e509b02f61e5095fa4bd664bb5c
+          git cat-file -e "$EXPECTED_BASE^{commit}"
+          git merge-base --is-ancestor "$EXPECTED_BASE" HEAD
+          test "$(git rev-parse HEAD:apps/desktop/src/state.rs)" = "$EXPECTED_STATE_BLOB"
+          mapfile -t changed < <(git diff --name-only "$EXPECTED_BASE" HEAD | sort)
+          printf '%s\n' "${changed[@]}"
+          test "${#changed[@]}" = "2"
+          test "${changed[0]}" = ".github/workflows/desktop-status-refresh-preservation-source-package.yml"
+          test "${changed[1]}" = "apps/desktop/src/state.rs"
+          echo "EXPECTED_BASE=$EXPECTED_BASE" >> "$GITHUB_ENV"
+          echo "EXPECTED_STATE_BLOB=$EXPECTED_STATE_BLOB" >> "$GITHUB_ENV"
+
+      - name: Construct source-only candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GIT_INDEX_FILE="$RUNNER_TEMP/ownspace-status-refresh-preservation.index"
+          rm -f "$GIT_INDEX_FILE"
+          git read-tree "$EXPECTED_BASE^{tree}"
+          STATE_MODE="$(git ls-tree "$EXPECTED_BASE" -- apps/desktop/src/state.rs | awk '{print $1}')"
+          test "$STATE_MODE" = "100644"
+          git update-index --add --cacheinfo "$STATE_MODE" "$EXPECTED_STATE_BLOB" apps/desktop/src/state.rs
+          TREE_SHA="$(git write-tree)"
+          test "$(git ls-tree -r --name-only "$TREE_SHA" | wc -l | tr -d ' ')" = "372"
+          mkdir -p source package-output
+          git archive "$TREE_SHA" | tar -x -C source
+          test "$(find source -type f | wc -l | tr -d ' ')" = "372"
+          cp source/apps/desktop/src/state.rs package-output/state.rs
+          (
+            cd source
+            find . -type f -print0 | sort -z | xargs -0 sha256sum
+          ) > package-output/OWNSPACE_SOURCE_MANIFEST_SHA256.txt
+          (
+            cd source
+            tar --sort=name --mtime='2026-09-25 00:00:00 UTC' --owner=0 --group=0 --numeric-owner --format=gnu -cf - . | gzip -n -6
+          ) > package-output/Ownspace_Source_Current_2026-09-25.tar.gz
+          {
+            echo "OWNSPACE DESKTOP STATUS REFRESH PRESERVATION SOURCE PACKAGE"
+            echo "BASE_MAIN=$EXPECTED_BASE"
+            echo "VALIDATED_CARRIER_HEAD=cc597c63ea47eb2ba8fea0a4dc22d1e33ba8697c"
+            echo "VALIDATED_SOURCE_COMMIT=cf8142621d87173e3950b0410dfd61b141ccd277"
+            echo "SOURCE_TREE=$TREE_SHA"
+            echo "SOURCE_FILES=372"
+            echo "STATE_BLOB=$EXPECTED_STATE_BLOB"
+            echo "STATE_SHA256=$(sha256sum package-output/state.rs | awk '{print $1}')"
+            echo "MANIFEST_SHA256=$(sha256sum package-output/OWNSPACE_SOURCE_MANIFEST_SHA256.txt | awk '{print $1}')"
+            echo "ARCHIVE_SHA256=$(sha256sum package-output/Ownspace_Source_Current_2026-09-25.tar.gz | awk '{print $1}')"
+            echo "ARCHIVE_BYTES=$(wc -c < package-output/Ownspace_Source_Current_2026-09-25.tar.gz | tr -d ' ')"
+          } > package-output/package-info.txt
+          cat package-output/package-info.txt
+
+      - name: Upload source package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ownspace-desktop-status-refresh-preservation-source-package
+          path: package-output/
+          if-no-files-found: error
+          retention-days: 14
