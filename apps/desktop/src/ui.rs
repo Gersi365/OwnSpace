@@ -6,7 +6,7 @@ use gtk::glib;
 use prw_agent::{AGENT_RUNTIME_SUBDIRECTORY, AGENT_SOCKET_FILENAME};
 
 use crate::ipc;
-use crate::state::{DesktopPresentationState, NavigationDestination};
+use crate::state::{AgentAvailability, DesktopPresentationState, NavigationDestination};
 
 const REFRESH_BUTTON_IDLE_LABEL: &str = "Refresh status";
 const REFRESH_BUTTON_BUSY_LABEL: &str = "Refreshing…";
@@ -159,7 +159,7 @@ fn activity_page() -> (
     page.append(&title);
 
     let subtitle = gtk::Label::new(Some(
-        "Latest local diagnostics snapshot. Refresh uses the same bounded local status probe as Overview; copy writes only the currently rendered snapshot to the local desktop clipboard.",
+        "Latest local diagnostics snapshot. Refresh uses the same bounded local status probe as Overview; copy becomes available after the first probe result and writes only the currently rendered snapshot to the local desktop clipboard.",
     ));
     subtitle.set_xalign(0.0);
     subtitle.set_wrap(true);
@@ -209,6 +209,13 @@ fn activity_page() -> (
 
 fn activity_snapshot_clipboard_text(agent: &str, dns: &str, detail: &str) -> String {
     format!("{agent}\n\n{dns}\n\nDetail\n{detail}")
+}
+
+const fn activity_snapshot_copy_available(availability: AgentAvailability) -> bool {
+    matches!(
+        availability,
+        AgentAvailability::Offline | AgentAvailability::Online | AgentAvailability::Error
+    )
 }
 
 fn section_label(title: &str) -> gtk::Label {
@@ -439,6 +446,9 @@ fn render_probe_state(state: &DesktopPresentationState, targets: &StatusProbeTar
     targets
         .activity_copy_button
         .set_label(COPY_SNAPSHOT_IDLE_LABEL);
+    targets
+        .activity_copy_button
+        .set_sensitive(activity_snapshot_copy_available(state.availability));
 }
 
 fn set_refresh_controls_busy(
@@ -471,8 +481,9 @@ fn render_state(
 #[cfg(test)]
 mod tests {
     use super::{
-        COPY_SNAPSHOT_DONE_LABEL, COPY_SNAPSHOT_IDLE_LABEL, NavigationDestination,
-        REFRESH_BUTTON_BUSY_LABEL, REFRESH_BUTTON_IDLE_LABEL, activity_snapshot_clipboard_text,
+        AgentAvailability, COPY_SNAPSHOT_DONE_LABEL, COPY_SNAPSHOT_IDLE_LABEL,
+        NavigationDestination, REFRESH_BUTTON_BUSY_LABEL, REFRESH_BUTTON_IDLE_LABEL,
+        activity_snapshot_clipboard_text, activity_snapshot_copy_available,
         local_endpoint_contract_text, placeholder_description,
     };
 
@@ -494,6 +505,17 @@ mod tests {
             ),
             "Agent status\nAvailability: Online\nRuntime: Ready\n\nPrivate DNS\nEnabled: Yes\n\nDetail\nLocal IPC protocol 1.0"
         );
+    }
+
+    #[test]
+    fn activity_snapshot_copy_requires_a_settled_probe_result() {
+        assert!(!activity_snapshot_copy_available(AgentAvailability::Unknown));
+        assert!(!activity_snapshot_copy_available(
+            AgentAvailability::Connecting
+        ));
+        assert!(activity_snapshot_copy_available(AgentAvailability::Offline));
+        assert!(activity_snapshot_copy_available(AgentAvailability::Online));
+        assert!(activity_snapshot_copy_available(AgentAvailability::Error));
     }
 
     #[test]
