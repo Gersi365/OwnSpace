@@ -24,7 +24,7 @@ jobs:
         run: |
           set -euo pipefail
           EXPECTED_BASE=4b763eed978086e110a924e519b4ea32b80aacf2
-          EXPECTED_IPC_BLOB=50d55c4b96c9525c9b1112ad77aac52c747e8598
+          EXPECTED_IPC_BLOB=6c28d37fc7caaba184b8603e613ffa5a4551bd01
           EXPECTED_UI_BLOB=2b0213647490cf45075b3fc23084b8df86526df3
           EXPECTED_README_BLOB=a4bd9e9833ed4ac0614f878fde17cd9187536ad9
           git cat-file -e "$EXPECTED_BASE^{commit}"
