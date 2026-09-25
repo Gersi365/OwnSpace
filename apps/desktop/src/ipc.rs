@@ -185,7 +185,7 @@ fn runtime_root_from_raw(raw: Option<&OsStr>) -> Result<PathBuf, DesktopIpcError
     Ok(path)
 }
 
-pub(crate) fn endpoint_candidate_from_environment() -> Result<PathBuf, DesktopIpcError> {
+pub(super) fn endpoint_candidate_from_environment() -> Result<PathBuf, DesktopIpcError> {
     let raw = env::var_os("XDG_RUNTIME_DIR");
     endpoint_candidate_from_raw(raw.as_deref())
 }
