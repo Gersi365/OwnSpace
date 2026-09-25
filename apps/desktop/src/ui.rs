@@ -240,7 +240,6 @@ fn render_state(
     detail_label.set_text(&state.detail);
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::{
