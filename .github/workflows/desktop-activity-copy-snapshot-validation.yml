@@ -1,0 +1,102 @@
+name: Ownspace desktop activity copy snapshot validation
+
+on:
+  push:
+    branches:
+      - "validation/desktop-activity-copy-snapshot-r1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify candidate scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXPECTED_BASE=9ed59c545d3b06c50182f8a5cf00671c6e06fac3
+          EXPECTED_UI_BLOB=9aad768dbe14a7631eb2286e00abc5f7d7ae061e
+          EXPECTED_README_BLOB=c1cfd34cf6e3c62deebda6f851c5d0c3803f5a98
+          git cat-file -e "$EXPECTED_BASE^{commit}"
+          git merge-base --is-ancestor "$EXPECTED_BASE" HEAD
+          test "$(git rev-parse HEAD:apps/desktop/src/ui.rs)" = "$EXPECTED_UI_BLOB"
+          test "$(git rev-parse HEAD:apps/desktop/README.md)" = "$EXPECTED_README_BLOB"
+          mapfile -t changed < <(git diff --name-only "$EXPECTED_BASE" HEAD | sort)
+          printf '%s\n' "${changed[@]}"
+          test "${#changed[@]}" = "3"
+          test "${changed[0]}" = ".github/workflows/desktop-activity-copy-snapshot-validation.yml"
+          test "${changed[1]}" = "apps/desktop/README.md"
+          test "${changed[2]}" = "apps/desktop/src/ui.rs"
+          grep -Fq 'const COPY_SNAPSHOT_IDLE_LABEL: &str = "Copy current snapshot";' apps/desktop/src/ui.rs
+          grep -Fq 'fn activity_snapshot_clipboard_text(' apps/desktop/src/ui.rs
+          grep -Fq '.activity_copy_button' apps/desktop/src/ui.rs
+          test "$(grep -Fc 'ipc::query_startup()' apps/desktop/src/ui.rs)" = "1"
+          grep -Fq 'local desktop clipboard' apps/desktop/README.md
+          grep -Fq 'Remote Desktop clipboard integration' apps/desktop/README.md
+          mkdir -p validation-output
+          {
+            echo "OWNSPACE DESKTOP ACTIVITY COPY SNAPSHOT VALIDATION"
+            echo "BASE_COMMIT=$EXPECTED_BASE"
+            echo "EXPECTED_UI_BLOB=$EXPECTED_UI_BLOB"
+            echo "EXPECTED_README_BLOB=$EXPECTED_README_BLOB"
+            echo "CANDIDATE_COMMIT=$(git rev-parse HEAD)"
+            echo "CHANGED_SOURCE_PATHS=2"
+            echo "IPC_QUERY_STARTUP_CALL_SITES=1"
+          } > validation-output/desktop-activity-copy-snapshot.txt
+
+      - name: Install native build dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ca-certificates clang cmake desktop-file-utils libadwaita-1-dev libgtk-4-dev \
+            libssl-dev ninja-build perl pkg-config protobuf-compiler
+
+      - name: Install exact Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt --component clippy
+          rustup default 1.97.1
+
+      - name: Focused desktop checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +1.97.1 fmt --all -- --check
+          cargo +1.97.1 test --locked -p prw-desktop
+
+      - name: Workspace validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +1.97.1 metadata --locked --no-deps --format-version 1 >/dev/null
+          cargo +1.97.1 clippy --locked --workspace --all-targets --all-features -- -D warnings
+          cargo +1.97.1 test --locked --workspace --all-targets
+          cargo +1.97.1 build --locked --workspace --all-targets
+          {
+            echo "FOCUSED_DESKTOP=PASS"
+            echo "CARGO_METADATA=PASS"
+            echo "CARGO_FMT=PASS"
+            echo "CARGO_CLIPPY=PASS"
+            echo "CARGO_TEST=PASS"
+            echo "CARGO_BUILD=PASS"
+            echo "RESULT=PASS"
+          } >> validation-output/desktop-activity-copy-snapshot.txt
+
+      - name: Upload validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ownspace-desktop-activity-copy-snapshot-validation
+          path: validation-output/
+          if-no-files-found: warn
+          retention-days: 14
