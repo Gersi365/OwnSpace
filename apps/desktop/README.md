@@ -15,7 +15,7 @@ The desktop shell provides:
 - read-only local Agent availability/runtime presentation;
 - read-only Private DNS summary presentation;
 - manual bounded local status refresh that preserves the last rendered status while the read-only probe is active and gives explicit `Refreshing…` progress feedback;
-- a read-only Settings diagnostics page that exposes both the compatibility-sensitive endpoint contract and the session-resolved candidate endpoint derived through the existing `LocalIpcContract`, with a local-only copy action for the resolved path and no Agent configuration mutation;
+- a read-only Settings diagnostics page that shows the local Ownspace Desktop package version, exposes both the compatibility-sensitive endpoint contract and the session-resolved candidate endpoint derived through the existing `LocalIpcContract`, with a local-only copy action for the resolved path and no Agent configuration mutation;
 - a read-only Activity page that mirrors the latest local Agent/Private DNS probe snapshot, can trigger the same bounded local refresh as Overview, and can copy the currently rendered snapshot to the local desktop clipboard without persisting history or emitting external telemetry;
 - explicit offline/error handling, including partial Private DNS query failure visibility;
 - a bounded worker thread so local Unix-socket reads do not block the GTK main thread.
