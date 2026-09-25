@@ -10,6 +10,8 @@ use crate::state::{DesktopPresentationState, NavigationDestination};
 
 const REFRESH_BUTTON_IDLE_LABEL: &str = "Refresh status";
 const REFRESH_BUTTON_BUSY_LABEL: &str = "Refreshing…";
+const COPY_SNAPSHOT_IDLE_LABEL: &str = "Copy current snapshot";
+const COPY_SNAPSHOT_DONE_LABEL: &str = "Copied";
 
 #[derive(Clone)]
 struct StatusProbeTargets {
@@ -19,6 +21,7 @@ struct StatusProbeTargets {
     activity_agent_label: gtk::Label,
     activity_dns_label: gtk::Label,
     activity_detail_label: gtk::Label,
+    activity_copy_button: gtk::Button,
     overview_refresh_button: gtk::Button,
     activity_refresh_button: gtk::Button,
 }
@@ -56,6 +59,7 @@ pub fn build(app: &adw::Application) {
         activity_dns_label,
         activity_detail_label,
         activity_refresh_button,
+        activity_copy_button,
     ) = activity_page();
 
     for destination in NavigationDestination::ALL.into_iter().skip(1) {
@@ -86,6 +90,7 @@ pub fn build(app: &adw::Application) {
         activity_agent_label,
         activity_dns_label,
         activity_detail_label,
+        activity_copy_button,
         overview_refresh_button: refresh_button,
         activity_refresh_button,
     };
@@ -131,10 +136,39 @@ fn overview_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label, gtk::Button
     detail_label.add_css_class("dim-label");
     page.append(&detail_label);
 
-    (page, agent_label, dns_label, detail_label, refresh_button)
+    let copy_button = gtk::Button::with_label(COPY_SNAPSHOT_IDLE_LABEL);
+    copy_button.set_halign(gtk::Align::Start);
+    let copy_agent_label = agent_label.clone();
+    let copy_dns_label = dns_label.clone();
+    let copy_detail_label = detail_label.clone();
+    copy_button.connect_clicked(move |button| {
+        let agent = copy_agent_label.text().to_string();
+        let dns = copy_dns_label.text().to_string();
+        let detail = copy_detail_label.text().to_string();
+        let copy_text = activity_snapshot_clipboard_text(&agent, &dns, &detail);
+        button.display().clipboard().set_text(&copy_text);
+        button.set_label(COPY_SNAPSHOT_DONE_LABEL);
+    });
+    page.append(&copy_button);
+
+    (
+        page,
+        agent_label,
+        dns_label,
+        detail_label,
+        refresh_button,
+        copy_button,
+    )
 }
 
-fn activity_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label, gtk::Button) {
+fn activity_page() -> (
+    gtk::Box,
+    gtk::Label,
+    gtk::Label,
+    gtk::Label,
+    gtk::Button,
+    gtk::Button,
+) {
     let page = gtk::Box::new(gtk::Orientation::Vertical, 18);
     page.set_margin_top(32);
     page.set_margin_bottom(32);
@@ -147,7 +181,7 @@ fn activity_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label, gtk::Button
     page.append(&title);
 
     let subtitle = gtk::Label::new(Some(
-        "Latest local diagnostics snapshot. Refresh uses the same bounded local status probe as Overview; no history or external telemetry is recorded.",
+        "Latest local diagnostics snapshot. Refresh uses the same bounded local status probe as Overview; copy writes only the currently rendered snapshot to the local desktop clipboard.",
     ));
     subtitle.set_xalign(0.0);
     subtitle.set_wrap(true);
@@ -171,6 +205,10 @@ fn activity_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label, gtk::Button
     page.append(&detail_label);
 
     (page, agent_label, dns_label, detail_label, refresh_button)
+}
+
+fn activity_snapshot_clipboard_text(agent: &str, dns: &str, detail: &str) -> String {
+    format!("{agent}\n\n{dns}\n\nDetail\n{detail}")
 }
 
 fn section_label(title: &str) -> gtk::Label {
@@ -398,6 +436,9 @@ fn render_probe_state(state: &DesktopPresentationState, targets: &StatusProbeTar
         &targets.activity_dns_label,
         &targets.activity_detail_label,
     );
+    targets
+        .activity_copy_button
+        .set_label(COPY_SNAPSHOT_IDLE_LABEL);
 }
 
 fn set_refresh_controls_busy(
@@ -430,7 +471,8 @@ fn render_state(
 #[cfg(test)]
 mod tests {
     use super::{
-        NavigationDestination, REFRESH_BUTTON_BUSY_LABEL, REFRESH_BUTTON_IDLE_LABEL,
+        COPY_SNAPSHOT_DONE_LABEL, COPY_SNAPSHOT_IDLE_LABEL, NavigationDestination,
+        REFRESH_BUTTON_BUSY_LABEL, REFRESH_BUTTON_IDLE_LABEL, activity_snapshot_clipboard_text,
         local_endpoint_contract_text, placeholder_description,
     };
 
@@ -438,6 +480,20 @@ mod tests {
     fn refresh_button_labels_have_stable_presentation_contract() {
         assert_eq!(REFRESH_BUTTON_IDLE_LABEL, "Refresh status");
         assert_eq!(REFRESH_BUTTON_BUSY_LABEL, "Refreshing…");
+    }
+
+    #[test]
+    fn activity_snapshot_clipboard_projection_is_local_text_only() {
+        assert_eq!(COPY_SNAPSHOT_IDLE_LABEL, "Copy current snapshot");
+        assert_eq!(COPY_SNAPSHOT_DONE_LABEL, "Copied");
+        assert_eq!(
+            activity_snapshot_clipboard_text(
+                "Agent status\nAvailability: Online\nRuntime: Ready",
+                "Private DNS\nEnabled: Yes",
+                "Local IPC protocol 1.0",
+            ),
+            "Agent status\nAvailability: Online\nRuntime: Ready\n\nPrivate DNS\nEnabled: Yes\n\nDetail\nLocal IPC protocol 1.0"
+        );
     }
 
     #[test]
