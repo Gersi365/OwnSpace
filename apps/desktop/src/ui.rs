@@ -136,29 +136,7 @@ fn overview_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label, gtk::Button
     detail_label.add_css_class("dim-label");
     page.append(&detail_label);
 
-    let copy_button = gtk::Button::with_label(COPY_SNAPSHOT_IDLE_LABEL);
-    copy_button.set_halign(gtk::Align::Start);
-    let copy_agent_label = agent_label.clone();
-    let copy_dns_label = dns_label.clone();
-    let copy_detail_label = detail_label.clone();
-    copy_button.connect_clicked(move |button| {
-        let agent = copy_agent_label.text().to_string();
-        let dns = copy_dns_label.text().to_string();
-        let detail = copy_detail_label.text().to_string();
-        let copy_text = activity_snapshot_clipboard_text(&agent, &dns, &detail);
-        button.display().clipboard().set_text(&copy_text);
-        button.set_label(COPY_SNAPSHOT_DONE_LABEL);
-    });
-    page.append(&copy_button);
-
-    (
-        page,
-        agent_label,
-        dns_label,
-        detail_label,
-        refresh_button,
-        copy_button,
-    )
+    (page, agent_label, dns_label, detail_label, refresh_button)
 }
 
 fn activity_page() -> (
@@ -204,7 +182,29 @@ fn activity_page() -> (
     detail_label.add_css_class("dim-label");
     page.append(&detail_label);
 
-    (page, agent_label, dns_label, detail_label, refresh_button)
+    let copy_button = gtk::Button::with_label(COPY_SNAPSHOT_IDLE_LABEL);
+    copy_button.set_halign(gtk::Align::Start);
+    let copy_agent_label = agent_label.clone();
+    let copy_dns_label = dns_label.clone();
+    let copy_detail_label = detail_label.clone();
+    copy_button.connect_clicked(move |button| {
+        let agent = copy_agent_label.text().to_string();
+        let dns = copy_dns_label.text().to_string();
+        let detail = copy_detail_label.text().to_string();
+        let copy_text = activity_snapshot_clipboard_text(&agent, &dns, &detail);
+        button.display().clipboard().set_text(&copy_text);
+        button.set_label(COPY_SNAPSHOT_DONE_LABEL);
+    });
+    page.append(&copy_button);
+
+    (
+        page,
+        agent_label,
+        dns_label,
+        detail_label,
+        refresh_button,
+        copy_button,
+    )
 }
 
 fn activity_snapshot_clipboard_text(agent: &str, dns: &str, detail: &str) -> String {
