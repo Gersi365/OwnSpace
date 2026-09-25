@@ -219,6 +219,10 @@ fn section_label(title: &str) -> gtk::Label {
     label
 }
 
+fn desktop_version_text() -> String {
+    format!("Ownspace Desktop version {}", env!("CARGO_PKG_VERSION"))
+}
+
 fn local_endpoint_contract_text() -> String {
     format!("$XDG_RUNTIME_DIR/{AGENT_RUNTIME_SUBDIRECTORY}/{AGENT_SOCKET_FILENAME}")
 }
@@ -247,6 +251,17 @@ fn settings_page() -> gtk::Box {
     detail.set_wrap(true);
     detail.add_css_class("dim-label");
     page.append(&detail);
+
+    let build_title = gtk::Label::new(Some("Build information"));
+    build_title.set_xalign(0.0);
+    build_title.add_css_class("heading");
+    page.append(&build_title);
+
+    let version = gtk::Label::new(Some(&desktop_version_text()));
+    version.set_xalign(0.0);
+    version.set_selectable(true);
+    version.add_css_class("monospace");
+    page.append(&version);
 
     let endpoint_title = gtk::Label::new(Some("Local control endpoint"));
     endpoint_title.set_xalign(0.0);
@@ -473,7 +488,7 @@ mod tests {
     use super::{
         COPY_SNAPSHOT_DONE_LABEL, COPY_SNAPSHOT_IDLE_LABEL, NavigationDestination,
         REFRESH_BUTTON_BUSY_LABEL, REFRESH_BUTTON_IDLE_LABEL, activity_snapshot_clipboard_text,
-        local_endpoint_contract_text, placeholder_description,
+        desktop_version_text, local_endpoint_contract_text, placeholder_description,
     };
 
     #[test]
@@ -494,6 +509,11 @@ mod tests {
             ),
             "Agent status\nAvailability: Online\nRuntime: Ready\n\nPrivate DNS\nEnabled: Yes\n\nDetail\nLocal IPC protocol 1.0"
         );
+    }
+
+    #[test]
+    fn settings_build_information_uses_workspace_package_version() {
+        assert_eq!(desktop_version_text(), "Ownspace Desktop version 0.1.0");
     }
 
     #[test]
