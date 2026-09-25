@@ -14,7 +14,7 @@ The desktop shell provides:
 - Overview, Machines, Sessions, Files, Transfers, Activity, and Settings navigation;
 - read-only local Agent availability/runtime presentation;
 - read-only Private DNS summary presentation;
-- manual bounded local status refresh with explicit `Refreshing…` progress feedback while the read-only probe is active;
+- manual bounded local status refresh that preserves the last rendered status while the read-only probe is active and gives explicit `Refreshing…` progress feedback;
 - explicit offline/error handling, including partial Private DNS query failure visibility;
 - a bounded worker thread so local Unix-socket reads do not block the GTK main thread.
 
