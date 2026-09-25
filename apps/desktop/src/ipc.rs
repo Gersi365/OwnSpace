@@ -382,6 +382,19 @@ mod tests {
         assert!(state.private_dns.is_none());
     }
 
+    #[test]
+    fn secondary_private_dns_failure_does_not_mask_primary_status_failure() {
+        let state = StartupProbe {
+            status: Err(DesktopIpcError::ConnectFailed),
+            private_dns: Err(DesktopIpcError::ResponseInvalid),
+        }
+        .into_presentation();
+
+        assert_eq!(state.availability, AgentAvailability::Offline);
+        assert_eq!(state.detail, "Ownspace Agent connection failed");
+        assert!(state.private_dns.is_none());
+    }
+
     fn assert_error_contract(
         error: DesktopIpcError,
         availability: AgentAvailability,
