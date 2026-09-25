@@ -289,4 +289,45 @@ mod tests {
             "Private DNS\nEnabled: Yes\nDevice naming: No\nResolvers: 2\nSplit domains: 1"
         );
     }
+
+    #[test]
+    fn navigation_destinations_have_stable_presentation_contract() {
+        for (actual, expected) in NavigationDestination::ALL.into_iter().zip([
+            (NavigationDestination::Overview, "Overview", "overview"),
+            (NavigationDestination::Machines, "Machines", "machines"),
+            (NavigationDestination::Sessions, "Sessions", "sessions"),
+            (NavigationDestination::Files, "Files", "files"),
+            (NavigationDestination::Transfers, "Transfers", "transfers"),
+            (NavigationDestination::Activity, "Activity", "activity"),
+            (NavigationDestination::Settings, "Settings", "settings"),
+        ]) {
+            let (destination, title, stack_name) = expected;
+            assert_eq!(actual, destination);
+            assert_eq!(actual.title(), title);
+            assert_eq!(actual.stack_name(), stack_name);
+        }
+    }
+
+    #[test]
+    fn agent_presentation_labels_are_stable() {
+        for (availability, label) in [
+            (AgentAvailability::Unknown, "Unknown"),
+            (AgentAvailability::Offline, "Offline"),
+            (AgentAvailability::Connecting, "Connecting"),
+            (AgentAvailability::Online, "Online"),
+            (AgentAvailability::Error, "Error"),
+        ] {
+            assert_eq!(availability.label(), label);
+        }
+
+        for (runtime, label) in [
+            (AgentRuntimePresentation::Starting, "Starting"),
+            (AgentRuntimePresentation::Ready, "Ready"),
+            (AgentRuntimePresentation::Degraded, "Degraded"),
+            (AgentRuntimePresentation::Stopping, "Stopping"),
+            (AgentRuntimePresentation::Unknown, "Unknown"),
+        ] {
+            assert_eq!(runtime.label(), label);
+        }
+    }
 }
