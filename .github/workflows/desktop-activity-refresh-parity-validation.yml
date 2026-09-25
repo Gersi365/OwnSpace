@@ -1,0 +1,100 @@
+name: Ownspace desktop activity refresh parity validation
+
+on:
+  push:
+    branches:
+      - "validation/desktop-activity-refresh-parity-r1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify candidate scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXPECTED_BASE=51984e3ada986c0762185fe13917364a114b0e31
+          EXPECTED_UI_BLOB=4bc4a3f03c3908bc10445eeb9d58bd76d6c53798
+          EXPECTED_README_BLOB=29e8a53e91b46f7b163216b5cbbe41286d92c3e6
+          git cat-file -e "$EXPECTED_BASE^{commit}"
+          git merge-base --is-ancestor "$EXPECTED_BASE" HEAD
+          test "$(git rev-parse HEAD:apps/desktop/src/ui.rs)" = "$EXPECTED_UI_BLOB"
+          test "$(git rev-parse HEAD:apps/desktop/README.md)" = "$EXPECTED_README_BLOB"
+          mapfile -t changed < <(git diff --name-only "$EXPECTED_BASE" HEAD | sort)
+          printf '%s\n' "${changed[@]}"
+          test "${#changed[@]}" = "3"
+          test "${changed[0]}" = ".github/workflows/desktop-activity-refresh-parity-validation.yml"
+          test "${changed[1]}" = "apps/desktop/README.md"
+          test "${changed[2]}" = "apps/desktop/src/ui.rs"
+          grep -Fq 'activity_refresh_button.connect_clicked' apps/desktop/src/ui.rs
+          grep -Fq 'fn set_refresh_controls_busy(' apps/desktop/src/ui.rs
+          test "$(grep -Fc 'ipc::query_startup()' apps/desktop/src/ui.rs)" = "1"
+          grep -Fq 'same bounded local refresh as Overview' apps/desktop/README.md
+          mkdir -p validation-output
+          {
+            echo "OWNSPACE DESKTOP ACTIVITY REFRESH PARITY VALIDATION"
+            echo "BASE_COMMIT=$EXPECTED_BASE"
+            echo "EXPECTED_UI_BLOB=$EXPECTED_UI_BLOB"
+            echo "EXPECTED_README_BLOB=$EXPECTED_README_BLOB"
+            echo "CANDIDATE_COMMIT=$(git rev-parse HEAD)"
+            echo "CHANGED_SOURCE_PATHS=2"
+            echo "IPC_QUERY_STARTUP_CALL_SITES=1"
+          } > validation-output/desktop-activity-refresh-parity.txt
+
+      - name: Install native build dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ca-certificates clang cmake desktop-file-utils libadwaita-1-dev libgtk-4-dev \
+            libssl-dev ninja-build perl pkg-config protobuf-compiler
+
+      - name: Install exact Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt --component clippy
+          rustup default 1.97.1
+
+      - name: Focused desktop checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +1.97.1 fmt --all -- --check
+          cargo +1.97.1 test --locked -p prw-desktop
+
+      - name: Workspace validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +1.97.1 metadata --locked --no-deps --format-version 1 >/dev/null
+          cargo +1.97.1 clippy --locked --workspace --all-targets --all-features -- -D warnings
+          cargo +1.97.1 test --locked --workspace --all-targets
+          cargo +1.97.1 build --locked --workspace --all-targets
+          {
+            echo "FOCUSED_DESKTOP=PASS"
+            echo "CARGO_METADATA=PASS"
+            echo "CARGO_FMT=PASS"
+            echo "CARGO_CLIPPY=PASS"
+            echo "CARGO_TEST=PASS"
+            echo "CARGO_BUILD=PASS"
+            echo "RESULT=PASS"
+          } >> validation-output/desktop-activity-refresh-parity.txt
+
+      - name: Upload validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ownspace-desktop-activity-refresh-parity-validation
+          path: validation-output/
+          if-no-files-found: warn
+          retention-days: 14
