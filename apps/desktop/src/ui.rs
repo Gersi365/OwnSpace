@@ -38,11 +38,14 @@ pub fn build(app: &adw::Application) {
         NavigationDestination::Overview.title(),
     );
 
+    let (activity, activity_agent_label, activity_dns_label, activity_detail_label) =
+        activity_page();
+
     for destination in NavigationDestination::ALL.into_iter().skip(1) {
-        let page = if destination == NavigationDestination::Settings {
-            settings_page()
-        } else {
-            placeholder_page(destination)
+        let page = match destination {
+            NavigationDestination::Activity => activity.clone(),
+            NavigationDestination::Settings => settings_page(),
+            _ => placeholder_page(destination),
         };
         stack.add_titled(&page, Some(destination.stack_name()), destination.title());
     }
@@ -59,24 +62,40 @@ pub fn build(app: &adw::Application) {
     window.set_content(Some(&root));
     window.present();
 
+    let connecting = DesktopPresentationState::connecting();
+    render_state(&connecting, &agent_label, &dns_label, &detail_label);
     render_state(
-        &DesktopPresentationState::connecting(),
-        &agent_label,
-        &dns_label,
-        &detail_label,
+        &connecting,
+        &activity_agent_label,
+        &activity_dns_label,
+        &activity_detail_label,
     );
     let refresh_agent_label = agent_label.clone();
     let refresh_dns_label = dns_label.clone();
     let refresh_detail_label = detail_label.clone();
+    let refresh_activity_agent_label = activity_agent_label.clone();
+    let refresh_activity_dns_label = activity_dns_label.clone();
+    let refresh_activity_detail_label = activity_detail_label.clone();
     refresh_button.connect_clicked(move |button| {
         start_startup_probe(
             refresh_agent_label.clone(),
             refresh_dns_label.clone(),
             refresh_detail_label.clone(),
+            refresh_activity_agent_label.clone(),
+            refresh_activity_dns_label.clone(),
+            refresh_activity_detail_label.clone(),
             button.clone(),
         );
     });
-    start_startup_probe(agent_label, dns_label, detail_label, refresh_button);
+    start_startup_probe(
+        agent_label,
+        dns_label,
+        detail_label,
+        activity_agent_label,
+        activity_dns_label,
+        activity_detail_label,
+        refresh_button,
+    );
 }
 
 fn overview_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label, gtk::Button) {
@@ -116,6 +135,41 @@ fn overview_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label, gtk::Button
     page.append(&detail_label);
 
     (page, agent_label, dns_label, detail_label, refresh_button)
+}
+
+fn activity_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label) {
+    let page = gtk::Box::new(gtk::Orientation::Vertical, 18);
+    page.set_margin_top(32);
+    page.set_margin_bottom(32);
+    page.set_margin_start(32);
+    page.set_margin_end(32);
+
+    let title = gtk::Label::new(Some("Activity"));
+    title.set_xalign(0.0);
+    title.add_css_class("title-1");
+    page.append(&title);
+
+    let subtitle = gtk::Label::new(Some(
+        "Latest local diagnostics snapshot. This view mirrors the most recent bounded local status probe; no history or external telemetry is recorded.",
+    ));
+    subtitle.set_xalign(0.0);
+    subtitle.set_wrap(true);
+    subtitle.add_css_class("dim-label");
+    page.append(&subtitle);
+
+    let agent_label = section_label("Agent status");
+    page.append(&agent_label);
+
+    let dns_label = section_label("Private DNS");
+    page.append(&dns_label);
+
+    let detail_label = gtk::Label::new(None);
+    detail_label.set_xalign(0.0);
+    detail_label.set_wrap(true);
+    detail_label.add_css_class("dim-label");
+    page.append(&detail_label);
+
+    (page, agent_label, dns_label, detail_label)
 }
 
 fn section_label(title: &str) -> gtk::Label {
@@ -265,6 +319,9 @@ fn start_startup_probe(
     agent_label: gtk::Label,
     dns_label: gtk::Label,
     detail_label: gtk::Label,
+    activity_agent_label: gtk::Label,
+    activity_dns_label: gtk::Label,
+    activity_detail_label: gtk::Label,
     refresh_button: gtk::Button,
 ) {
     refresh_button.set_sensitive(false);
@@ -282,6 +339,12 @@ fn start_startup_probe(
             "Unable to start the bounded local Agent probe worker",
         );
         render_state(&state, &agent_label, &dns_label, &detail_label);
+        render_state(
+            &state,
+            &activity_agent_label,
+            &activity_dns_label,
+            &activity_detail_label,
+        );
         refresh_button.set_label(REFRESH_BUTTON_IDLE_LABEL);
         refresh_button.set_sensitive(true);
         return;
@@ -292,6 +355,12 @@ fn start_startup_probe(
             Ok(probe) => {
                 let state = probe.into_presentation();
                 render_state(&state, &agent_label, &dns_label, &detail_label);
+                render_state(
+                    &state,
+                    &activity_agent_label,
+                    &activity_dns_label,
+                    &activity_detail_label,
+                );
                 refresh_button.set_label(REFRESH_BUTTON_IDLE_LABEL);
                 refresh_button.set_sensitive(true);
                 glib::ControlFlow::Break
@@ -303,6 +372,12 @@ fn start_startup_probe(
                     "Local Agent probe worker ended without a result",
                 );
                 render_state(&state, &agent_label, &dns_label, &detail_label);
+                render_state(
+                    &state,
+                    &activity_agent_label,
+                    &activity_dns_label,
+                    &activity_detail_label,
+                );
                 refresh_button.set_label(REFRESH_BUTTON_IDLE_LABEL);
                 refresh_button.set_sensitive(true);
                 glib::ControlFlow::Break
