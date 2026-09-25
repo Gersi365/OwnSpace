@@ -235,29 +235,7 @@ fn render_state(
     dns_label: &gtk::Label,
     detail_label: &gtk::Label,
 ) {
-    let runtime = state.runtime.map_or(
-        "Not reported",
-        crate::state::AgentRuntimePresentation::label,
-    );
-    agent_label.set_text(&format!(
-        "Agent status\nAvailability: {}\nRuntime: {runtime}",
-        state.availability.label()
-    ));
-
-    match &state.private_dns {
-        Some(dns) => dns_label.set_text(&format!(
-            "Private DNS\nEnabled: {}\nDevice naming: {}\nResolvers: {}\nSplit domains: {}",
-            yes_no(dns.enabled),
-            yes_no(dns.device_naming),
-            dns.resolver_count,
-            dns.split_domain_count
-        )),
-        None => dns_label.set_text("Private DNS\nNo validated snapshot available"),
-    }
-
+    agent_label.set_text(&state.agent_status_text());
+    dns_label.set_text(&state.private_dns_status_text());
     detail_label.set_text(&state.detail);
-}
-
-const fn yes_no(value: bool) -> &'static str {
-    if value { "Yes" } else { "No" }
 }
