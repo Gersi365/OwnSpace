@@ -1,0 +1,78 @@
+name: Ownspace desktop navigation presentation contract source package
+
+on:
+  push:
+    branches:
+      - "promotion/desktop-navigation-presentation-contract-r1"
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout packaging carrier
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify validated source input
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXPECTED_BASE=07ffb6e808bbbb685b9b70fe17ca62d7d60e0bce
+          EXPECTED_STATE_BLOB=f66ea0ec00f3c278bfa798c9cdb4b9f693b4a830
+          git cat-file -e "$EXPECTED_BASE^{commit}"
+          git merge-base --is-ancestor "$EXPECTED_BASE" HEAD
+          test "$(git rev-parse HEAD:apps/desktop/src/state.rs)" = "$EXPECTED_STATE_BLOB"
+          echo "EXPECTED_BASE=$EXPECTED_BASE" >> "$GITHUB_ENV"
+          echo "EXPECTED_STATE_BLOB=$EXPECTED_STATE_BLOB" >> "$GITHUB_ENV"
+
+      - name: Construct source-only candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GIT_INDEX_FILE="$RUNNER_TEMP/ownspace-navigation-presentation-contract.index"
+          rm -f "$GIT_INDEX_FILE"
+          git read-tree "$EXPECTED_BASE^{tree}"
+          STATE_MODE="$(git ls-tree "$EXPECTED_BASE" -- apps/desktop/src/state.rs | awk '{print $1}')"
+          test "$STATE_MODE" = "100644"
+          git update-index --add --cacheinfo "$STATE_MODE" "$EXPECTED_STATE_BLOB" apps/desktop/src/state.rs
+          TREE_SHA="$(git write-tree)"
+          test "$(git ls-tree -r --name-only "$TREE_SHA" | wc -l | tr -d ' ')" = "372"
+          mkdir -p source package-output
+          git archive "$TREE_SHA" | tar -x -C source
+          test "$(find source -type f | wc -l | tr -d ' ')" = "372"
+          cp source/apps/desktop/src/state.rs package-output/state.rs
+          (
+            cd source
+            find . -type f -print0 | sort -z | xargs -0 sha256sum
+          ) > package-output/OWNSPACE_SOURCE_MANIFEST_SHA256.txt
+          (
+            cd source
+            tar --sort=name --mtime='2026-09-25 00:00:00 UTC' --owner=0 --group=0 --numeric-owner --format=gnu -cf - . | gzip -n -6
+          ) > package-output/Ownspace_Source_Current_2026-09-25.tar.gz
+          {
+            echo "OWNSPACE DESKTOP NAVIGATION PRESENTATION CONTRACT SOURCE PACKAGE"
+            echo "BASE_MAIN=$EXPECTED_BASE"
+            echo "VALIDATED_CARRIER_HEAD=b5849a9dfaad2c6a8d733535e1c850541f97b142"
+            echo "VALIDATED_SOURCE_COMMIT=6d3fd5aaf657266ebfd74bbd0de7e78ae3a98fed"
+            echo "SOURCE_TREE=$TREE_SHA"
+            echo "SOURCE_FILES=372"
+            echo "STATE_BLOB=$EXPECTED_STATE_BLOB"
+            echo "STATE_SHA256=$(sha256sum package-output/state.rs | awk '{print $1}')"
+            echo "MANIFEST_SHA256=$(sha256sum package-output/OWNSPACE_SOURCE_MANIFEST_SHA256.txt | awk '{print $1}')"
+            echo "ARCHIVE_SHA256=$(sha256sum package-output/Ownspace_Source_Current_2026-09-25.tar.gz | awk '{print $1}')"
+            echo "ARCHIVE_BYTES=$(wc -c < package-output/Ownspace_Source_Current_2026-09-25.tar.gz | tr -d ' ')"
+          } > package-output/package-info.txt
+          cat package-output/package-info.txt
+
+      - name: Upload source package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ownspace-desktop-navigation-presentation-contract-source-package
+          path: package-output/
+          if-no-files-found: error
+          retention-days: 14
