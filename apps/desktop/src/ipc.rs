@@ -185,6 +185,16 @@ fn runtime_root_from_raw(raw: Option<&OsStr>) -> Result<PathBuf, DesktopIpcError
     Ok(path)
 }
 
+pub(crate) fn endpoint_candidate_from_environment() -> Result<PathBuf, DesktopIpcError> {
+    let raw = env::var_os("XDG_RUNTIME_DIR");
+    endpoint_candidate_from_raw(raw.as_deref())
+}
+
+fn endpoint_candidate_from_raw(raw: Option<&OsStr>) -> Result<PathBuf, DesktopIpcError> {
+    let root = runtime_root_from_raw(raw)?;
+    Ok(LocalIpcContract::socket_path(&root))
+}
+
 fn endpoint_from_environment() -> Result<PathBuf, DesktopIpcError> {
     let raw = env::var_os("XDG_RUNTIME_DIR");
     let root = runtime_root_from_raw(raw.as_deref())?;
@@ -299,7 +309,10 @@ mod tests {
     use std::ffi::OsStr;
     use std::path::Path;
 
-    use super::{DesktopIpcError, StartupProbe, ensure_response_id, runtime_root_from_raw};
+    use super::{
+        DesktopIpcError, StartupProbe, endpoint_candidate_from_raw, ensure_response_id,
+        runtime_root_from_raw,
+    };
     use crate::state::{AgentAvailability, AgentRuntimePresentation};
     use prw_agent::local_commands::{
         LocalAgentResponseStatus,
@@ -327,6 +340,18 @@ mod tests {
     fn relative_runtime_root_is_rejected_before_socket_use() {
         assert_eq!(
             runtime_root_from_raw(Some(OsStr::new("run/user/1000"))),
+            Err(DesktopIpcError::InvalidRuntimeDirectory)
+        );
+    }
+
+    #[test]
+    fn endpoint_candidate_uses_authoritative_socket_derivation() {
+        assert_eq!(
+            endpoint_candidate_from_raw(Some(OsStr::new("/run/user/1000"))),
+            Ok(Path::new("/run/user/1000/private-remote-workspace/agent.sock").to_path_buf())
+        );
+        assert_eq!(
+            endpoint_candidate_from_raw(Some(OsStr::new("run/user/1000"))),
             Err(DesktopIpcError::InvalidRuntimeDirectory)
         );
     }
