@@ -7,6 +7,9 @@ use gtk::glib;
 use crate::ipc;
 use crate::state::{DesktopPresentationState, NavigationDestination};
 
+const REFRESH_BUTTON_IDLE_LABEL: &str = "Refresh status";
+const REFRESH_BUTTON_BUSY_LABEL: &str = "Refreshing…";
+
 pub fn build(app: &adw::Application) {
     let window = adw::ApplicationWindow::builder()
         .application(app)
@@ -97,7 +100,7 @@ fn overview_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label, gtk::Button
     subtitle.add_css_class("dim-label");
     page.append(&subtitle);
 
-    let refresh_button = gtk::Button::with_label("Refresh status");
+    let refresh_button = gtk::Button::with_label(REFRESH_BUTTON_IDLE_LABEL);
     refresh_button.set_halign(gtk::Align::Start);
     page.append(&refresh_button);
 
@@ -183,6 +186,7 @@ fn start_startup_probe(
     refresh_button: gtk::Button,
 ) {
     refresh_button.set_sensitive(false);
+    refresh_button.set_label(REFRESH_BUTTON_BUSY_LABEL);
     let (sender, receiver) = mpsc::sync_channel(1);
     let spawn_result = std::thread::Builder::new()
         .name("prw-desktop-readonly-agent-probe".to_owned())
@@ -196,6 +200,7 @@ fn start_startup_probe(
             "Unable to start the bounded local Agent probe worker",
         );
         render_state(&state, &agent_label, &dns_label, &detail_label);
+        refresh_button.set_label(REFRESH_BUTTON_IDLE_LABEL);
         refresh_button.set_sensitive(true);
         return;
     }
@@ -205,6 +210,7 @@ fn start_startup_probe(
             Ok(probe) => {
                 let state = probe.into_presentation();
                 render_state(&state, &agent_label, &dns_label, &detail_label);
+                refresh_button.set_label(REFRESH_BUTTON_IDLE_LABEL);
                 refresh_button.set_sensitive(true);
                 glib::ControlFlow::Break
             }
@@ -215,6 +221,7 @@ fn start_startup_probe(
                     "Local Agent probe worker ended without a result",
                 );
                 render_state(&state, &agent_label, &dns_label, &detail_label);
+                refresh_button.set_label(REFRESH_BUTTON_IDLE_LABEL);
                 refresh_button.set_sensitive(true);
                 glib::ControlFlow::Break
             }
