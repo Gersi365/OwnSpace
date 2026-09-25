@@ -31,8 +31,7 @@ jobs:
           test "$(git rev-parse HEAD:apps/desktop/src/ui.rs)" = "$EXPECTED_UI_BLOB"
           test "$(git rev-parse HEAD:apps/desktop/README.md)" = "$EXPECTED_README_BLOB"
           mapfile -t changed < <(git diff --name-only "$EXPECTED_BASE" HEAD | sort)
-          printf '%s
-' "${changed[@]}"
+          for path in "${changed[@]}"; do echo "$path"; done
           test "${#changed[@]}" = "3"
           test "${changed[0]}" = ".github/workflows/desktop-settings-build-info-validation.yml"
           test "${changed[1]}" = "apps/desktop/README.md"
