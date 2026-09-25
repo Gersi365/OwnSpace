@@ -167,6 +167,30 @@ fn settings_page() -> gtk::Box {
     endpoint.add_css_class("monospace");
     page.append(&endpoint);
 
+    let resolved_title = gtk::Label::new(Some("Resolved endpoint for this session"));
+    resolved_title.set_xalign(0.0);
+    resolved_title.add_css_class("heading");
+    page.append(&resolved_title);
+
+    let resolved_text = match ipc::endpoint_candidate_from_environment() {
+        Ok(path) => path.display().to_string(),
+        Err(error) => format!("Unavailable: {error}"),
+    };
+    let resolved = gtk::Label::new(Some(&resolved_text));
+    resolved.set_xalign(0.0);
+    resolved.set_selectable(true);
+    resolved.set_wrap(true);
+    resolved.add_css_class("monospace");
+    page.append(&resolved);
+
+    let resolved_detail = gtk::Label::new(Some(
+        "This is path derivation only; it does not assert endpoint trust, availability, or connectivity.",
+    ));
+    resolved_detail.set_xalign(0.0);
+    resolved_detail.set_wrap(true);
+    resolved_detail.add_css_class("dim-label");
+    page.append(&resolved_detail);
+
     page
 }
 
