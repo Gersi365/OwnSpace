@@ -1,0 +1,91 @@
+name: Ownspace desktop status refresh validation
+
+on:
+  push:
+    branches:
+      - "validation/desktop-status-refresh-r1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify candidate scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXPECTED_BASE=ce6fa7c19e26fe4f7504ef3ac334d1e522aefd17
+          git cat-file -e "$EXPECTED_BASE^{commit}"
+          git merge-base --is-ancestor "$EXPECTED_BASE" HEAD
+          mapfile -t changed < <(git diff --name-only "$EXPECTED_BASE" HEAD | sort)
+          printf '%s\n' "${changed[@]}"
+          test "${#changed[@]}" = "2"
+          test "${changed[0]}" = ".github/workflows/desktop-status-refresh-validation.yml"
+          test "${changed[1]}" = "apps/desktop/src/ui.rs"
+          mkdir -p validation-output
+          {
+            echo "OWNSPACE DESKTOP STATUS REFRESH VALIDATION"
+            echo "BASE_COMMIT=$EXPECTED_BASE"
+            echo "CANDIDATE_COMMIT=$(git rev-parse HEAD)"
+            echo "CHANGED_PATHS=2"
+            printf 'CHANGED=%s\n' "${changed[@]}"
+          } > validation-output/desktop-status-refresh.txt
+
+      - name: Install native build dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends             ca-certificates             clang             cmake             desktop-file-utils             libadwaita-1-dev             libgtk-4-dev             libssl-dev             ninja-build             perl             pkg-config             protobuf-compiler
+
+      - name: Install exact Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt --component clippy
+          rustup default 1.97.1
+          rustc --version
+          cargo --version
+          rustfmt --version
+          cargo clippy --version
+
+      - name: Focused desktop checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +1.97.1 fmt --all -- --check
+          cargo +1.97.1 test --locked -p prw-desktop
+          echo "FOCUSED_DESKTOP=PASS" >> validation-output/desktop-status-refresh.txt
+
+      - name: Workspace validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +1.97.1 metadata --locked --no-deps --format-version 1 >/dev/null
+          cargo +1.97.1 clippy --locked --workspace --all-targets --all-features -- -D warnings
+          cargo +1.97.1 test --locked --workspace --all-targets
+          cargo +1.97.1 build --locked --workspace --all-targets
+          {
+            echo "CARGO_METADATA=PASS"
+            echo "CARGO_FMT=PASS"
+            echo "CARGO_CLIPPY=PASS"
+            echo "CARGO_TEST=PASS"
+            echo "CARGO_BUILD=PASS"
+            echo "RESULT=PASS"
+          } >> validation-output/desktop-status-refresh.txt
+
+      - name: Upload validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ownspace-desktop-status-refresh-validation
+          path: validation-output/
+          if-no-files-found: warn
+          retention-days: 14
