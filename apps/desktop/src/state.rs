@@ -194,16 +194,18 @@ impl DesktopPresentationState {
 
     #[must_use]
     pub(crate) fn private_dns_status_text(&self) -> String {
-        match &self.private_dns {
-            Some(dns) => format!(
-                "Private DNS\nEnabled: {}\nDevice naming: {}\nResolvers: {}\nSplit domains: {}",
-                yes_no(dns.enabled),
-                yes_no(dns.device_naming),
-                dns.resolver_count,
-                dns.split_domain_count
-            ),
-            None => "Private DNS\nNo validated snapshot available".to_owned(),
-        }
+        self.private_dns.as_ref().map_or_else(
+            || "Private DNS\nNo validated snapshot available".to_owned(),
+            |dns| {
+                format!(
+                    "Private DNS\nEnabled: {}\nDevice naming: {}\nResolvers: {}\nSplit domains: {}",
+                    yes_no(dns.enabled),
+                    yes_no(dns.device_naming),
+                    dns.resolver_count,
+                    dns.split_domain_count
+                )
+            },
+        )
     }
 }
 
