@@ -51,10 +51,7 @@ impl StartupProbe {
                 state = state.with_private_dns(&snapshot);
             }
             Err(error) if status_succeeded => {
-                state.detail = format!(
-                    "{} Private DNS status unavailable: {error}.",
-                    state.detail
-                );
+                state.detail = format!("{} Private DNS status unavailable: {error}.", state.detail);
             }
             Err(_) => {}
         }
@@ -353,7 +350,9 @@ mod tests {
     #[test]
     fn private_dns_failure_is_visible_without_downgrading_agent_status() {
         let state = StartupProbe {
-            status: Ok(LocalAgentStatusSnapshot::current(LocalAgentRuntimeState::Ready)),
+            status: Ok(LocalAgentStatusSnapshot::current(
+                LocalAgentRuntimeState::Ready,
+            )),
             private_dns: Err(DesktopIpcError::ResponseInvalid),
         }
         .into_presentation();
