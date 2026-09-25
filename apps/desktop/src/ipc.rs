@@ -35,6 +35,7 @@ pub struct StartupProbe {
 impl StartupProbe {
     pub(crate) fn into_presentation(self) -> DesktopPresentationState {
         let mut state = DesktopPresentationState::connecting();
+        let status_succeeded = self.status.is_ok();
 
         match self.status {
             Ok(snapshot) => {
@@ -45,8 +46,14 @@ impl StartupProbe {
             }
         }
 
-        if let Ok(snapshot) = self.private_dns {
-            state = state.with_private_dns(&snapshot);
+        match self.private_dns {
+            Ok(snapshot) => {
+                state = state.with_private_dns(&snapshot);
+            }
+            Err(error) if status_succeeded => {
+                state.detail = format!("{} Private DNS status unavailable: {error}.", state.detail);
+            }
+            Err(_) => {}
         }
 
         state
@@ -290,8 +297,11 @@ mod tests {
     use std::ffi::OsStr;
     use std::path::Path;
 
-    use super::{DesktopIpcError, ensure_response_id, runtime_root_from_raw};
-    use crate::state::AgentAvailability;
+    use super::{DesktopIpcError, StartupProbe, ensure_response_id, runtime_root_from_raw};
+    use crate::state::{AgentAvailability, AgentRuntimePresentation};
+    use prw_agent::local_commands::status_snapshot::{
+        LocalAgentRuntimeState, LocalAgentStatusSnapshot,
+    };
     use prw_agent::{LocalIpcContract, LocalIpcRequestId};
 
     fn id(value: u64) -> LocalIpcRequestId {
@@ -335,6 +345,38 @@ mod tests {
             ensure_response_id(id(7), id(8)),
             Err(DesktopIpcError::RequestIdMismatch)
         );
+    }
+
+    #[test]
+    fn private_dns_failure_is_visible_without_downgrading_agent_status() {
+        let state = StartupProbe {
+            status: Ok(LocalAgentStatusSnapshot::current(
+                LocalAgentRuntimeState::Ready,
+            )),
+            private_dns: Err(DesktopIpcError::ResponseInvalid),
+        }
+        .into_presentation();
+
+        assert_eq!(state.availability, AgentAvailability::Online);
+        assert_eq!(state.runtime, Some(AgentRuntimePresentation::Ready));
+        assert!(state.private_dns.is_none());
+        assert!(state.detail.starts_with("Local IPC protocol "));
+        assert!(state.detail.ends_with(
+            "Private DNS status unavailable: PRW Agent response failed protocol validation."
+        ));
+    }
+
+    #[test]
+    fn shared_endpoint_failure_is_not_duplicated_in_presentation_detail() {
+        let state = StartupProbe {
+            status: Err(DesktopIpcError::ConnectFailed),
+            private_dns: Err(DesktopIpcError::ConnectFailed),
+        }
+        .into_presentation();
+
+        assert_eq!(state.availability, AgentAvailability::Offline);
+        assert_eq!(state.detail, "PRW Agent connection failed");
+        assert!(state.private_dns.is_none());
     }
 
     #[test]
