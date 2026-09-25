@@ -382,117 +382,124 @@ mod tests {
         assert!(state.private_dns.is_none());
     }
 
+    fn assert_error_contract(
+        error: DesktopIpcError,
+        availability: AgentAvailability,
+        message: &str,
+    ) {
+        assert_eq!(error.availability(), availability, "{error:?}");
+        assert_eq!(error.to_string(), message, "{error:?}");
+    }
+
     #[test]
-    fn ipc_errors_have_stable_availability_and_user_facing_messages() {
-        for (error, availability, message) in [
+    fn offline_ipc_errors_have_stable_presentation_contract() {
+        for (error, message) in [
             (
                 DesktopIpcError::MissingRuntimeDirectory,
-                AgentAvailability::Offline,
                 "XDG_RUNTIME_DIR is unavailable",
             ),
             (
                 DesktopIpcError::InvalidRuntimeDirectory,
-                AgentAvailability::Offline,
                 "XDG_RUNTIME_DIR is not an absolute path",
             ),
             (
                 DesktopIpcError::RuntimeRootUnavailable,
-                AgentAvailability::Offline,
                 "XDG runtime root is unavailable",
             ),
             (
-                DesktopIpcError::RuntimeRootUntrusted,
-                AgentAvailability::Error,
-                "XDG runtime root failed local trust checks",
-            ),
-            (
                 DesktopIpcError::PrwRuntimeDirectoryUnavailable,
-                AgentAvailability::Offline,
                 "Ownspace runtime directory is unavailable",
             ),
             (
-                DesktopIpcError::PrwRuntimeDirectoryUntrusted,
-                AgentAvailability::Error,
-                "Ownspace runtime directory failed local trust checks",
-            ),
-            (
                 DesktopIpcError::AgentSocketUnavailable,
-                AgentAvailability::Offline,
                 "Ownspace Agent socket is unavailable",
             ),
             (
+                DesktopIpcError::ConnectFailed,
+                "Ownspace Agent connection failed",
+            ),
+        ] {
+            assert_error_contract(error, AgentAvailability::Offline, message);
+        }
+    }
+
+    #[test]
+    fn trust_protocol_and_io_errors_have_stable_presentation_contract() {
+        for (error, message) in [
+            (
+                DesktopIpcError::RuntimeRootUntrusted,
+                "XDG runtime root failed local trust checks",
+            ),
+            (
+                DesktopIpcError::PrwRuntimeDirectoryUntrusted,
+                "Ownspace runtime directory failed local trust checks",
+            ),
+            (
                 DesktopIpcError::AgentSocketUntrusted,
-                AgentAvailability::Error,
                 "Ownspace Agent socket failed local trust checks",
             ),
             (
-                DesktopIpcError::ConnectFailed,
-                AgentAvailability::Offline,
-                "Ownspace Agent connection failed",
-            ),
-            (
                 DesktopIpcError::ConfigureFailed,
-                AgentAvailability::Error,
                 "Ownspace Agent connection timeout configuration failed",
             ),
             (
                 DesktopIpcError::RequestIdGenerationFailed,
-                AgentAvailability::Error,
                 "Ownspace request identifier generation failed",
             ),
             (
                 DesktopIpcError::RequestWriteFailed,
-                AgentAvailability::Error,
                 "Ownspace Agent request write failed",
             ),
             (
                 DesktopIpcError::ResponseReadFailed,
-                AgentAvailability::Error,
                 "Ownspace Agent response read failed",
             ),
             (
                 DesktopIpcError::ResponseInvalid,
-                AgentAvailability::Error,
                 "Ownspace Agent response failed protocol validation",
             ),
             (
                 DesktopIpcError::RequestIdMismatch,
-                AgentAvailability::Error,
                 "Ownspace Agent response correlation failed",
             ),
+        ] {
+            assert_error_contract(error, AgentAvailability::Error, message);
+        }
+    }
+
+    #[test]
+    fn agent_response_status_errors_have_stable_presentation_contract() {
+        for (status, message) in [
             (
-                DesktopIpcError::AgentStatus(LocalAgentResponseStatus::InvalidRequest),
-                AgentAvailability::Error,
+                LocalAgentResponseStatus::InvalidRequest,
                 "Ownspace Agent rejected the request as invalid",
             ),
             (
-                DesktopIpcError::AgentStatus(LocalAgentResponseStatus::Unauthorized),
-                AgentAvailability::Error,
+                LocalAgentResponseStatus::Unauthorized,
                 "Ownspace Agent rejected the request as unauthorized",
             ),
             (
-                DesktopIpcError::AgentStatus(LocalAgentResponseStatus::UnsupportedCommand),
-                AgentAvailability::Error,
+                LocalAgentResponseStatus::UnsupportedCommand,
                 "Ownspace Agent does not support the requested command",
             ),
             (
-                DesktopIpcError::AgentStatus(LocalAgentResponseStatus::Conflict),
-                AgentAvailability::Error,
+                LocalAgentResponseStatus::Conflict,
                 "Ownspace Agent reported a state conflict",
             ),
             (
-                DesktopIpcError::AgentStatus(LocalAgentResponseStatus::InternalError),
-                AgentAvailability::Error,
+                LocalAgentResponseStatus::InternalError,
                 "Ownspace Agent reported an internal error",
             ),
             (
-                DesktopIpcError::AgentStatus(LocalAgentResponseStatus::Ok),
-                AgentAvailability::Error,
+                LocalAgentResponseStatus::Ok,
                 "Ownspace Agent returned an unexpected success-status error",
             ),
         ] {
-            assert_eq!(error.availability(), availability, "{error:?}");
-            assert_eq!(error.to_string(), message, "{error:?}");
+            assert_error_contract(
+                DesktopIpcError::AgentStatus(status),
+                AgentAvailability::Error,
+                message,
+            );
         }
     }
 }
