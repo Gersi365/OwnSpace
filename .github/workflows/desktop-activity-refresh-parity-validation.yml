@@ -36,7 +36,7 @@ jobs:
           test "${changed[0]}" = ".github/workflows/desktop-activity-refresh-parity-validation.yml"
           test "${changed[1]}" = "apps/desktop/README.md"
           test "${changed[2]}" = "apps/desktop/src/ui.rs"
-          grep -Fq 'activity_refresh_button.connect_clicked' apps/desktop/src/ui.rs
+          grep -Fq 'fn connect_refresh_controls(targets: &StatusProbeTargets)' apps/desktop/src/ui.rs
           grep -Fq 'fn set_refresh_controls_busy(' apps/desktop/src/ui.rs
           test "$(grep -Fc 'ipc::query_startup()' apps/desktop/src/ui.rs)" = "1"
           grep -Fq 'same bounded local refresh as Overview' apps/desktop/README.md
