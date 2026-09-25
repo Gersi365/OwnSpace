@@ -16,6 +16,7 @@ The desktop shell provides:
 - read-only Private DNS summary presentation;
 - manual bounded local status refresh that preserves the last rendered status while the read-only probe is active and gives explicit `Refreshing…` progress feedback;
 - a read-only Settings diagnostics page that exposes both the compatibility-sensitive endpoint contract and the session-resolved candidate endpoint derived through the existing `LocalIpcContract`, with a local-only copy action for the resolved path and no Agent configuration mutation;
+- a read-only Activity page that mirrors the latest local Agent/Private DNS probe snapshot without persisting history or emitting external telemetry;
 - explicit offline/error handling, including partial Private DNS query failure visibility;
 - a bounded worker thread so local Unix-socket reads do not block the GTK main thread.
 
@@ -33,7 +34,7 @@ The desktop client performs no TCP, D-Bus, abstract-socket, `/tmp`, shell-comman
 
 ## Deliberately not activated by this surface
 
-Machines, Sessions, Files, Transfers, and Activity remain structural placeholders unless backed by separately validated capability work. The current desktop status/diagnostics surface does not implement or activate:
+Machines, Sessions, Files, and Transfers remain structural placeholders unless backed by separately validated capability work. Activity is limited to the latest in-memory local diagnostics snapshot and does not provide persisted history or external telemetry. The current desktop status/diagnostics surface does not implement or activate:
 
 - terminal actions;
 - file or transfer actions;
