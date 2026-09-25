@@ -1,0 +1,100 @@
+name: Ownspace desktop refresh visible status preservation validation
+
+on:
+  push:
+    branches:
+      - "validation/desktop-refresh-visible-status-preservation-r1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify candidate scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXPECTED_BASE=53aa8525e6f7ebe31583320b06f1a8e581348c63
+          EXPECTED_UI_BLOB=b9536a0ff987b2eae55610050cd0e5151eeb80d6
+          EXPECTED_README_BLOB=b0046a5c1f53ba7e61bb46877299917ff24f6c6c
+          git cat-file -e "$EXPECTED_BASE^{commit}"
+          git merge-base --is-ancestor "$EXPECTED_BASE" HEAD
+          test "$(git rev-parse HEAD:apps/desktop/src/ui.rs)" = "$EXPECTED_UI_BLOB"
+          test "$(git rev-parse HEAD:apps/desktop/README.md)" = "$EXPECTED_README_BLOB"
+          mapfile -t changed < <(git diff --name-only "$EXPECTED_BASE" HEAD | sort)
+          printf '%s\n' "${changed[@]}"
+          test "${#changed[@]}" = "3"
+          test "${changed[0]}" = ".github/workflows/desktop-refresh-visible-status-preservation-validation.yml"
+          test "${changed[1]}" = "apps/desktop/README.md"
+          test "${changed[2]}" = "apps/desktop/src/ui.rs"
+          grep -Fq 'manual bounded local status refresh that preserves the last rendered status' apps/desktop/README.md
+          if grep -A8 -F 'refresh_button.connect_clicked' apps/desktop/src/ui.rs | grep -Fq 'DesktopPresentationState::connecting()'; then
+            echo "manual refresh still clears visible status" >&2
+            exit 1
+          fi
+          mkdir -p validation-output
+          {
+            echo "OWNSPACE DESKTOP REFRESH VISIBLE STATUS PRESERVATION VALIDATION"
+            echo "BASE_COMMIT=$EXPECTED_BASE"
+            echo "EXPECTED_UI_BLOB=$EXPECTED_UI_BLOB"
+            echo "EXPECTED_README_BLOB=$EXPECTED_README_BLOB"
+            echo "CANDIDATE_COMMIT=$(git rev-parse HEAD)"
+            echo "CHANGED_SOURCE_PATHS=2"
+          } > validation-output/desktop-refresh-visible-status-preservation.txt
+
+      - name: Install native build dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ca-certificates clang cmake desktop-file-utils libadwaita-1-dev libgtk-4-dev \
+            libssl-dev ninja-build perl pkg-config protobuf-compiler
+
+      - name: Install exact Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt --component clippy
+          rustup default 1.97.1
+
+      - name: Focused desktop checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +1.97.1 fmt --all -- --check
+          cargo +1.97.1 test --locked -p prw-desktop
+
+      - name: Workspace validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +1.97.1 metadata --locked --no-deps --format-version 1 >/dev/null
+          cargo +1.97.1 clippy --locked --workspace --all-targets --all-features -- -D warnings
+          cargo +1.97.1 test --locked --workspace --all-targets
+          cargo +1.97.1 build --locked --workspace --all-targets
+          {
+            echo "FOCUSED_DESKTOP=PASS"
+            echo "CARGO_METADATA=PASS"
+            echo "CARGO_FMT=PASS"
+            echo "CARGO_CLIPPY=PASS"
+            echo "CARGO_TEST=PASS"
+            echo "CARGO_BUILD=PASS"
+            echo "RESULT=PASS"
+          } >> validation-output/desktop-refresh-visible-status-preservation.txt
+
+      - name: Upload validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ownspace-desktop-refresh-visible-status-preservation-validation
+          path: validation-output/
+          if-no-files-found: warn
+          retention-days: 14
