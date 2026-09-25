@@ -27,8 +27,7 @@ jobs:
           git cat-file -e "$EXPECTED_BASE^{commit}"
           git merge-base --is-ancestor "$EXPECTED_BASE" HEAD
           mapfile -t changed < <(git diff --name-only "$EXPECTED_BASE" HEAD | sort)
-          printf '%s
-' "${changed[@]}"
+          printf '%s\\n' "${changed[@]}"
           test "${#changed[@]}" = "2"
           test "${changed[0]}" = ".github/workflows/desktop-ipc-error-contract-validation.yml"
           test "${changed[1]}" = "apps/desktop/src/ipc.rs"
@@ -38,8 +37,7 @@ jobs:
             echo "BASE_COMMIT=$EXPECTED_BASE"
             echo "CANDIDATE_COMMIT=$(git rev-parse HEAD)"
             echo "CHANGED_PATHS=2"
-            printf 'CHANGED=%s
-' "${changed[@]}"
+            printf 'CHANGED=%s\\n' "${changed[@]}"
           } > validation-output/desktop-ipc-error-contract.txt
 
       - name: Install native build dependencies
