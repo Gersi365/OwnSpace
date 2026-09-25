@@ -38,8 +38,13 @@ pub fn build(app: &adw::Application) {
         NavigationDestination::Overview.title(),
     );
 
-    let (activity, activity_agent_label, activity_dns_label, activity_detail_label) =
-        activity_page();
+    let (
+        activity,
+        activity_agent_label,
+        activity_dns_label,
+        activity_detail_label,
+        activity_refresh_button,
+    ) = activity_page();
 
     for destination in NavigationDestination::ALL.into_iter().skip(1) {
         let page = match destination {
@@ -70,23 +75,46 @@ pub fn build(app: &adw::Application) {
         &activity_dns_label,
         &activity_detail_label,
     );
-    let refresh_agent_label = agent_label.clone();
-    let refresh_dns_label = dns_label.clone();
-    let refresh_detail_label = detail_label.clone();
-    let refresh_activity_agent_label = activity_agent_label.clone();
-    let refresh_activity_dns_label = activity_dns_label.clone();
-    let refresh_activity_detail_label = activity_detail_label.clone();
+    let overview_refresh_agent_label = agent_label.clone();
+    let overview_refresh_dns_label = dns_label.clone();
+    let overview_refresh_detail_label = detail_label.clone();
+    let overview_refresh_activity_agent_label = activity_agent_label.clone();
+    let overview_refresh_activity_dns_label = activity_dns_label.clone();
+    let overview_refresh_activity_detail_label = activity_detail_label.clone();
+    let overview_refresh_peer_button = activity_refresh_button.clone();
     refresh_button.connect_clicked(move |button| {
         start_startup_probe(
-            refresh_agent_label.clone(),
-            refresh_dns_label.clone(),
-            refresh_detail_label.clone(),
-            refresh_activity_agent_label.clone(),
-            refresh_activity_dns_label.clone(),
-            refresh_activity_detail_label.clone(),
+            overview_refresh_agent_label.clone(),
+            overview_refresh_dns_label.clone(),
+            overview_refresh_detail_label.clone(),
+            overview_refresh_activity_agent_label.clone(),
+            overview_refresh_activity_dns_label.clone(),
+            overview_refresh_activity_detail_label.clone(),
+            button.clone(),
+            overview_refresh_peer_button.clone(),
+        );
+    });
+
+    let activity_refresh_agent_label = agent_label.clone();
+    let activity_refresh_dns_label = dns_label.clone();
+    let activity_refresh_detail_label = detail_label.clone();
+    let activity_refresh_activity_agent_label = activity_agent_label.clone();
+    let activity_refresh_activity_dns_label = activity_dns_label.clone();
+    let activity_refresh_activity_detail_label = activity_detail_label.clone();
+    let activity_refresh_peer_button = refresh_button.clone();
+    activity_refresh_button.connect_clicked(move |button| {
+        start_startup_probe(
+            activity_refresh_agent_label.clone(),
+            activity_refresh_dns_label.clone(),
+            activity_refresh_detail_label.clone(),
+            activity_refresh_activity_agent_label.clone(),
+            activity_refresh_activity_dns_label.clone(),
+            activity_refresh_activity_detail_label.clone(),
+            activity_refresh_peer_button.clone(),
             button.clone(),
         );
     });
+
     start_startup_probe(
         agent_label,
         dns_label,
@@ -95,6 +123,7 @@ pub fn build(app: &adw::Application) {
         activity_dns_label,
         activity_detail_label,
         refresh_button,
+        activity_refresh_button,
     );
 }
 
@@ -137,7 +166,13 @@ fn overview_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label, gtk::Button
     (page, agent_label, dns_label, detail_label, refresh_button)
 }
 
-fn activity_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label) {
+fn activity_page() -> (
+    gtk::Box,
+    gtk::Label,
+    gtk::Label,
+    gtk::Label,
+    gtk::Button,
+) {
     let page = gtk::Box::new(gtk::Orientation::Vertical, 18);
     page.set_margin_top(32);
     page.set_margin_bottom(32);
@@ -150,12 +185,16 @@ fn activity_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label) {
     page.append(&title);
 
     let subtitle = gtk::Label::new(Some(
-        "Latest local diagnostics snapshot. This view mirrors the most recent bounded local status probe; no history or external telemetry is recorded.",
+        "Latest local diagnostics snapshot. Refresh uses the same bounded local status probe as Overview; no history or external telemetry is recorded.",
     ));
     subtitle.set_xalign(0.0);
     subtitle.set_wrap(true);
     subtitle.add_css_class("dim-label");
     page.append(&subtitle);
+
+    let refresh_button = gtk::Button::with_label(REFRESH_BUTTON_IDLE_LABEL);
+    refresh_button.set_halign(gtk::Align::Start);
+    page.append(&refresh_button);
 
     let agent_label = section_label("Agent status");
     page.append(&agent_label);
@@ -169,7 +208,7 @@ fn activity_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label) {
     detail_label.add_css_class("dim-label");
     page.append(&detail_label);
 
-    (page, agent_label, dns_label, detail_label)
+    (page, agent_label, dns_label, detail_label, refresh_button)
 }
 
 fn section_label(title: &str) -> gtk::Label {
@@ -322,10 +361,10 @@ fn start_startup_probe(
     activity_agent_label: gtk::Label,
     activity_dns_label: gtk::Label,
     activity_detail_label: gtk::Label,
-    refresh_button: gtk::Button,
+    overview_refresh_button: gtk::Button,
+    activity_refresh_button: gtk::Button,
 ) {
-    refresh_button.set_sensitive(false);
-    refresh_button.set_label(REFRESH_BUTTON_BUSY_LABEL);
+    set_refresh_controls_busy(&overview_refresh_button, &activity_refresh_button, true);
     let (sender, receiver) = mpsc::sync_channel(1);
     let spawn_result = std::thread::Builder::new()
         .name("prw-desktop-readonly-agent-probe".to_owned())
@@ -345,8 +384,7 @@ fn start_startup_probe(
             &activity_dns_label,
             &activity_detail_label,
         );
-        refresh_button.set_label(REFRESH_BUTTON_IDLE_LABEL);
-        refresh_button.set_sensitive(true);
+        set_refresh_controls_busy(&overview_refresh_button, &activity_refresh_button, false);
         return;
     }
 
@@ -361,8 +399,11 @@ fn start_startup_probe(
                     &activity_dns_label,
                     &activity_detail_label,
                 );
-                refresh_button.set_label(REFRESH_BUTTON_IDLE_LABEL);
-                refresh_button.set_sensitive(true);
+                set_refresh_controls_busy(
+                    &overview_refresh_button,
+                    &activity_refresh_button,
+                    false,
+                );
                 glib::ControlFlow::Break
             }
             Err(TryRecvError::Empty) => glib::ControlFlow::Continue,
@@ -378,12 +419,31 @@ fn start_startup_probe(
                     &activity_dns_label,
                     &activity_detail_label,
                 );
-                refresh_button.set_label(REFRESH_BUTTON_IDLE_LABEL);
-                refresh_button.set_sensitive(true);
+                set_refresh_controls_busy(
+                    &overview_refresh_button,
+                    &activity_refresh_button,
+                    false,
+                );
                 glib::ControlFlow::Break
             }
         }
     });
+}
+
+fn set_refresh_controls_busy(
+    overview_refresh_button: &gtk::Button,
+    activity_refresh_button: &gtk::Button,
+    busy: bool,
+) {
+    let label = if busy {
+        REFRESH_BUTTON_BUSY_LABEL
+    } else {
+        REFRESH_BUTTON_IDLE_LABEL
+    };
+    for button in [overview_refresh_button, activity_refresh_button] {
+        button.set_sensitive(!busy);
+        button.set_label(label);
+    }
 }
 
 fn render_state(
