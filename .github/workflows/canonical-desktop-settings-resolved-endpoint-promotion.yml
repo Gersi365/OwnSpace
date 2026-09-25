@@ -1,0 +1,179 @@
+name: Ownspace desktop settings resolved endpoint canonical promotion
+
+on:
+  push:
+    branches:
+      - "promotion/desktop-settings-resolved-endpoint-canonical-r1"
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout promotion carrier
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify promotion preconditions
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXPECTED_MAIN=4b763eed978086e110a924e519b4ea32b80aacf2
+          EXPECTED_IPC_BLOB=6c28d37fc7caaba184b8603e613ffa5a4551bd01
+          EXPECTED_UI_BLOB=2b0213647490cf45075b3fc23084b8df86526df3
+          EXPECTED_README_BLOB=a4bd9e9833ed4ac0614f878fde17cd9187536ad9
+          EXPECTED_IPC_SHA256=628628cc5bbcbbec56ec6d46ce0d75f713a5191d711aa434eb4b360d89f671d2
+          EXPECTED_UI_SHA256=49c98d4de1841e7691049badce841ecef593be4f62db8f83ef339748188d749f
+          EXPECTED_README_SHA256=ad1252d3dc29f218137ea9838da267a6eb0bf4822dc68be610e193acc42ecd75
+          EXPECTED_SOURCE_TREE=653df01aed85bd8f25058edd7e69ffda43137f35
+          EXPECTED_SOURCE_MANIFEST_SHA256=0260d818259adade488fcee59e94e69b50b716e82588fdcf25226429e7c56627
+          EXPECTED_ARCHIVE_SHA256=de9773cd1a97881d0c90afb909d5dbe12f62995e8a1af99ffa715d64be1e64b0
+          EXPECTED_ARCHIVE_BYTES=913746
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$EXPECTED_MAIN"
+          test "$(git rev-parse HEAD:apps/desktop/src/ipc.rs)" = "$EXPECTED_IPC_BLOB"
+          test "$(git rev-parse HEAD:apps/desktop/src/ui.rs)" = "$EXPECTED_UI_BLOB"
+          test "$(git rev-parse HEAD:apps/desktop/README.md)" = "$EXPECTED_README_BLOB"
+          echo "$EXPECTED_IPC_SHA256  apps/desktop/src/ipc.rs" | sha256sum -c -
+          echo "$EXPECTED_UI_SHA256  apps/desktop/src/ui.rs" | sha256sum -c -
+          echo "$EXPECTED_README_SHA256  apps/desktop/README.md" | sha256sum -c -
+          mapfile -t changed < <(git diff --name-only "$EXPECTED_MAIN" HEAD | sort)
+          printf '%s\n' "${changed[@]}"
+          test "${#changed[@]}" = "4"
+          test "${changed[0]}" = ".github/workflows/canonical-desktop-settings-resolved-endpoint-promotion.yml"
+          test "${changed[1]}" = "apps/desktop/README.md"
+          test "${changed[2]}" = "apps/desktop/src/ipc.rs"
+          test "${changed[3]}" = "apps/desktop/src/ui.rs"
+          {
+            echo "EXPECTED_MAIN=$EXPECTED_MAIN"
+            echo "EXPECTED_IPC_BLOB=$EXPECTED_IPC_BLOB"
+            echo "EXPECTED_UI_BLOB=$EXPECTED_UI_BLOB"
+            echo "EXPECTED_README_BLOB=$EXPECTED_README_BLOB"
+            echo "EXPECTED_IPC_SHA256=$EXPECTED_IPC_SHA256"
+            echo "EXPECTED_UI_SHA256=$EXPECTED_UI_SHA256"
+            echo "EXPECTED_README_SHA256=$EXPECTED_README_SHA256"
+            echo "EXPECTED_SOURCE_TREE=$EXPECTED_SOURCE_TREE"
+            echo "EXPECTED_SOURCE_MANIFEST_SHA256=$EXPECTED_SOURCE_MANIFEST_SHA256"
+            echo "EXPECTED_ARCHIVE_SHA256=$EXPECTED_ARCHIVE_SHA256"
+            echo "EXPECTED_ARCHIVE_BYTES=$EXPECTED_ARCHIVE_BYTES"
+          } >> "$GITHUB_ENV"
+
+      - name: Construct clean source-only canonical candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GIT_INDEX_FILE="$RUNNER_TEMP/ownspace-resolved-endpoint-canonical.index"
+          rm -f "$GIT_INDEX_FILE"
+          git read-tree "$EXPECTED_MAIN^{tree}"
+          IPC_MODE="$(git ls-tree "$EXPECTED_MAIN" -- apps/desktop/src/ipc.rs | awk '{print $1}')"
+          UI_MODE="$(git ls-tree "$EXPECTED_MAIN" -- apps/desktop/src/ui.rs | awk '{print $1}')"
+          README_MODE="$(git ls-tree "$EXPECTED_MAIN" -- apps/desktop/README.md | awk '{print $1}')"
+          test "$IPC_MODE" = "100644"
+          test "$UI_MODE" = "100644"
+          test "$README_MODE" = "100644"
+          git update-index --add --cacheinfo "$IPC_MODE" "$EXPECTED_IPC_BLOB" apps/desktop/src/ipc.rs
+          git update-index --add --cacheinfo "$UI_MODE" "$EXPECTED_UI_BLOB" apps/desktop/src/ui.rs
+          git update-index --add --cacheinfo "$README_MODE" "$EXPECTED_README_BLOB" apps/desktop/README.md
+          TREE_SHA="$(git write-tree)"
+          test "$TREE_SHA" = "$EXPECTED_SOURCE_TREE"
+          test "$(git ls-tree -r --name-only "$TREE_SHA" | wc -l | tr -d ' ')" = "372"
+          COMMIT_SHA="$(printf '%s\n' 'feat(desktop): show resolved local endpoint diagnostic' | git -c user.name='Ownspace Validation' -c user.email='actions@users.noreply.github.com' commit-tree "$TREE_SHA" -p "$EXPECTED_MAIN")"
+          mkdir -p canonical-checkout canonical-output
+          git archive "$COMMIT_SHA" | tar -x -C canonical-checkout
+          echo "OWNSPACE_CANONICAL_COMMIT=$COMMIT_SHA" >> "$GITHUB_ENV"
+          echo "OWNSPACE_CANONICAL_TREE=$TREE_SHA" >> "$GITHUB_ENV"
+          {
+            echo "OWNSPACE DESKTOP SETTINGS RESOLVED ENDPOINT CANONICAL PROMOTION"
+            echo "BASE_MAIN=$EXPECTED_MAIN"
+            echo "CANONICAL_COMMIT=$COMMIT_SHA"
+            echo "CANONICAL_TREE=$TREE_SHA"
+            echo "SOURCE_FILES=372"
+            echo "SOURCE_MANIFEST_SHA256=$EXPECTED_SOURCE_MANIFEST_SHA256"
+            echo "IPC_SHA256=$EXPECTED_IPC_SHA256"
+            echo "UI_SHA256=$EXPECTED_UI_SHA256"
+            echo "README_SHA256=$EXPECTED_README_SHA256"
+            echo "ARCHIVE_SHA256=$EXPECTED_ARCHIVE_SHA256"
+            echo "ARCHIVE_BYTES=$EXPECTED_ARCHIVE_BYTES"
+          } > canonical-output/canonical-revision.txt
+
+      - name: Verify exact Drive-authoritative source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd canonical-checkout
+          test "$(find . -type f | wc -l | tr -d ' ')" = "372"
+          echo "$EXPECTED_IPC_SHA256  ./apps/desktop/src/ipc.rs" | sha256sum -c -
+          echo "$EXPECTED_UI_SHA256  ./apps/desktop/src/ui.rs" | sha256sum -c -
+          echo "$EXPECTED_README_SHA256  ./apps/desktop/README.md" | sha256sum -c -
+          find . -type f -print0 | sort -z | xargs -0 sha256sum > "$GITHUB_WORKSPACE/canonical-output/reconstructed-manifest.txt"
+          echo "$EXPECTED_SOURCE_MANIFEST_SHA256  $GITHUB_WORKSPACE/canonical-output/reconstructed-manifest.txt" | sha256sum -c -
+          tar --sort=name --mtime='2026-09-25 00:00:00 UTC' --owner=0 --group=0 --numeric-owner --format=gnu -cf - . | gzip -n -6 > "$GITHUB_WORKSPACE/canonical-output/reconstructed-source.tar.gz"
+          echo "$EXPECTED_ARCHIVE_SHA256  $GITHUB_WORKSPACE/canonical-output/reconstructed-source.tar.gz" | sha256sum -c -
+          test "$(wc -c < "$GITHUB_WORKSPACE/canonical-output/reconstructed-source.tar.gz" | tr -d ' ')" = "$EXPECTED_ARCHIVE_BYTES"
+
+      - name: Install native build dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ca-certificates clang cmake desktop-file-utils libadwaita-1-dev libgtk-4-dev libssl-dev ninja-build perl pkg-config protobuf-compiler
+
+      - name: Install exact Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt --component clippy
+          rustup default 1.97.1
+
+      - name: Focused desktop validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd canonical-checkout
+          cargo +1.97.1 fmt --all -- --check
+          cargo +1.97.1 test --locked -p prw-desktop
+
+      - name: Full Rust workspace validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd canonical-checkout
+          cargo +1.97.1 metadata --locked --no-deps --format-version 1 >/dev/null
+          cargo +1.97.1 clippy --locked --workspace --all-targets --all-features -- -D warnings
+          cargo +1.97.1 test --locked --workspace --all-targets
+          cargo +1.97.1 build --locked --workspace --all-targets
+          {
+            echo "FOCUSED_DESKTOP=PASS"
+            echo "CARGO_METADATA=PASS"
+            echo "CARGO_FMT=PASS"
+            echo "CARGO_CLIPPY=PASS"
+            echo "CARGO_TEST=PASS"
+            echo "CARGO_BUILD=PASS"
+          } >> "$GITHUB_WORKSPACE/canonical-output/canonical-revision.txt"
+
+      - name: Advance canonical main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$EXPECTED_MAIN"
+          git push origin "$OWNSPACE_CANONICAL_COMMIT:refs/heads/main"
+          REMOTE_MAIN="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
+          test "$REMOTE_MAIN" = "$OWNSPACE_CANONICAL_COMMIT"
+          {
+            echo "VALIDATION_RESULT=PASS"
+            echo "REMOTE_MAIN=$REMOTE_MAIN"
+            echo "RUST_TOOLCHAIN=1.97.1"
+          } >> canonical-output/canonical-revision.txt
+          cat canonical-output/canonical-revision.txt
+
+      - name: Upload canonical promotion evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ownspace-desktop-settings-resolved-endpoint-canonical-promotion
+          path: canonical-output/
+          if-no-files-found: warn
+          retention-days: 14
