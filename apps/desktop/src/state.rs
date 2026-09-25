@@ -266,9 +266,11 @@ mod tests {
             resolver_count: 2,
             split_domain_count: 3,
         };
-        let mut state = DesktopPresentationState::default();
-        state.selected = NavigationDestination::Files;
-        state.private_dns = Some(expected_dns.clone());
+        let state = DesktopPresentationState {
+            selected: NavigationDestination::Files,
+            private_dns: Some(expected_dns.clone()),
+            ..DesktopPresentationState::default()
+        };
 
         let state = state.with_status(LocalAgentStatusSnapshot::current(
             LocalAgentRuntimeState::Ready,
