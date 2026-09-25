@@ -111,7 +111,9 @@ impl fmt::Display for DesktopIpcError {
             Self::RuntimeRootUnavailable => "XDG runtime root is unavailable",
             Self::RuntimeRootUntrusted => "XDG runtime root failed local trust checks",
             Self::PrwRuntimeDirectoryUnavailable => "Ownspace runtime directory is unavailable",
-            Self::PrwRuntimeDirectoryUntrusted => "Ownspace runtime directory failed local trust checks",
+            Self::PrwRuntimeDirectoryUntrusted => {
+                "Ownspace runtime directory failed local trust checks"
+            }
             Self::AgentSocketUnavailable => "Ownspace Agent socket is unavailable",
             Self::AgentSocketUntrusted => "Ownspace Agent socket failed local trust checks",
             Self::ConnectFailed => "Ownspace Agent connection failed",
