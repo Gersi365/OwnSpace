@@ -172,7 +172,8 @@ fn settings_page() -> gtk::Box {
     resolved_title.add_css_class("heading");
     page.append(&resolved_title);
 
-    let resolved_text = match ipc::endpoint_candidate_from_environment() {
+    let resolved_endpoint = ipc::endpoint_candidate_from_environment();
+    let resolved_text = match &resolved_endpoint {
         Ok(path) => path.display().to_string(),
         Err(error) => format!("Unavailable: {error}"),
     };
@@ -183,8 +184,22 @@ fn settings_page() -> gtk::Box {
     resolved.add_css_class("monospace");
     page.append(&resolved);
 
+    let copy_button = gtk::Button::with_label("Copy resolved endpoint");
+    copy_button.set_halign(gtk::Align::Start);
+    match resolved_endpoint {
+        Ok(path) => {
+            let copy_text = path.display().to_string();
+            copy_button.connect_clicked(move |button| {
+                button.display().clipboard().set_text(&copy_text);
+                button.set_label("Copied");
+            });
+        }
+        Err(_) => copy_button.set_sensitive(false),
+    }
+    page.append(&copy_button);
+
     let resolved_detail = gtk::Label::new(Some(
-        "This is path derivation only; it does not assert endpoint trust, availability, or connectivity.",
+        "This is path derivation only; copying uses the local desktop clipboard and does not assert endpoint trust, availability, or connectivity.",
     ));
     resolved_detail.set_xalign(0.0);
     resolved_detail.set_wrap(true);
