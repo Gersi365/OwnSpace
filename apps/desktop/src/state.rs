@@ -291,6 +291,23 @@ mod tests {
     }
 
     #[test]
+    fn error_projection_preserves_read_only_desktop_state() {
+        let state = DesktopPresentationState::default().with_error(
+            AgentAvailability::Error,
+            "Local Agent probe worker ended without a result",
+        );
+
+        assert_eq!(state.availability, AgentAvailability::Error);
+        assert_eq!(state.runtime, None);
+        assert_eq!(state.private_dns, None);
+        assert_eq!(state.selected, NavigationDestination::Overview);
+        assert_eq!(
+            state.detail,
+            "Local Agent probe worker ended without a result"
+        );
+    }
+
+    #[test]
     fn navigation_destinations_have_stable_presentation_contract() {
         for (actual, expected) in NavigationDestination::ALL.into_iter().zip([
             (NavigationDestination::Overview, "Overview", "overview"),
