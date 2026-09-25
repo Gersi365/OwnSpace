@@ -127,9 +127,7 @@ fn section_label(title: &str) -> gtk::Label {
 }
 
 fn local_endpoint_contract_text() -> String {
-    format!(
-        "$XDG_RUNTIME_DIR/{AGENT_RUNTIME_SUBDIRECTORY}/{AGENT_SOCKET_FILENAME}"
-    )
+    format!("$XDG_RUNTIME_DIR/{AGENT_RUNTIME_SUBDIRECTORY}/{AGENT_SOCKET_FILENAME}")
 }
 
 fn settings_page() -> gtk::Box {
