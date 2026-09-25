@@ -239,3 +239,53 @@ fn render_state(
     dns_label.set_text(&state.private_dns_status_text());
     detail_label.set_text(&state.detail);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        NavigationDestination, REFRESH_BUTTON_BUSY_LABEL, REFRESH_BUTTON_IDLE_LABEL,
+        placeholder_description,
+    };
+
+    #[test]
+    fn refresh_button_labels_have_stable_presentation_contract() {
+        assert_eq!(REFRESH_BUTTON_IDLE_LABEL, "Refresh status");
+        assert_eq!(REFRESH_BUTTON_BUSY_LABEL, "Refreshing…");
+    }
+
+    #[test]
+    fn placeholder_descriptions_have_stable_presentation_contract() {
+        for (destination, description) in [
+            (
+                NavigationDestination::Overview,
+                "Overview is implemented as a read-only local status surface.",
+            ),
+            (
+                NavigationDestination::Machines,
+                "Reserved for enrolled-device and reachability presentation. Endpoint data is not identity or authorization.",
+            ),
+            (
+                NavigationDestination::Sessions,
+                "Reserved for authorized terminal, Remote Desktop, and forwarding session presentation when runtime state is available.",
+            ),
+            (
+                NavigationDestination::Files,
+                "Reserved for remote browsing and file operations through the existing authenticated file authority.",
+            ),
+            (
+                NavigationDestination::Transfers,
+                "Reserved for verified upload/download progress and completion state.",
+            ),
+            (
+                NavigationDestination::Activity,
+                "Reserved for locally available Ownspace activity and diagnostics. No external telemetry is implied.",
+            ),
+            (
+                NavigationDestination::Settings,
+                "Reserved for explicit owner-controlled local settings and diagnostics; no cloud account dependency is implied.",
+            ),
+        ] {
+            assert_eq!(placeholder_description(destination), description);
+        }
+    }
+}
