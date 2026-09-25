@@ -509,8 +509,12 @@ mod tests {
 
     #[test]
     fn activity_snapshot_copy_requires_a_settled_probe_result() {
-        assert!(!activity_snapshot_copy_available(AgentAvailability::Unknown));
-        assert!(!activity_snapshot_copy_available(AgentAvailability::Connecting));
+        assert!(!activity_snapshot_copy_available(
+            AgentAvailability::Unknown
+        ));
+        assert!(!activity_snapshot_copy_available(
+            AgentAvailability::Connecting
+        ));
         assert!(activity_snapshot_copy_available(AgentAvailability::Offline));
         assert!(activity_snapshot_copy_available(AgentAvailability::Online));
         assert!(activity_snapshot_copy_available(AgentAvailability::Error));
