@@ -15,6 +15,7 @@ The desktop shell provides:
 - read-only local Agent availability/runtime presentation;
 - read-only Private DNS summary presentation;
 - manual bounded local status refresh that preserves the last rendered status while the read-only probe is active and gives explicit `Refreshing…` progress feedback;
+- a read-only Settings diagnostics page that exposes the compatibility-sensitive local control endpoint without mutating Agent configuration;
 - explicit offline/error handling, including partial Private DNS query failure visibility;
 - a bounded worker thread so local Unix-socket reads do not block the GTK main thread.
 
@@ -30,7 +31,7 @@ The desktop client performs no TCP, D-Bus, abstract-socket, `/tmp`, shell-comman
 
 ## Deliberately not activated by this surface
 
-The remaining navigation destinations are structural placeholders unless backed by separately validated capability work. The current desktop status surface does not implement or activate:
+Machines, Sessions, Files, Transfers, and Activity remain structural placeholders unless backed by separately validated capability work. The current desktop status/diagnostics surface does not implement or activate:
 
 - terminal actions;
 - file or transfer actions;
