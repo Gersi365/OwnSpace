@@ -301,8 +301,9 @@ mod tests {
 
     use super::{DesktopIpcError, StartupProbe, ensure_response_id, runtime_root_from_raw};
     use crate::state::{AgentAvailability, AgentRuntimePresentation};
-    use prw_agent::local_commands::status_snapshot::{
-        LocalAgentRuntimeState, LocalAgentStatusSnapshot,
+    use prw_agent::local_commands::{
+        LocalAgentResponseStatus,
+        status_snapshot::{LocalAgentRuntimeState, LocalAgentStatusSnapshot},
     };
     use prw_agent::{LocalIpcContract, LocalIpcRequestId};
 
@@ -382,18 +383,116 @@ mod tests {
     }
 
     #[test]
-    fn bounded_errors_map_to_offline_or_error_presentation() {
-        assert_eq!(
-            DesktopIpcError::AgentSocketUnavailable.availability(),
-            AgentAvailability::Offline
-        );
-        assert_eq!(
-            DesktopIpcError::AgentSocketUntrusted.availability(),
-            AgentAvailability::Error
-        );
-        assert_eq!(
-            DesktopIpcError::RequestIdMismatch.to_string(),
-            "Ownspace Agent response correlation failed"
-        );
+    fn ipc_errors_have_stable_availability_and_user_facing_messages() {
+        for (error, availability, message) in [
+            (
+                DesktopIpcError::MissingRuntimeDirectory,
+                AgentAvailability::Offline,
+                "XDG_RUNTIME_DIR is unavailable",
+            ),
+            (
+                DesktopIpcError::InvalidRuntimeDirectory,
+                AgentAvailability::Offline,
+                "XDG_RUNTIME_DIR is not an absolute path",
+            ),
+            (
+                DesktopIpcError::RuntimeRootUnavailable,
+                AgentAvailability::Offline,
+                "XDG runtime root is unavailable",
+            ),
+            (
+                DesktopIpcError::RuntimeRootUntrusted,
+                AgentAvailability::Error,
+                "XDG runtime root failed local trust checks",
+            ),
+            (
+                DesktopIpcError::PrwRuntimeDirectoryUnavailable,
+                AgentAvailability::Offline,
+                "Ownspace runtime directory is unavailable",
+            ),
+            (
+                DesktopIpcError::PrwRuntimeDirectoryUntrusted,
+                AgentAvailability::Error,
+                "Ownspace runtime directory failed local trust checks",
+            ),
+            (
+                DesktopIpcError::AgentSocketUnavailable,
+                AgentAvailability::Offline,
+                "Ownspace Agent socket is unavailable",
+            ),
+            (
+                DesktopIpcError::AgentSocketUntrusted,
+                AgentAvailability::Error,
+                "Ownspace Agent socket failed local trust checks",
+            ),
+            (
+                DesktopIpcError::ConnectFailed,
+                AgentAvailability::Offline,
+                "Ownspace Agent connection failed",
+            ),
+            (
+                DesktopIpcError::ConfigureFailed,
+                AgentAvailability::Error,
+                "Ownspace Agent connection timeout configuration failed",
+            ),
+            (
+                DesktopIpcError::RequestIdGenerationFailed,
+                AgentAvailability::Error,
+                "Ownspace request identifier generation failed",
+            ),
+            (
+                DesktopIpcError::RequestWriteFailed,
+                AgentAvailability::Error,
+                "Ownspace Agent request write failed",
+            ),
+            (
+                DesktopIpcError::ResponseReadFailed,
+                AgentAvailability::Error,
+                "Ownspace Agent response read failed",
+            ),
+            (
+                DesktopIpcError::ResponseInvalid,
+                AgentAvailability::Error,
+                "Ownspace Agent response failed protocol validation",
+            ),
+            (
+                DesktopIpcError::RequestIdMismatch,
+                AgentAvailability::Error,
+                "Ownspace Agent response correlation failed",
+            ),
+            (
+                DesktopIpcError::AgentStatus(LocalAgentResponseStatus::InvalidRequest),
+                AgentAvailability::Error,
+                "Ownspace Agent rejected the request as invalid",
+            ),
+            (
+                DesktopIpcError::AgentStatus(LocalAgentResponseStatus::Unauthorized),
+                AgentAvailability::Error,
+                "Ownspace Agent rejected the request as unauthorized",
+            ),
+            (
+                DesktopIpcError::AgentStatus(LocalAgentResponseStatus::UnsupportedCommand),
+                AgentAvailability::Error,
+                "Ownspace Agent does not support the requested command",
+            ),
+            (
+                DesktopIpcError::AgentStatus(LocalAgentResponseStatus::Conflict),
+                AgentAvailability::Error,
+                "Ownspace Agent reported a state conflict",
+            ),
+            (
+                DesktopIpcError::AgentStatus(LocalAgentResponseStatus::InternalError),
+                AgentAvailability::Error,
+                "Ownspace Agent reported an internal error",
+            ),
+            (
+                DesktopIpcError::AgentStatus(LocalAgentResponseStatus::Ok),
+                AgentAvailability::Error,
+                "Ownspace Agent returned an unexpected success-status error",
+            ),
+        ] {
+            assert_eq!(error.availability(), availability, "{error:?}");
+            assert_eq!(error.to_string(), message, "{error:?}");
+        }
     }
 }
