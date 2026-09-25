@@ -232,6 +232,17 @@ mod tests {
     }
 
     #[test]
+    fn connecting_state_is_bounded_read_only_projection() {
+        let state = DesktopPresentationState::connecting();
+
+        assert_eq!(state.availability, AgentAvailability::Connecting);
+        assert_eq!(state.runtime, None);
+        assert_eq!(state.private_dns, None);
+        assert_eq!(state.selected, NavigationDestination::Overview);
+        assert_eq!(state.detail, "Reading local Agent state…");
+    }
+
+    #[test]
     fn runtime_states_project_without_granting_capabilities() {
         for (runtime, expected) in [
             (
