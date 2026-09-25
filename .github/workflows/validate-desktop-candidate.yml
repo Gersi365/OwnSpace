@@ -30,3 +30,9 @@ jobs:
         run: cargo clippy -p prw-desktop --all-targets -- -D warnings
       - name: Build desktop
         run: cargo build -p prw-desktop
+      - name: Test workspace
+        run: cargo test --workspace
+      - name: Clippy workspace
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Build workspace
+        run: cargo build --workspace
