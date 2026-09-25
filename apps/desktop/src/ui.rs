@@ -3,9 +3,7 @@ use std::time::Duration;
 
 use adw::prelude::*;
 use gtk::glib;
-use prw_agent::{
-    AGENT_RUNTIME_SUBDIRECTORY, AGENT_SOCKET_FILENAME, LocalIpcProtocolVersion,
-};
+use prw_agent::{AGENT_RUNTIME_SUBDIRECTORY, AGENT_SOCKET_FILENAME, LocalIpcProtocolVersion};
 
 use crate::ipc;
 use crate::state::{DesktopPresentationState, NavigationDestination};
