@@ -110,36 +110,38 @@ impl fmt::Display for DesktopIpcError {
             Self::InvalidRuntimeDirectory => "XDG_RUNTIME_DIR is not an absolute path",
             Self::RuntimeRootUnavailable => "XDG runtime root is unavailable",
             Self::RuntimeRootUntrusted => "XDG runtime root failed local trust checks",
-            Self::PrwRuntimeDirectoryUnavailable => "PRW runtime directory is unavailable",
-            Self::PrwRuntimeDirectoryUntrusted => "PRW runtime directory failed local trust checks",
-            Self::AgentSocketUnavailable => "PRW Agent socket is unavailable",
-            Self::AgentSocketUntrusted => "PRW Agent socket failed local trust checks",
-            Self::ConnectFailed => "PRW Agent connection failed",
-            Self::ConfigureFailed => "PRW Agent connection timeout configuration failed",
-            Self::RequestIdGenerationFailed => "PRW request identifier generation failed",
-            Self::RequestWriteFailed => "PRW Agent request write failed",
-            Self::ResponseReadFailed => "PRW Agent response read failed",
-            Self::ResponseInvalid => "PRW Agent response failed protocol validation",
-            Self::RequestIdMismatch => "PRW Agent response correlation failed",
+            Self::PrwRuntimeDirectoryUnavailable => "Ownspace runtime directory is unavailable",
+            Self::PrwRuntimeDirectoryUntrusted => {
+                "Ownspace runtime directory failed local trust checks"
+            }
+            Self::AgentSocketUnavailable => "Ownspace Agent socket is unavailable",
+            Self::AgentSocketUntrusted => "Ownspace Agent socket failed local trust checks",
+            Self::ConnectFailed => "Ownspace Agent connection failed",
+            Self::ConfigureFailed => "Ownspace Agent connection timeout configuration failed",
+            Self::RequestIdGenerationFailed => "Ownspace request identifier generation failed",
+            Self::RequestWriteFailed => "Ownspace Agent request write failed",
+            Self::ResponseReadFailed => "Ownspace Agent response read failed",
+            Self::ResponseInvalid => "Ownspace Agent response failed protocol validation",
+            Self::RequestIdMismatch => "Ownspace Agent response correlation failed",
             Self::AgentStatus(LocalAgentResponseStatus::InvalidRequest) => {
-                "PRW Agent rejected the request as invalid"
+                "Ownspace Agent rejected the request as invalid"
             }
             Self::AgentStatus(LocalAgentResponseStatus::Unauthorized) => {
-                "PRW Agent rejected the request as unauthorized"
+                "Ownspace Agent rejected the request as unauthorized"
             }
             Self::AgentStatus(LocalAgentResponseStatus::UnsupportedCommand) => {
-                "PRW Agent does not support the requested command"
+                "Ownspace Agent does not support the requested command"
             }
             Self::AgentStatus(LocalAgentResponseStatus::Conflict) => {
-                "PRW Agent reported a state conflict"
+                "Ownspace Agent reported a state conflict"
             }
             Self::AgentStatus(LocalAgentResponseStatus::InternalError) => {
-                "PRW Agent reported an internal error"
+                "Ownspace Agent reported an internal error"
             }
             Self::AgentStatus(LocalAgentResponseStatus::Ok) => {
-                "PRW Agent returned an unexpected success-status error"
+                "Ownspace Agent returned an unexpected success-status error"
             }
-            Self::AgentStatus(_) => "PRW Agent returned an unknown response status",
+            Self::AgentStatus(_) => "Ownspace Agent returned an unknown response status",
         };
         formatter.write_str(message)
     }
@@ -362,7 +364,7 @@ mod tests {
         assert!(state.private_dns.is_none());
         assert!(state.detail.starts_with("Local IPC protocol "));
         assert!(state.detail.ends_with(
-            "Private DNS status unavailable: PRW Agent response failed protocol validation."
+            "Private DNS status unavailable: Ownspace Agent response failed protocol validation."
         ));
     }
 
@@ -375,7 +377,7 @@ mod tests {
         .into_presentation();
 
         assert_eq!(state.availability, AgentAvailability::Offline);
-        assert_eq!(state.detail, "PRW Agent connection failed");
+        assert_eq!(state.detail, "Ownspace Agent connection failed");
         assert!(state.private_dns.is_none());
     }
 
@@ -391,7 +393,7 @@ mod tests {
         );
         assert_eq!(
             DesktopIpcError::RequestIdMismatch.to_string(),
-            "PRW Agent response correlation failed"
+            "Ownspace Agent response correlation failed"
         );
     }
 }
