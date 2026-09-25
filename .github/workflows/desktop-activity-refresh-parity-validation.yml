@@ -24,7 +24,7 @@ jobs:
         run: |
           set -euo pipefail
           EXPECTED_BASE=51984e3ada986c0762185fe13917364a114b0e31
-          EXPECTED_UI_BLOB=4bc4a3f03c3908bc10445eeb9d58bd76d6c53798
+          EXPECTED_UI_BLOB=dc026737a77ba0f106e712a08165d31095d21fa5
           EXPECTED_README_BLOB=29e8a53e91b46f7b163216b5cbbe41286d92c3e6
           git cat-file -e "$EXPECTED_BASE^{commit}"
           git merge-base --is-ancestor "$EXPECTED_BASE" HEAD
