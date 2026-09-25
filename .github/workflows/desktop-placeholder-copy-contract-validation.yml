@@ -24,7 +24,7 @@ jobs:
         run: |
           set -euo pipefail
           EXPECTED_BASE=9e986a1ede30b845ab23921e330452f367d0bb2d
-          EXPECTED_UI_BLOB=886b76e4ec0a2a38ad796f6feec669b451f6d45a
+          EXPECTED_UI_BLOB=b5c290b1be135f71a07d03756162de7fbae15c54
           git cat-file -e "$EXPECTED_BASE^{commit}"
           git merge-base --is-ancestor "$EXPECTED_BASE" HEAD
           test "$(git rev-parse HEAD:apps/desktop/src/ui.rs)" = "$EXPECTED_UI_BLOB"
