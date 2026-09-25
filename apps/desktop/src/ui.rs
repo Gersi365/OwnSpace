@@ -64,12 +64,6 @@ pub fn build(app: &adw::Application) {
     let refresh_dns_label = dns_label.clone();
     let refresh_detail_label = detail_label.clone();
     refresh_button.connect_clicked(move |button| {
-        render_state(
-            &DesktopPresentationState::connecting(),
-            &refresh_agent_label,
-            &refresh_dns_label,
-            &refresh_detail_label,
-        );
         start_startup_probe(
             refresh_agent_label.clone(),
             refresh_dns_label.clone(),
