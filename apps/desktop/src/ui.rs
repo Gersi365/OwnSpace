@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use adw::prelude::*;
 use gtk::glib;
-use prw_agent::{AGENT_RUNTIME_SUBDIRECTORY, AGENT_SOCKET_FILENAME};
+use prw_agent::{AGENT_RUNTIME_SUBDIRECTORY, AGENT_SOCKET_FILENAME, LocalIpcProtocolVersion};
 
 use crate::ipc;
 use crate::state::{DesktopPresentationState, NavigationDestination};
@@ -223,6 +223,15 @@ fn desktop_version_text() -> String {
     format!("Ownspace Desktop version {}", env!("CARGO_PKG_VERSION"))
 }
 
+fn desktop_local_ipc_protocol_text() -> String {
+    let version = LocalIpcProtocolVersion::current();
+    format!(
+        "Supported local IPC protocol {}.{}",
+        version.major(),
+        version.minor()
+    )
+}
+
 fn local_endpoint_contract_text() -> String {
     format!("$XDG_RUNTIME_DIR/{AGENT_RUNTIME_SUBDIRECTORY}/{AGENT_SOCKET_FILENAME}")
 }
@@ -262,6 +271,25 @@ fn settings_page() -> gtk::Box {
     version.set_selectable(true);
     version.add_css_class("monospace");
     page.append(&version);
+
+    let protocol_title = gtk::Label::new(Some("Local IPC compatibility"));
+    protocol_title.set_xalign(0.0);
+    protocol_title.add_css_class("heading");
+    page.append(&protocol_title);
+
+    let protocol = gtk::Label::new(Some(&desktop_local_ipc_protocol_text()));
+    protocol.set_xalign(0.0);
+    protocol.set_selectable(true);
+    protocol.add_css_class("monospace");
+    page.append(&protocol);
+
+    let protocol_detail = gtk::Label::new(Some(
+        "This is the protocol version compiled into the desktop client. It does not probe the Agent or assert endpoint trust, availability, or connectivity.",
+    ));
+    protocol_detail.set_xalign(0.0);
+    protocol_detail.set_wrap(true);
+    protocol_detail.add_css_class("dim-label");
+    page.append(&protocol_detail);
 
     let endpoint_title = gtk::Label::new(Some("Local control endpoint"));
     endpoint_title.set_xalign(0.0);
@@ -488,7 +516,8 @@ mod tests {
     use super::{
         COPY_SNAPSHOT_DONE_LABEL, COPY_SNAPSHOT_IDLE_LABEL, NavigationDestination,
         REFRESH_BUTTON_BUSY_LABEL, REFRESH_BUTTON_IDLE_LABEL, activity_snapshot_clipboard_text,
-        desktop_version_text, local_endpoint_contract_text, placeholder_description,
+        desktop_local_ipc_protocol_text, desktop_version_text, local_endpoint_contract_text,
+        placeholder_description,
     };
 
     #[test]
@@ -514,6 +543,14 @@ mod tests {
     #[test]
     fn settings_build_information_uses_workspace_package_version() {
         assert_eq!(desktop_version_text(), "Ownspace Desktop version 0.1.0");
+    }
+
+    #[test]
+    fn settings_local_ipc_protocol_uses_authoritative_protocol_version() {
+        assert_eq!(
+            desktop_local_ipc_protocol_text(),
+            "Supported local IPC protocol 1.0"
+        );
     }
 
     #[test]
