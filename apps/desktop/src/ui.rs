@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use adw::prelude::*;
 use gtk::glib;
+use prw_agent::{AGENT_RUNTIME_SUBDIRECTORY, AGENT_SOCKET_FILENAME};
 
 use crate::ipc;
 use crate::state::{DesktopPresentationState, NavigationDestination};
@@ -38,7 +39,11 @@ pub fn build(app: &adw::Application) {
     );
 
     for destination in NavigationDestination::ALL.into_iter().skip(1) {
-        let page = placeholder_page(destination);
+        let page = if destination == NavigationDestination::Settings {
+            settings_page()
+        } else {
+            placeholder_page(destination)
+        };
         stack.add_titled(&page, Some(destination.stack_name()), destination.title());
     }
 
@@ -119,6 +124,50 @@ fn section_label(title: &str) -> gtk::Label {
     label.set_wrap(true);
     label.add_css_class("title-3");
     label
+}
+
+fn local_endpoint_contract_text() -> String {
+    format!("$XDG_RUNTIME_DIR/{AGENT_RUNTIME_SUBDIRECTORY}/{AGENT_SOCKET_FILENAME}")
+}
+
+fn settings_page() -> gtk::Box {
+    let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    page.set_margin_top(32);
+    page.set_margin_bottom(32);
+    page.set_margin_start(32);
+    page.set_margin_end(32);
+
+    let title = gtk::Label::new(Some("Settings"));
+    title.set_xalign(0.0);
+    title.add_css_class("title-1");
+    page.append(&title);
+
+    let status = gtk::Label::new(Some("Read-only local diagnostics"));
+    status.set_xalign(0.0);
+    status.add_css_class("title-3");
+    page.append(&status);
+
+    let detail = gtk::Label::new(Some(
+        "This surface exposes local Ownspace diagnostics only. It does not change Agent configuration or activate capabilities.",
+    ));
+    detail.set_xalign(0.0);
+    detail.set_wrap(true);
+    detail.add_css_class("dim-label");
+    page.append(&detail);
+
+    let endpoint_title = gtk::Label::new(Some("Local control endpoint"));
+    endpoint_title.set_xalign(0.0);
+    endpoint_title.add_css_class("heading");
+    page.append(&endpoint_title);
+
+    let endpoint = gtk::Label::new(Some(&local_endpoint_contract_text()));
+    endpoint.set_xalign(0.0);
+    endpoint.set_selectable(true);
+    endpoint.set_wrap(true);
+    endpoint.add_css_class("monospace");
+    page.append(&endpoint);
+
+    page
 }
 
 fn placeholder_page(destination: NavigationDestination) -> gtk::Box {
@@ -238,13 +287,21 @@ fn render_state(
 mod tests {
     use super::{
         NavigationDestination, REFRESH_BUTTON_BUSY_LABEL, REFRESH_BUTTON_IDLE_LABEL,
-        placeholder_description,
+        local_endpoint_contract_text, placeholder_description,
     };
 
     #[test]
     fn refresh_button_labels_have_stable_presentation_contract() {
         assert_eq!(REFRESH_BUTTON_IDLE_LABEL, "Refresh status");
         assert_eq!(REFRESH_BUTTON_BUSY_LABEL, "Refreshing…");
+    }
+
+    #[test]
+    fn settings_endpoint_uses_authoritative_agent_identifiers() {
+        assert_eq!(
+            local_endpoint_contract_text(),
+            "$XDG_RUNTIME_DIR/private-remote-workspace/agent.sock"
+        );
     }
 
     #[test]
