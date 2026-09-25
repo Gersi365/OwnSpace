@@ -259,6 +259,29 @@ mod tests {
     }
 
     #[test]
+    fn status_refresh_preserves_navigation_and_private_dns_projection() {
+        let expected_dns = PrivateDnsPresentation {
+            enabled: true,
+            device_naming: true,
+            resolver_count: 2,
+            split_domain_count: 3,
+        };
+        let mut state = DesktopPresentationState::default();
+        state.selected = NavigationDestination::Files;
+        state.private_dns = Some(expected_dns.clone());
+
+        let state = state.with_status(LocalAgentStatusSnapshot::current(
+            LocalAgentRuntimeState::Ready,
+        ));
+
+        assert_eq!(state.availability, AgentAvailability::Online);
+        assert_eq!(state.runtime, Some(AgentRuntimePresentation::Ready));
+        assert_eq!(state.selected, NavigationDestination::Files);
+        assert_eq!(state.private_dns, Some(expected_dns));
+        assert!(state.detail.starts_with("Local IPC protocol "));
+    }
+
+    #[test]
     fn status_text_projection_is_deterministic_and_read_only() {
         let connecting = DesktopPresentationState::connecting();
         assert_eq!(
