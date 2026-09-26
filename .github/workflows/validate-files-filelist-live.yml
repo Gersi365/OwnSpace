@@ -1,0 +1,79 @@
+name: Ownspace Files FileList live validation
+
+on:
+  push:
+    branches:
+      - validation/files-filelist-live-2026-09-26
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout validation carrier
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify carrier and exact candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE=6aa9dd82f46ee14e6a0f4981c0fee15c0c59b2d2
+          PATCH=.github/validation/files-filelist-live-2026-09-26.patch
+          test "$(git merge-base HEAD "$BASE")" = "$BASE"
+          test "$(git rev-list --count "$BASE"..HEAD)" = "3"
+          mapfile -t carrier_files < <(git diff --name-only "$BASE"..HEAD | sort)
+          expected_carrier=(
+            .github/validation/files-filelist-live-2026-09-26.patch
+            .github/workflows/validate-files-filelist-live.yml
+          )
+          test "${carrier_files[*]}" = "${expected_carrier[*]}"
+          echo '93ecc99a8a79ed34e8f21263f57178757e0e082b4fd45432ede0ad4f9f4cf700  crates/prw-agent/src/local_commands/management_agent_status_runtime.rs' | sha256sum --check
+          echo '70d71670b3b6b83966efdbfdd9416a2a8f3e7867f37780480f1ec3d149e01a94  crates/prw-agent/src/local_commands/management_agent_status_boundary.rs' | sha256sum --check
+          echo 'f46f9b3ba8027383b7e841e38d7d3013f690df82051d290aa4470fc9da6bcbc0  apps/desktop/src/local_management_ipc.rs' | sha256sum --check
+          echo '628628cc5bbcbbec56ec6d46ce0d75f713a5191d711aa434eb4b360d89f671d2  apps/desktop/src/ipc.rs' | sha256sum --check
+          echo '55f9f5db1f0751730593c278993adcb47d49e014db8e9e32659b28f6d6fa57b3  apps/desktop/src/ui.rs' | sha256sum --check
+          echo '73baac7ea305e5684b5925806f887f36117b3754a21f72ae38dc0934b089ba84  .github/validation/files-filelist-live-2026-09-26.patch' | sha256sum --check
+          git apply --check "$PATCH"
+          git apply "$PATCH"
+          git diff --check
+          mapfile -t changed < <(git diff --name-only | sort)
+          expected_changed=(
+            apps/desktop/src/ipc.rs
+            apps/desktop/src/local_management_ipc.rs
+            apps/desktop/src/ui.rs
+            crates/prw-agent/src/local_commands/management_agent_status_boundary.rs
+            crates/prw-agent/src/local_commands/management_agent_status_runtime.rs
+          )
+          test "${changed[*]}" = "${expected_changed[*]}"
+          echo 'a76620ceaed42e839060b8931731f11cf22482a9efef38e7b9b90a80c5528009  crates/prw-agent/src/local_commands/management_agent_status_runtime.rs' | sha256sum --check
+          echo 'e188d865337fffd0b9c755c84b2017763fdf1477f34a1d37052c961cab3c2c50  crates/prw-agent/src/local_commands/management_agent_status_boundary.rs' | sha256sum --check
+          echo '746fab053a1db5197b5a353e3d9158d53fb51d43a6b6fbd71b28c213dd453018  apps/desktop/src/local_management_ipc.rs' | sha256sum --check
+          echo 'aeb6c10b20a6ac49c9670e79f607aba9529f15be5ea8ae942fd85fbc8a1e936a  apps/desktop/src/ipc.rs' | sha256sum --check
+          echo 'b4a6ca4427e29377ca43598fb75c87dda45dcef446ea4f26da1e15ae53623773  apps/desktop/src/ui.rs' | sha256sum --check
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config protobuf-compiler libgtk-4-dev libadwaita-1-dev
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: rustfmt, clippy
+
+      - name: Formatting check
+        run: cargo fmt --all -- --check
+
+      - name: Agent and desktop compile check
+        run: cargo check --locked -p prw-agent -p prw-desktop --all-targets
+
+      - name: Agent and desktop tests
+        run: cargo test --locked -p prw-agent -p prw-desktop --all-targets
+
+      - name: Agent and desktop Clippy
+        run: cargo clippy --locked -p prw-agent -p prw-desktop --all-targets -- -D warnings
