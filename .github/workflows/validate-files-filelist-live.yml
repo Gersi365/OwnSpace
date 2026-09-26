@@ -27,11 +27,13 @@ jobs:
           TEST_PATCH=.github/validation/files-filelist-live-test-fix-2026-09-26.patch
           RUNTIME_TEST_PATCH=.github/validation/files-filelist-live-runtime-orchestration-test-fix-2026-09-26.patch
           CLIPPY_PATCH=.github/validation/files-filelist-live-clippy-fix-2026-09-26.patch
+          DESKTOP_CLIPPY_PATCH=.github/validation/files-filelist-live-desktop-clippy-fix-2026-09-26.patch
           test "$(git merge-base HEAD "$BASE")" = "$BASE"
-          test "$(git rev-list --count "$BASE"..HEAD)" = "6"
+          test "$(git rev-list --count "$BASE"..HEAD)" = "7"
           mapfile -t carrier_files < <(git diff --name-only "$BASE"..HEAD | sort)
           expected_carrier=(
             .github/validation/files-filelist-live-clippy-fix-2026-09-26.patch
+            .github/validation/files-filelist-live-desktop-clippy-fix-2026-09-26.patch
             .github/validation/files-filelist-live-fmt-2026-09-26.patch
             .github/validation/files-filelist-live-runtime-orchestration-test-fix-2026-09-26.patch
             .github/validation/files-filelist-live-test-fix-2026-09-26.patch
@@ -49,6 +51,7 @@ jobs:
           echo 'beb80e893ab40fbbc9c3ea7992fddff4dd43e2631bb3b0c2bb0274386d91bb38  .github/validation/files-filelist-live-test-fix-2026-09-26.patch' | sha256sum --check
           echo 'f6e434d2b77d3f9afdb32ac24115da6bb5589911480f4c2921038d260021fdc7  .github/validation/files-filelist-live-runtime-orchestration-test-fix-2026-09-26.patch' | sha256sum --check
           echo '33234c608385af7565667425facaeee89064606e627b618e3ba53bebcbc057ca  .github/validation/files-filelist-live-clippy-fix-2026-09-26.patch' | sha256sum --check
+          echo '2511811e7dd4c59c7e1f7c92d2cb2d52772df8085f7a84d54bebe7e67548711c  .github/validation/files-filelist-live-desktop-clippy-fix-2026-09-26.patch' | sha256sum --check
           git apply --check "$BASE_PATCH"
           git apply "$BASE_PATCH"
           git apply --check "$TEST_PATCH"
@@ -57,6 +60,8 @@ jobs:
           git apply "$RUNTIME_TEST_PATCH"
           git apply --check "$CLIPPY_PATCH"
           git apply "$CLIPPY_PATCH"
+          git apply --check "$DESKTOP_CLIPPY_PATCH"
+          git apply "$DESKTOP_CLIPPY_PATCH"
           git diff --check
           mapfile -t changed < <(git diff --name-only | sort)
           expected_changed=(
@@ -71,9 +76,9 @@ jobs:
           test "${changed[*]}" = "${expected_changed[*]}"
           echo '46aa36c73d01d9af174aa1ce8fd2eb7dcaa02ea52efcd3407e54e8b5f3dcac92  crates/prw-agent/src/local_commands/management_agent_status_runtime.rs' | sha256sum --check
           echo '088a1f0c74db6f38efaa01e7246a4dd67f7289c8cd932a580137c581d08a583e  crates/prw-agent/src/local_commands/management_agent_status_boundary.rs' | sha256sum --check
-          echo '009786670703a0063a35dc68c4bdf2c09afbb48281b4139c5eee6ce6b66d98de  apps/desktop/src/local_management_ipc.rs' | sha256sum --check
-          echo 'a56a3b56d2c46f8c7ca4b6a243287be6fd6ef58146c79fa3fbc357d5c84ca155  apps/desktop/src/ipc.rs' | sha256sum --check
-          echo 'd93cd871b829e32eb1139a6ff4e04cbce4f18934ce4b7249be6387ab99f3d288  apps/desktop/src/ui.rs' | sha256sum --check
+          echo '474e8ca733a319ba4886e8ed20cab7b6edc7c9225f220be63e40325c85fb5470  apps/desktop/src/local_management_ipc.rs' | sha256sum --check
+          echo '4ec37bebda600f75919964fb500b61843f637c4092f9f65a4e6c82ceaae796d4  apps/desktop/src/ipc.rs' | sha256sum --check
+          echo '1e78ab29681ff437e3aa2b3f2a2f632e1c66c441cf24288f0bce72e79e64c95e  apps/desktop/src/ui.rs' | sha256sum --check
           echo 'a2753824f864c25156569556f60ebf372ff8a8013ffab9dae73276765aa3af3d  crates/prw-agent/src/linux_signal_aware_runtime.rs' | sha256sum --check
           echo '8cd8eae5e5cc6e2adefe8f5f0ee3291e84c31c94d95bb95170565d401e67dd02  crates/prw-agent/src/linux_runtime_orchestration.rs' | sha256sum --check
 

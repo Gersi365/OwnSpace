@@ -1,0 +1,102 @@
+diff --git a/apps/desktop/src/ipc.rs b/apps/desktop/src/ipc.rs
+index e41f4d2..dd0b2ae 100644
+--- a/apps/desktop/src/ipc.rs
++++ b/apps/desktop/src/ipc.rs
+@@ -179,12 +179,12 @@ pub fn query_startup() -> StartupProbe {
+     }
+ }
+ 
+-/// Queries one read-only directory listing through the fixed local command-3 FileList slice.
++/// Queries one read-only directory listing through the fixed local command-3 `FileList` slice.
+ ///
+ /// Paths are canonical relative paths under the Agent-selected owner-home authority. The
+-/// desktop cannot select a host filesystem root and does not issue FileStat, download,
++/// desktop cannot select a host filesystem root and does not issue `FileStat`, download,
+ /// mutation, transfer, terminal or forwarding operations here.
+-pub(crate) fn query_file_list(path: &str) -> Result<Vec<LocalFileListEntry>, DesktopIpcError> {
++pub fn query_file_list(path: &str) -> Result<Vec<LocalFileListEntry>, DesktopIpcError> {
+     let endpoint = endpoint_from_environment()?;
+     let request_id =
+         LocalIpcRequestId::new(3).map_err(|_| DesktopIpcError::RequestIdGenerationFailed)?;
+diff --git a/apps/desktop/src/local_management_ipc.rs b/apps/desktop/src/local_management_ipc.rs
+index ebd6c20..6867143 100644
+--- a/apps/desktop/src/local_management_ipc.rs
++++ b/apps/desktop/src/local_management_ipc.rs
+@@ -47,7 +47,7 @@ pub fn build_bridge_management_request(
+ 
+ /// One decoded read-only file-list entry returned by the Agent.
+ #[derive(Debug, Clone, PartialEq, Eq)]
+-pub(crate) struct LocalFileListEntry {
++pub struct LocalFileListEntry {
+     name: String,
+     kind: LocalFileListEntryKind,
+ }
+@@ -74,7 +74,7 @@ enum LocalFileListEntryKind {
+ 
+ /// Fail-closed decoder error for one successful directory-list response body.
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+-pub(crate) enum LocalFileListDecodeError {
++pub enum LocalFileListDecodeError {
+     MissingResult,
+     UnexpectedResult,
+     EntryCount,
+@@ -85,7 +85,7 @@ pub(crate) enum LocalFileListDecodeError {
+ }
+ 
+ /// Builds the only live management request enabled by the desktop Files surface.
+-pub(crate) fn build_file_list_management_request(
++pub fn build_file_list_management_request(
+     request_id: LocalIpcRequestId,
+     path: &str,
+ ) -> Result<LocalIpcFrame, LocalManagementClientError> {
+@@ -94,7 +94,7 @@ pub(crate) fn build_file_list_management_request(
+ }
+ 
+ /// Decodes the command-specific body after the common two-byte success status prefix.
+-pub(crate) fn decode_file_list_success_body(
++pub fn decode_file_list_success_body(
+     payload: &[u8],
+ ) -> Result<Vec<LocalFileListEntry>, LocalFileListDecodeError> {
+     const STATUS_PREFIX_LENGTH: usize = 2;
+diff --git a/apps/desktop/src/ui.rs b/apps/desktop/src/ui.rs
+index 62244f7..343e04a 100644
+--- a/apps/desktop/src/ui.rs
++++ b/apps/desktop/src/ui.rs
+@@ -252,15 +252,12 @@ fn files_page() -> gtk::Box {
+     entries.set_wrap(false);
+     page.append(&entries);
+ 
+-    let path_for_click = path_entry.clone();
+-    let status_for_click = status.clone();
+-    let entries_for_click = entries.clone();
+     list_button.connect_clicked(move |button| {
+-        let path = path_for_click.text().to_string();
++        let path = path_entry.text().to_string();
+         button.set_sensitive(false);
+         button.set_label(FILES_LIST_BUSY_LABEL);
+-        status_for_click.set_text("Reading authorized directory listing…");
+-        entries_for_click.set_text("");
++        status.set_text("Reading authorized directory listing…");
++        entries.set_text("");
+ 
+         let (sender, receiver) = mpsc::sync_channel(1);
+         let spawn_result = std::thread::Builder::new()
+@@ -270,15 +267,15 @@ fn files_page() -> gtk::Box {
+             });
+ 
+         if spawn_result.is_err() {
+-            status_for_click.set_text("Unable to start the read-only file-list worker");
++            status.set_text("Unable to start the read-only file-list worker");
+             button.set_sensitive(true);
+             button.set_label(FILES_LIST_IDLE_LABEL);
+             return;
+         }
+ 
+         let button = button.clone();
+-        let status = status_for_click.clone();
+-        let entries = entries_for_click.clone();
++        let status = status.clone();
++        let entries = entries.clone();
+         let _source_id = glib::timeout_add_local(Duration::from_millis(75), move || match receiver
+             .try_recv()
+         {
