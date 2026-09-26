@@ -12,6 +12,7 @@ const REFRESH_BUTTON_IDLE_LABEL: &str = "Refresh status";
 const REFRESH_BUTTON_BUSY_LABEL: &str = "Refreshing…";
 const COPY_SNAPSHOT_IDLE_LABEL: &str = "Copy current snapshot";
 const COPY_SNAPSHOT_DONE_LABEL: &str = "Copied";
+const PLACEHOLDER_STATUS: &str = "No live state source available";
 const ACTIVITY_SUBTITLE: &str = concat!(
     "Latest local diagnostics snapshot. ",
     "Refresh uses the same bounded local status probe as Overview; ",
@@ -401,7 +402,7 @@ fn placeholder_page(destination: NavigationDestination) -> gtk::Box {
     title.add_css_class("title-1");
     page.append(&title);
 
-    let status = gtk::Label::new(Some("Placeholder — no capability active"));
+    let status = gtk::Label::new(Some(PLACEHOLDER_STATUS));
     status.set_xalign(0.0);
     status.add_css_class("title-3");
     page.append(&status);
@@ -562,9 +563,10 @@ fn render_state(
 mod tests {
     use super::{
         ACTIVITY_SUBTITLE, COPY_SNAPSHOT_DONE_LABEL, COPY_SNAPSHOT_IDLE_LABEL,
-        NavigationDestination, REFRESH_BUTTON_BUSY_LABEL, REFRESH_BUTTON_IDLE_LABEL,
-        activity_snapshot_clipboard_text, desktop_local_ipc_protocol_text, desktop_version_text,
-        local_endpoint_contract_text, placeholder_description,
+        NavigationDestination, PLACEHOLDER_STATUS, REFRESH_BUTTON_BUSY_LABEL,
+        REFRESH_BUTTON_IDLE_LABEL, activity_snapshot_clipboard_text,
+        desktop_local_ipc_protocol_text, desktop_version_text, local_endpoint_contract_text,
+        placeholder_description,
     };
 
     #[test]
@@ -619,6 +621,11 @@ mod tests {
             local_endpoint_contract_text(),
             "$XDG_RUNTIME_DIR/private-remote-workspace/agent.sock"
         );
+    }
+
+    #[test]
+    fn placeholder_status_has_explicit_no_live_source_contract() {
+        assert_eq!(PLACEHOLDER_STATUS, "No live state source available");
     }
 
     #[test]
