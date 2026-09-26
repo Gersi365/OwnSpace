@@ -25,11 +25,13 @@ jobs:
           BASE=6aa9dd82f46ee14e6a0f4981c0fee15c0c59b2d2
           BASE_PATCH=.github/validation/files-filelist-live-fmt-2026-09-26.patch
           TEST_PATCH=.github/validation/files-filelist-live-test-fix-2026-09-26.patch
+          RUNTIME_TEST_PATCH=.github/validation/files-filelist-live-runtime-orchestration-test-fix-2026-09-26.patch
           test "$(git merge-base HEAD "$BASE")" = "$BASE"
-          test "$(git rev-list --count "$BASE"..HEAD)" = "4"
+          test "$(git rev-list --count "$BASE"..HEAD)" = "5"
           mapfile -t carrier_files < <(git diff --name-only "$BASE"..HEAD | sort)
           expected_carrier=(
             .github/validation/files-filelist-live-fmt-2026-09-26.patch
+            .github/validation/files-filelist-live-runtime-orchestration-test-fix-2026-09-26.patch
             .github/validation/files-filelist-live-test-fix-2026-09-26.patch
             .github/workflows/validate-files-filelist-live.yml
           )
@@ -40,18 +42,23 @@ jobs:
           echo '628628cc5bbcbbec56ec6d46ce0d75f713a5191d711aa434eb4b360d89f671d2  apps/desktop/src/ipc.rs' | sha256sum --check
           echo '55f9f5db1f0751730593c278993adcb47d49e014db8e9e32659b28f6d6fa57b3  apps/desktop/src/ui.rs' | sha256sum --check
           echo '6c52983547a706788d3f3e78590d0da2ccc55b665606045c659652d55e6d9033  crates/prw-agent/src/linux_signal_aware_runtime.rs' | sha256sum --check
+          echo 'c43d3a5998b0f493afa0903e5f1ec5f9a08d873c9ab75403980aa6031be72b6b  crates/prw-agent/src/linux_runtime_orchestration.rs' | sha256sum --check
           echo 'abf98da4e788e8147e19f426f943cc26bbc68a2c0a3f06d94c23695a910e2f5f  .github/validation/files-filelist-live-fmt-2026-09-26.patch' | sha256sum --check
           echo 'beb80e893ab40fbbc9c3ea7992fddff4dd43e2631bb3b0c2bb0274386d91bb38  .github/validation/files-filelist-live-test-fix-2026-09-26.patch' | sha256sum --check
+          echo 'f6e434d2b77d3f9afdb32ac24115da6bb5589911480f4c2921038d260021fdc7  .github/validation/files-filelist-live-runtime-orchestration-test-fix-2026-09-26.patch' | sha256sum --check
           git apply --check "$BASE_PATCH"
           git apply "$BASE_PATCH"
           git apply --check "$TEST_PATCH"
           git apply "$TEST_PATCH"
+          git apply --check "$RUNTIME_TEST_PATCH"
+          git apply "$RUNTIME_TEST_PATCH"
           git diff --check
           mapfile -t changed < <(git diff --name-only | sort)
           expected_changed=(
             apps/desktop/src/ipc.rs
             apps/desktop/src/local_management_ipc.rs
             apps/desktop/src/ui.rs
+            crates/prw-agent/src/linux_runtime_orchestration.rs
             crates/prw-agent/src/linux_signal_aware_runtime.rs
             crates/prw-agent/src/local_commands/management_agent_status_boundary.rs
             crates/prw-agent/src/local_commands/management_agent_status_runtime.rs
@@ -63,6 +70,7 @@ jobs:
           echo 'a56a3b56d2c46f8c7ca4b6a243287be6fd6ef58146c79fa3fbc357d5c84ca155  apps/desktop/src/ipc.rs' | sha256sum --check
           echo 'd93cd871b829e32eb1139a6ff4e04cbce4f18934ce4b7249be6387ab99f3d288  apps/desktop/src/ui.rs' | sha256sum --check
           echo 'a2753824f864c25156569556f60ebf372ff8a8013ffab9dae73276765aa3af3d  crates/prw-agent/src/linux_signal_aware_runtime.rs' | sha256sum --check
+          echo '8cd8eae5e5cc6e2adefe8f5f0ee3291e84c31c94d95bb95170565d401e67dd02  crates/prw-agent/src/linux_runtime_orchestration.rs' | sha256sum --check
 
       - name: Install native build dependencies
         run: |

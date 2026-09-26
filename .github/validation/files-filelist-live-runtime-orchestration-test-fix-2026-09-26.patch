@@ -1,0 +1,62 @@
+--- a/crates/prw-agent/src/linux_runtime_orchestration.rs
++++ b/crates/prw-agent/src/linux_runtime_orchestration.rs
+@@ -534,6 +534,7 @@
+     use std::thread;
+     use std::time::Duration;
+ 
++    use prw_file_service::RemotePath;
+     use prw_network::PrivateDnsConfig;
+     use prw_policy::BoundedLocalReadPolicy;
+     use prw_remote_bridge::BridgeCommand;
+@@ -697,20 +698,6 @@
+         )
+     }
+ 
+-    fn canonical_file_list_payload(path: &str) -> Vec<u8> {
+-        let path = path.as_bytes();
+-        let path_len = u16::try_from(path.len()).expect("test path length fits u16");
+-        let mut payload = Vec::new();
+-        payload.extend_from_slice(b"PRWC");
+-        payload.extend_from_slice(&1_u16.to_be_bytes());
+-        payload.extend_from_slice(&0_u16.to_be_bytes());
+-        payload.extend_from_slice(&2_u16.to_be_bytes());
+-        payload.extend_from_slice(&0_u16.to_be_bytes());
+-        payload.extend_from_slice(&path_len.to_be_bytes());
+-        payload.extend_from_slice(path);
+-        payload
+-    }
+-
+     fn id(value: u64) -> LocalIpcRequestId {
+         LocalIpcRequestId::new(value).expect("non-zero request id")
+     }
+@@ -801,8 +788,8 @@
+     }
+ 
+     #[test]
+-    fn agent_status_worker_selection_denies_non_agent_status_management_command() {
+-        let fixture = RuntimeFixture::new("agent-status-deny");
++    fn agent_status_worker_selection_denies_file_write_management_command() {
++        let fixture = RuntimeFixture::new("agent-status-deny-write");
+         let socket_path = fixture.socket_path();
+         let listener = fixture.listener();
+         let wake = LocalLinuxRuntimeWake::create().expect("Phase 089 wake creates");
+@@ -812,10 +799,15 @@
+         let control = LocalLinuxSchedulerControl::new();
+         let context = agent_status_context(&capacity, &policy, &dns, &wake, 1);
+         let mut client = UnixStream::connect(socket_path).expect("test client connects");
+-        let file_list = canonical_file_list_payload("documents");
+-        let request = build_local_management_request_frame(id(712), &file_list)
+-            .expect("file-list management frame builds");
+-        write_frame(&mut client, &request).expect("file-list management request writes");
++        let bridge = BridgeCommand::FileCreate {
++            path: RemotePath::parse("notes.txt").expect("file-create path parses"),
++            contents: b"denied".to_vec(),
++        }
++        .encode()
++        .expect("file-create command encodes");
++        let request = build_local_management_request_frame(id(712), &bridge)
++            .expect("file-create management frame builds");
++        write_frame(&mut client, &request).expect("file-create management request writes");
+ 
+         thread::scope(|scope| {
+             let mut registry = LocalLinuxScopedWorkerRegistry::new();
