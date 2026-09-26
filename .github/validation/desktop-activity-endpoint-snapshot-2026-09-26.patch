@@ -1,0 +1,75 @@
+diff --git a/apps/desktop/README.md b/apps/desktop/README.md
+index 3c1acfe..90030e3 100644
+--- a/apps/desktop/README.md
++++ b/apps/desktop/README.md
+@@ -16,7 +16,7 @@ The desktop shell provides:
+ - read-only Private DNS summary presentation;
+ - manual bounded local status refresh that preserves the last rendered status while the read-only probe is active and gives explicit `Refreshing…` progress feedback;
+ - a read-only Settings diagnostics page that shows the local Ownspace Desktop package version, the desktop client’s compiled-in supported local IPC protocol version, and the latest Agent-reported local IPC protocol version from the same bounded `GetAgentStatus` snapshot used by Overview and Activity; it also exposes both the compatibility-sensitive endpoint contract and the session-resolved candidate endpoint derived through the existing `LocalIpcContract`, with a local-only copy action for the resolved path and no Agent configuration mutation;
+-- a read-only Activity page that mirrors the latest local Agent/Private DNS probe snapshot, can trigger the same bounded local refresh as Overview, and can copy the currently rendered snapshot to the local desktop clipboard without persisting history or emitting external telemetry;
++- a read-only Activity page that mirrors the latest local Agent/Private DNS probe snapshot, can trigger the same bounded local refresh as Overview, and can copy the currently rendered snapshot plus the session-resolved local IPC endpoint candidate to the local desktop clipboard without persisting history or emitting external telemetry;
+ - explicit offline/error handling, including partial Private DNS query failure visibility;
+ - a bounded worker thread so local Unix-socket reads do not block the GTK main thread.
+ 
+@@ -34,7 +34,7 @@ The desktop client performs no TCP, D-Bus, abstract-socket, `/tmp`, shell-comman
+ 
+ ## Deliberately not activated by this surface
+ 
+-Machines, Sessions, Files, and Transfers remain structural placeholders unless backed by separately validated capability work. Activity is limited to the latest in-memory local diagnostics snapshot; its refresh action reuses the same bounded local status probe as Overview, and its copy action exports only the currently rendered text to the local desktop clipboard. It does not provide persisted history, external telemetry, or Remote Desktop clipboard integration. The current desktop status/diagnostics surface does not implement or activate:
++Machines, Sessions, Files, and Transfers remain structural placeholders unless backed by separately validated capability work. Activity is limited to the latest in-memory local diagnostics snapshot; its refresh action reuses the same bounded local status probe as Overview, and its copy action exports only the currently rendered text plus the session-resolved local IPC endpoint candidate to the local desktop clipboard. The endpoint value is path derivation from `XDG_RUNTIME_DIR` through the existing `LocalIpcContract`; it does not perform an Agent read or assert endpoint trust, availability, or connectivity. Activity does not provide persisted history, external telemetry, or Remote Desktop clipboard integration. The current desktop status/diagnostics surface does not implement or activate:
+ 
+ - terminal actions;
+ - file or transfer actions;
+diff --git a/apps/desktop/src/ui.rs b/apps/desktop/src/ui.rs
+index 1163000..b33dbf5 100644
+--- a/apps/desktop/src/ui.rs
++++ b/apps/desktop/src/ui.rs
+@@ -190,11 +190,16 @@ fn activity_page() -> (
+     let copy_agent_label = agent_label.clone();
+     let copy_dns_label = dns_label.clone();
+     let copy_detail_label = detail_label.clone();
++    let copy_endpoint = ipc::endpoint_candidate_from_environment().map_or_else(
++        |error| format!("Unavailable: {error}"),
++        |path| path.display().to_string(),
++    );
+     copy_button.connect_clicked(move |button| {
+         let agent = copy_agent_label.text().to_string();
+         let dns = copy_dns_label.text().to_string();
+         let detail = copy_detail_label.text().to_string();
+-        let copy_text = activity_snapshot_clipboard_text(&agent, &dns, &detail);
++        let copy_text =
++            activity_snapshot_clipboard_text(&agent, &dns, &detail, &copy_endpoint);
+         button.display().clipboard().set_text(&copy_text);
+         button.set_label(COPY_SNAPSHOT_DONE_LABEL);
+     });
+@@ -210,8 +215,15 @@ fn activity_page() -> (
+     )
+ }
+ 
+-fn activity_snapshot_clipboard_text(agent: &str, dns: &str, detail: &str) -> String {
+-    format!("{agent}\n\n{dns}\n\nDetail\n{detail}")
++fn activity_snapshot_clipboard_text(
++    agent: &str,
++    dns: &str,
++    detail: &str,
++    endpoint_candidate: &str,
++) -> String {
++    format!(
++        "{agent}\n\n{dns}\n\nDetail\n{detail}\n\nSession endpoint candidate\n{endpoint_candidate}"
++    )
+ }
+ 
+ fn section_label(title: &str) -> gtk::Label {
+@@ -567,9 +579,10 @@ mod tests {
+             activity_snapshot_clipboard_text(
+                 "Agent status\nAvailability: Online\nRuntime: Ready",
+                 "Private DNS\nEnabled: Yes",
+-                "Local IPC protocol 1.0",
++                "Local IPC protocol 1.0\nCompatibility: Supported by this desktop client",
++                "/run/user/1000/private-remote-workspace/agent.sock",
+             ),
+-            "Agent status\nAvailability: Online\nRuntime: Ready\n\nPrivate DNS\nEnabled: Yes\n\nDetail\nLocal IPC protocol 1.0"
++            "Agent status\nAvailability: Online\nRuntime: Ready\n\nPrivate DNS\nEnabled: Yes\n\nDetail\nLocal IPC protocol 1.0\nCompatibility: Supported by this desktop client\n\nSession endpoint candidate\n/run/user/1000/private-remote-workspace/agent.sock"
+         );
+     }
+ 

@@ -1,0 +1,89 @@
+name: Ownspace desktop Activity endpoint snapshot validation
+
+on:
+  push:
+    branches:
+      - validation/desktop-activity-endpoint-snapshot-2026-09-26
+
+permissions:
+  contents: read
+
+jobs:
+  desktop:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Verify validation carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_parent='6195a3967e2575e7cf42a0a4f47bb92c3d2076f9'
+          actual_parent="$(git rev-parse HEAD^)"
+          test "$actual_parent" = "$expected_parent"
+
+          expected_files="$(printf '%s\n' \
+            '.github/validation/desktop-activity-endpoint-snapshot-2026-09-26.patch' \
+            '.github/workflows/validate-desktop-activity-endpoint-snapshot.yml' | sort)"
+          actual_files="$(git diff --name-only "$expected_parent" HEAD | sort)"
+          test "$actual_files" = "$expected_files"
+
+      - name: Verify authoritative base and apply candidate patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' \
+            'aa1ee9c4b61912e0a7a3c291269491780d4944c0fa197d17c75e5f135aba6941' 'apps/desktop/src/state.rs' \
+            '68e7915dca870942bfe007e01187d9255515bcbbe29d18f5c39f9ef45b0b0afa' 'apps/desktop/src/ui.rs' \
+            '703cdae3956906ae74eab30730badb4838d489d1ebe507b345a0d4bcc7f42455' 'apps/desktop/README.md' \
+            '628628cc5bbcbbec56ec6d46ce0d75f713a5191d711aa434eb4b360d89f671d2' 'apps/desktop/src/ipc.rs' \
+            | sha256sum -c -
+
+          printf '%s  %s\n' \
+            'cbc605b3b230d6fa00a23564eba81966f6d3b29131759fe988878fcaf08b8ea6' \
+            '.github/validation/desktop-activity-endpoint-snapshot-2026-09-26.patch' \
+            | sha256sum -c -
+
+          git apply --check .github/validation/desktop-activity-endpoint-snapshot-2026-09-26.patch
+          git apply .github/validation/desktop-activity-endpoint-snapshot-2026-09-26.patch
+
+          printf '%s  %s\n' \
+            'aa1ee9c4b61912e0a7a3c291269491780d4944c0fa197d17c75e5f135aba6941' 'apps/desktop/src/state.rs' \
+            '588ced93293c0cd9fcd0417a89b99d4e67cf4944fbe492364876e2ac8477111a' 'apps/desktop/src/ui.rs' \
+            '2df52ec4ca7ffc06c54a30cbaf41b999fb88228d970b9e5a3db8d55d837a8e11' 'apps/desktop/README.md' \
+            '628628cc5bbcbbec56ec6d46ce0d75f713a5191d711aa434eb4b360d89f671d2' 'apps/desktop/src/ipc.rs' \
+            | sha256sum -c -
+
+      - name: Install GTK build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgtk-4-dev libadwaita-1-dev pkg-config protobuf-compiler
+
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt --component clippy
+          rustup default 1.97.1
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Test desktop
+        run: cargo test -p prw-desktop
+
+      - name: Clippy desktop
+        run: cargo clippy -p prw-desktop --all-targets -- -D warnings
+
+      - name: Build desktop
+        run: cargo build -p prw-desktop
+
+      - name: Test workspace
+        run: cargo test --workspace
+
+      - name: Clippy workspace
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Build workspace
+        run: cargo build --workspace
