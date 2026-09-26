@@ -1,0 +1,74 @@
+diff --git a/crates/prw-agent/src/linux_signal_aware_runtime.rs b/crates/prw-agent/src/linux_signal_aware_runtime.rs
+index b23ee8f..cdf4c73 100644
+--- a/crates/prw-agent/src/linux_signal_aware_runtime.rs
++++ b/crates/prw-agent/src/linux_signal_aware_runtime.rs
+@@ -580,6 +580,7 @@ mod tests {
+     use std::time::Duration;
+ 
+     use nix::sys::signal::{SigSet, Signal, raise};
++    use prw_file_service::RemotePath;
+     use prw_network::PrivateDnsConfig;
+     use prw_policy::BoundedLocalReadPolicy;
+     use prw_remote_bridge::BridgeCommand;
+@@ -677,20 +678,6 @@ mod tests {
+         LocalIpcRequestId::new(value).expect("non-zero request id")
+     }
+ 
+-    fn canonical_file_list_payload(path: &str) -> Vec<u8> {
+-        let path = path.as_bytes();
+-        let path_len = u16::try_from(path.len()).expect("test path length fits u16");
+-        let mut payload = Vec::new();
+-        payload.extend_from_slice(b"PRWC");
+-        payload.extend_from_slice(&1_u16.to_be_bytes());
+-        payload.extend_from_slice(&0_u16.to_be_bytes());
+-        payload.extend_from_slice(&2_u16.to_be_bytes());
+-        payload.extend_from_slice(&0_u16.to_be_bytes());
+-        payload.extend_from_slice(&path_len.to_be_bytes());
+-        payload.extend_from_slice(path);
+-        payload
+-    }
+-
+     #[test]
+     fn agent_status_signal_aware_path_handles_management_and_legacy_command_one() {
+         let root = create_root("agent-status-management");
+@@ -761,8 +748,8 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn agent_status_signal_aware_path_denies_non_agent_status_management() {
+-        let root = create_root("agent-status-deny");
++    fn agent_status_signal_aware_path_denies_file_write_management() {
++        let root = create_root("agent-status-deny-write");
+         let path = socket_path(&root);
+         let dns = dns_snapshot();
+         let client_thread = Arc::new(Mutex::new(None));
+@@ -776,11 +763,16 @@ mod tests {
+                     let path = path.clone();
+                     let handle = thread::spawn(move || {
+                         let mut client = UnixStream::connect(path).expect("client connects");
+-                        let payload = canonical_file_list_payload("documents");
+-                        let request = build_local_management_request_frame(id(982), &payload)
+-                            .expect("file-list management request builds");
++                        let bridge = BridgeCommand::FileCreate {
++                            path: RemotePath::parse("notes.txt").expect("file-create path parses"),
++                            contents: b"denied".to_vec(),
++                        }
++                        .encode()
++                        .expect("file-create command encodes");
++                        let request = build_local_management_request_frame(id(982), &bridge)
++                            .expect("file-create management request builds");
+                         write_frame(&mut client, &request)
+-                            .expect("file-list management request writes");
++                            .expect("file-create management request writes");
+ 
+                         let response = read_frame(&mut client).expect("denial response reads");
+                         let terminal = validate_terminal_response_frame(&response)
+@@ -811,7 +803,7 @@ mod tests {
+         );
+         assert_eq!(report.cleanup(), LocalLinuxProductionRuntimeCleanup::Clean);
+         assert!(!socket_path(&root).exists());
+-        fs::remove_dir_all(root).expect("temporary AgentStatus denial root removes");
++        fs::remove_dir_all(root).expect("temporary AgentStatus write-denial root removes");
+     }
+ 
+     #[test]
