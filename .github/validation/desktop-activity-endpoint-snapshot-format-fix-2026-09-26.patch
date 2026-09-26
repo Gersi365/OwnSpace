@@ -1,0 +1,14 @@
+diff --git a/apps/desktop/src/ui.rs b/apps/desktop/src/ui.rs
+index b33dbf5..69afc57 100644
+--- a/apps/desktop/src/ui.rs
++++ b/apps/desktop/src/ui.rs
+@@ -198,8 +198,7 @@ fn activity_page() -> (
+         let agent = copy_agent_label.text().to_string();
+         let dns = copy_dns_label.text().to_string();
+         let detail = copy_detail_label.text().to_string();
+-        let copy_text =
+-            activity_snapshot_clipboard_text(&agent, &dns, &detail, &copy_endpoint);
++        let copy_text = activity_snapshot_clipboard_text(&agent, &dns, &detail, &copy_endpoint);
+         button.display().clipboard().set_text(&copy_text);
+         button.set_label(COPY_SNAPSHOT_DONE_LABEL);
+     });
