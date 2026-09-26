@@ -1,0 +1,46 @@
+--- a/crates/prw-agent/src/local_commands/management_agent_status_runtime.rs
++++ b/crates/prw-agent/src/local_commands/management_agent_status_runtime.rs
+@@ -1,10 +1,10 @@
+-//! Narrow command-3 AgentStatus + read-only FileList runtime adapter.
++//! Narrow command-3 `AgentStatus` + read-only `FileList` runtime adapter.
+ //!
+ //! This module intentionally omits mutable provider lifecycle and terminal/forwarding
+ //! backends. The management policy is fixed inside the adapter: `AgentStatusRead` and
+ //! `FilesRead` are admitted, then an explicit command gate permits only `AgentStatus`
+ //! and `FileList`. `FileStat` and `DownloadChunk` therefore remain unsupported even
+-//! though they share `FilesRead`. The FileList authority is anchored to the Agent
++//! though they share `FilesRead`. The `FileList` authority is anchored to the Agent
+ //! user-service `$HOME`, never to `/` or a request-supplied host path.
+ 
+ #![cfg(target_os = "linux")]
+@@ -44,7 +44,7 @@
+     })
+ }
+ 
+-/// Processes one canonical command-3 request through the fixed AgentStatus + FileList slice.
++/// Processes one canonical command-3 request through the fixed `AgentStatus` + `FileList` slice.
+ ///
+ /// The caller supplies no management policy or mutable provider lifecycle. Canonical
+ /// admission still binds the request to the authenticated same-UID Linux peer.
+@@ -93,15 +93,12 @@
+             )),
+         ),
+         BridgeCommand::FileList(path) => {
+-            let filesystem = match open_filesystem() {
+-                Ok(filesystem) => filesystem,
+-                Err(_) => {
+-                    return build_terminal_response_frame(
+-                        request_id,
+-                        LocalAgentResponseStatus::InternalError,
+-                        &[],
+-                    );
+-                }
++            let Ok(filesystem) = open_filesystem() else {
++                return build_terminal_response_frame(
++                    request_id,
++                    LocalAgentResponseStatus::InternalError,
++                    &[],
++                );
+             };
+             let result = filesystem
+                 .root()
