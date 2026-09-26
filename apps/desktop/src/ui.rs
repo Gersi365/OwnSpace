@@ -13,6 +13,12 @@ const REFRESH_BUTTON_BUSY_LABEL: &str = "Refreshing…";
 const COPY_SNAPSHOT_IDLE_LABEL: &str = "Copy current snapshot";
 const COPY_SNAPSHOT_DONE_LABEL: &str = "Copied";
 const PLACEHOLDER_STATUS: &str = "No live state source available";
+const FILES_LIST_IDLE_LABEL: &str = "List files";
+const FILES_LIST_BUSY_LABEL: &str = "Listing…";
+const FILES_SUBTITLE: &str = concat!(
+    "Read-only directory listing under the local owner home authority. ",
+    "Paths are relative; this surface does not read file contents, mutate files, transfer data, open terminals, or create forwarding."
+);
 const MACHINES_SUBTITLE: &str = concat!(
     "Current local owner-host status from the same bounded Agent snapshot as Overview. ",
     "This surface does not enumerate remote devices, infer identity from endpoint data, or grant capabilities."
@@ -84,11 +90,13 @@ pub fn build(app: &adw::Application) {
         activity_refresh_button,
         activity_copy_button,
     ) = activity_page();
+    let files = files_page();
     let (settings, settings_agent_protocol_label) = settings_page();
 
     for destination in NavigationDestination::ALL.into_iter().skip(1) {
         let page = match destination {
             NavigationDestination::Machines => machines.clone(),
+            NavigationDestination::Files => files.clone(),
             NavigationDestination::Activity => activity.clone(),
             NavigationDestination::Settings => settings.clone(),
             _ => placeholder_page(destination),
@@ -204,6 +212,108 @@ fn machines_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label, gtk::Button
     page.append(&detail_label);
 
     (page, agent_label, dns_label, detail_label, refresh_button)
+}
+
+fn files_page() -> gtk::Box {
+    let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    page.set_margin_top(32);
+    page.set_margin_bottom(32);
+    page.set_margin_start(32);
+    page.set_margin_end(32);
+
+    let title = gtk::Label::new(Some("Files"));
+    title.set_xalign(0.0);
+    title.add_css_class("title-1");
+    page.append(&title);
+
+    let subtitle = gtk::Label::new(Some(FILES_SUBTITLE));
+    subtitle.set_xalign(0.0);
+    subtitle.set_wrap(true);
+    subtitle.add_css_class("dim-label");
+    page.append(&subtitle);
+
+    let path_entry = gtk::Entry::new();
+    path_entry.set_placeholder_text(Some("Relative path; blank = home"));
+    page.append(&path_entry);
+
+    let list_button = gtk::Button::with_label(FILES_LIST_IDLE_LABEL);
+    list_button.set_halign(gtk::Align::Start);
+    page.append(&list_button);
+
+    let status = gtk::Label::new(Some("No directory listing requested yet"));
+    status.set_xalign(0.0);
+    status.add_css_class("title-3");
+    page.append(&status);
+
+    let entries = gtk::Label::new(None);
+    entries.set_xalign(0.0);
+    entries.set_yalign(0.0);
+    entries.set_selectable(true);
+    entries.set_wrap(false);
+    page.append(&entries);
+
+    list_button.connect_clicked(move |button| {
+        let path = path_entry.text().to_string();
+        button.set_sensitive(false);
+        button.set_label(FILES_LIST_BUSY_LABEL);
+        status.set_text("Reading authorized directory listing…");
+        entries.set_text("");
+
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let spawn_result = std::thread::Builder::new()
+            .name("prw-desktop-readonly-file-list".to_owned())
+            .spawn(move || {
+                let _ = sender.send(ipc::query_file_list(&path));
+            });
+
+        if spawn_result.is_err() {
+            status.set_text("Unable to start the read-only file-list worker");
+            button.set_sensitive(true);
+            button.set_label(FILES_LIST_IDLE_LABEL);
+            return;
+        }
+
+        let button = button.clone();
+        let status = status.clone();
+        let entries = entries.clone();
+        let _source_id = glib::timeout_add_local(Duration::from_millis(75), move || match receiver
+            .try_recv()
+        {
+            Ok(Ok(listing)) => {
+                let rendered = listing
+                    .iter()
+                    .map(crate::local_management_ipc::LocalFileListEntry::display_text)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if rendered.is_empty() {
+                    entries.set_text("(empty directory)");
+                } else {
+                    entries.set_text(&rendered);
+                }
+                status.set_text("Read-only listing loaded");
+                button.set_sensitive(true);
+                button.set_label(FILES_LIST_IDLE_LABEL);
+                glib::ControlFlow::Break
+            }
+            Ok(Err(error)) => {
+                entries.set_text("");
+                status.set_text(&format!("Unavailable: {error}"));
+                button.set_sensitive(true);
+                button.set_label(FILES_LIST_IDLE_LABEL);
+                glib::ControlFlow::Break
+            }
+            Err(TryRecvError::Empty) => glib::ControlFlow::Continue,
+            Err(TryRecvError::Disconnected) => {
+                entries.set_text("");
+                status.set_text("Read-only file-list worker ended without a result");
+                button.set_sensitive(true);
+                button.set_label(FILES_LIST_IDLE_LABEL);
+                glib::ControlFlow::Break
+            }
+        });
+    });
+
+    page
 }
 
 fn activity_page() -> (
@@ -486,7 +596,7 @@ const fn placeholder_description(destination: NavigationDestination) -> &'static
             "Reserved for authorized terminal, Remote Desktop, and forwarding session presentation when runtime state is available."
         }
         NavigationDestination::Files => {
-            "Reserved for remote browsing and file operations through the existing authenticated file authority."
+            "Files is implemented as a read-only local owner-home directory listing through authenticated command-3 FileList."
         }
         NavigationDestination::Transfers => {
             "Reserved for verified upload/download progress and completion state."
@@ -640,7 +750,8 @@ fn render_state(
 #[cfg(test)]
 mod tests {
     use super::{
-        ACTIVITY_SUBTITLE, COPY_SNAPSHOT_DONE_LABEL, COPY_SNAPSHOT_IDLE_LABEL, MACHINES_SUBTITLE,
+        ACTIVITY_SUBTITLE, COPY_SNAPSHOT_DONE_LABEL, COPY_SNAPSHOT_IDLE_LABEL,
+        FILES_LIST_BUSY_LABEL, FILES_LIST_IDLE_LABEL, FILES_SUBTITLE, MACHINES_SUBTITLE,
         NavigationDestination, PLACEHOLDER_STATUS, REFRESH_BUTTON_BUSY_LABEL,
         REFRESH_BUTTON_IDLE_LABEL, activity_snapshot_clipboard_text,
         desktop_local_ipc_protocol_text, desktop_version_text, local_endpoint_contract_text,
@@ -651,6 +762,19 @@ mod tests {
     fn refresh_button_labels_have_stable_presentation_contract() {
         assert_eq!(REFRESH_BUTTON_IDLE_LABEL, "Refresh status");
         assert_eq!(REFRESH_BUTTON_BUSY_LABEL, "Refreshing…");
+    }
+
+    #[test]
+    fn files_surface_labels_lock_read_only_file_list_boundary() {
+        assert_eq!(FILES_LIST_IDLE_LABEL, "List files");
+        assert_eq!(FILES_LIST_BUSY_LABEL, "Listing…");
+        assert_eq!(
+            FILES_SUBTITLE,
+            concat!(
+                "Read-only directory listing under the local owner home authority. ",
+                "Paths are relative; this surface does not read file contents, mutate files, transfer data, open terminals, or create forwarding."
+            )
+        );
     }
 
     #[test]
@@ -734,7 +858,7 @@ mod tests {
             ),
             (
                 NavigationDestination::Files,
-                "Reserved for remote browsing and file operations through the existing authenticated file authority.",
+                "Files is implemented as a read-only local owner-home directory listing through authenticated command-3 FileList.",
             ),
             (
                 NavigationDestination::Transfers,

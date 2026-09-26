@@ -10,6 +10,7 @@ use prw_agent::{
         LocalManagementRequestBuildError, build_local_management_request_frame,
     },
 };
+use prw_file_service::{MAX_DIRECTORY_ENTRIES, RemotePath};
 use prw_remote_bridge::{BridgeCommand, RemoteBridgeError};
 
 /// Pure client-side failure while composing one typed local management request.
@@ -19,6 +20,8 @@ pub enum LocalManagementClientError {
     Bridge(RemoteBridgeError),
     /// Agent-owned local command-3 framing rejected the encoded body.
     Local(LocalManagementRequestBuildError),
+    /// The requested file-list path is not a canonical relative remote path.
+    InvalidFilePath,
 }
 
 /// Encodes one existing typed bridge command and wraps it in the Agent-owned
@@ -42,6 +45,107 @@ pub fn build_bridge_management_request(
         .map_err(LocalManagementClientError::Local)
 }
 
+/// One decoded read-only file-list entry returned by the Agent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalFileListEntry {
+    name: String,
+    kind: LocalFileListEntryKind,
+}
+
+impl LocalFileListEntry {
+    #[must_use]
+    pub(crate) fn display_text(&self) -> String {
+        match self.kind {
+            LocalFileListEntryKind::RegularFile => self.name.clone(),
+            LocalFileListEntryKind::Directory => format!("{}/", self.name),
+            LocalFileListEntryKind::SymbolicLink => format!("{} [symlink]", self.name),
+            LocalFileListEntryKind::Other => format!("{} [other]", self.name),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LocalFileListEntryKind {
+    RegularFile,
+    Directory,
+    SymbolicLink,
+    Other,
+}
+
+/// Fail-closed decoder error for one successful directory-list response body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalFileListDecodeError {
+    MissingResult,
+    UnexpectedResult,
+    EntryCount,
+    EntryType,
+    EntryLength,
+    EntryUtf8,
+    TrailingBytes,
+}
+
+/// Builds the only live management request enabled by the desktop Files surface.
+pub fn build_file_list_management_request(
+    request_id: LocalIpcRequestId,
+    path: &str,
+) -> Result<LocalIpcFrame, LocalManagementClientError> {
+    let path = RemotePath::parse(path).map_err(|_| LocalManagementClientError::InvalidFilePath)?;
+    build_bridge_management_request(request_id, &BridgeCommand::FileList(path))
+}
+
+/// Decodes the command-specific body after the common two-byte success status prefix.
+pub fn decode_file_list_success_body(
+    payload: &[u8],
+) -> Result<Vec<LocalFileListEntry>, LocalFileListDecodeError> {
+    const STATUS_PREFIX_LENGTH: usize = 2;
+    const DIRECTORY_ENTRIES_RESULT: u8 = 2;
+
+    let body = payload
+        .get(STATUS_PREFIX_LENGTH..)
+        .ok_or(LocalFileListDecodeError::MissingResult)?;
+    if body.first().copied() != Some(DIRECTORY_ENTRIES_RESULT) {
+        return Err(LocalFileListDecodeError::UnexpectedResult);
+    }
+    let count_bytes = body.get(1..3).ok_or(LocalFileListDecodeError::EntryCount)?;
+    let count = usize::from(u16::from_be_bytes([count_bytes[0], count_bytes[1]]));
+    if count > MAX_DIRECTORY_ENTRIES {
+        return Err(LocalFileListDecodeError::EntryCount);
+    }
+
+    let mut cursor = 3_usize;
+    let mut entries = Vec::with_capacity(count);
+    for _ in 0..count {
+        let kind = match body.get(cursor).copied() {
+            Some(1) => LocalFileListEntryKind::RegularFile,
+            Some(2) => LocalFileListEntryKind::Directory,
+            Some(3) => LocalFileListEntryKind::SymbolicLink,
+            Some(4) => LocalFileListEntryKind::Other,
+            _ => return Err(LocalFileListDecodeError::EntryType),
+        };
+        cursor += 1;
+        let len_bytes = body
+            .get(cursor..cursor + 2)
+            .ok_or(LocalFileListDecodeError::EntryLength)?;
+        let name_len = usize::from(u16::from_be_bytes([len_bytes[0], len_bytes[1]]));
+        cursor += 2;
+        let name_bytes = body
+            .get(cursor..cursor + name_len)
+            .ok_or(LocalFileListDecodeError::EntryLength)?;
+        let name = std::str::from_utf8(name_bytes)
+            .map_err(|_| LocalFileListDecodeError::EntryUtf8)?
+            .to_owned();
+        if name.is_empty() {
+            return Err(LocalFileListDecodeError::EntryLength);
+        }
+        cursor += name_len;
+        entries.push(LocalFileListEntry { name, kind });
+    }
+    if cursor != body.len() {
+        return Err(LocalFileListDecodeError::TrailingBytes);
+    }
+    Ok(entries)
+}
+
 #[cfg(test)]
 mod tests {
     use std::net::{IpAddr, Ipv4Addr};
@@ -62,7 +166,10 @@ mod tests {
     use prw_remote_bridge::BridgeCommand;
     use prw_terminal::{TerminalGeometry, TerminalProfile, TerminalSessionId};
 
-    use super::build_bridge_management_request;
+    use super::{
+        LocalManagementClientError, build_bridge_management_request,
+        build_file_list_management_request, decode_file_list_success_body,
+    };
 
     fn id(value: u64) -> LocalIpcRequestId {
         LocalIpcRequestId::new(value).expect("non-zero request id")
@@ -156,5 +263,33 @@ mod tests {
             local_payload.len(),
             LOCAL_MANAGEMENT_REQUEST_PREFIX_LENGTH + bridge_payload.len()
         );
+    }
+
+    #[test]
+    fn live_file_list_builder_accepts_root_and_rejects_noncanonical_paths() {
+        let root = build_file_list_management_request(id(156), "").expect("root listing builds");
+        let local = decode_local_management_request_frame(&root).expect("local envelope decodes");
+        assert_eq!(
+            BridgeCommand::decode(local.bridge_payload()).expect("bridge decodes"),
+            BridgeCommand::FileList(RemotePath::parse("").expect("root path"))
+        );
+        assert!(matches!(
+            build_file_list_management_request(id(157), "../escape"),
+            Err(LocalManagementClientError::InvalidFilePath)
+        ));
+    }
+
+    #[test]
+    fn directory_entry_success_body_decodes_types_and_rejects_trailing_bytes() {
+        let payload = [
+            0, 0, 2, 0, 2, 2, 0, 4, b'd', b'o', b'c', b's', 1, 0, 5, b'n', b'o', b't', b'e', b's',
+        ];
+        let entries = decode_file_list_success_body(&payload).expect("directory body decodes");
+        assert_eq!(entries[0].display_text(), "docs/");
+        assert_eq!(entries[1].display_text(), "notes");
+
+        let mut trailing = payload.to_vec();
+        trailing.push(9);
+        assert!(decode_file_list_success_body(&trailing).is_err());
     }
 }

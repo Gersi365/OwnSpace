@@ -1,8 +1,8 @@
-//! Shared local boundary for legacy commands 1/2 plus fixed command-3 `AgentStatus`.
+//! Shared local boundary for legacy commands 1/2 plus fixed command-3 `AgentStatus`/`FileList`.
 //!
 //! Generic framing is acquired before command classification. Legacy commands retain
 //! their existing decoder/policy/responder path. Code 3 is delegated only to the
-//! fixed AgentStatus-only runtime adapter, which owns no mutable provider authority.
+//! fixed AgentStatus/FileList runtime adapter, which owns no mutable provider lifecycle.
 
 #![cfg(target_os = "linux")]
 
@@ -12,7 +12,7 @@ use prw_policy::PolicyEvaluator;
 
 use super::boundary_request_response_transaction::LocalBoundaryRequestResponseOutcome;
 use super::inbound_state::LocalInboundRequestState;
-use super::management_agent_status_runtime::process_authenticated_linux_agent_status_management;
+use super::management_agent_status_runtime::process_authenticated_linux_agent_status_file_list_management;
 use super::management_request::LOCAL_MANAGEMENT_BRIDGE_COMMAND_CODE;
 use super::policy_response::{
     LocalPolicyResponseBuildError, build_policy_gated_read_only_response,
@@ -39,13 +39,13 @@ pub enum LocalAgentStatusManagementBoundaryError {
     ReadOnlyDecode(LocalAgentRequestFrameDecodeError),
     /// Legacy policy-response construction failed before response write.
     ReadOnlyResponse(LocalPolicyResponseBuildError),
-    /// Fixed `AgentStatus` management response construction failed before response write.
+    /// Fixed `AgentStatus`/`FileList` management response construction failed before response write.
     ManagementResponse(LocalTerminalResponseBuildError),
     /// Guarded response writing failed.
     ResponseWrite(LocalTerminalResponseWriteError),
 }
 
-/// Processes one clean-EOF-aware local request with an AgentStatus-only command-3 slice.
+/// Processes one clean-EOF-aware local request with an AgentStatus/FileList-only command-3 slice.
 ///
 /// Command 3 receives no caller-supplied management policy or provider context. Commands
 /// 1/2 retain the existing read-only evaluator and exact response path.
@@ -54,7 +54,7 @@ pub enum LocalAgentStatusManagementBoundaryError {
 ///
 /// Preserves generic frame/read poisoning, legacy decode failures and guarded response
 /// write failures. Canonical command-3 admission failures are encoded as correlated
-/// terminal responses by the fixed AgentStatus-only runtime adapter.
+/// terminal responses by the fixed AgentStatus/FileList runtime adapter.
 #[allow(
     clippy::too_many_arguments,
     reason = "authenticated connection, legacy policy and protocol snapshots remain explicit"
@@ -97,8 +97,12 @@ where
     };
 
     let response = if payload_command_code(&frame) == Some(LOCAL_MANAGEMENT_BRIDGE_COMMAND_CODE) {
-        process_authenticated_linux_agent_status_management(&frame, connection, status_snapshot)
-            .map_err(LocalAgentStatusManagementBoundaryError::ManagementResponse)?
+        process_authenticated_linux_agent_status_file_list_management(
+            &frame,
+            connection,
+            status_snapshot,
+        )
+        .map_err(LocalAgentStatusManagementBoundaryError::ManagementResponse)?
     } else {
         let request = match decode_local_command_request_frame(&frame) {
             Ok(request) => request,

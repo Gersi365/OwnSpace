@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use prw_agent::frame_object::LocalIpcFrame;
 use prw_agent::frame_object::reader::read_frame;
+use prw_agent::frame_object::writer::write_frame;
 use prw_agent::local_commands::private_dns_response::decode_success_private_dns_frame;
 use prw_agent::local_commands::private_dns_snapshot::LocalPrivateDnsSnapshot;
 use prw_agent::local_commands::request_frame::stream::write_local_command_request;
@@ -22,6 +23,9 @@ use prw_agent::{
 };
 use rustix::process::geteuid;
 
+use crate::local_management_ipc::{
+    LocalFileListEntry, build_file_list_management_request, decode_file_list_success_body,
+};
 use crate::state::{AgentAvailability, DesktopPresentationState};
 
 const IPC_TIMEOUT: Duration = Duration::from_secs(2);
@@ -78,6 +82,7 @@ pub enum DesktopIpcError {
     ResponseInvalid,
     RequestIdMismatch,
     AgentStatus(LocalAgentResponseStatus),
+    ManagementRequestInvalid,
 }
 
 impl DesktopIpcError {
@@ -98,7 +103,8 @@ impl DesktopIpcError {
             | Self::ResponseReadFailed
             | Self::ResponseInvalid
             | Self::RequestIdMismatch
-            | Self::AgentStatus(_) => AgentAvailability::Error,
+            | Self::AgentStatus(_)
+            | Self::ManagementRequestInvalid => AgentAvailability::Error,
         }
     }
 }
@@ -142,6 +148,7 @@ impl fmt::Display for DesktopIpcError {
                 "Ownspace Agent returned an unexpected success-status error"
             }
             Self::AgentStatus(_) => "Ownspace Agent returned an unknown response status",
+            Self::ManagementRequestInvalid => "Ownspace file-list request is invalid",
         };
         formatter.write_str(message)
     }
@@ -170,6 +177,50 @@ pub fn query_startup() -> StartupProbe {
         status,
         private_dns,
     }
+}
+
+/// Queries one read-only directory listing through the fixed local command-3 `FileList` slice.
+///
+/// Paths are canonical relative paths under the Agent-selected owner-home authority. The
+/// desktop cannot select a host filesystem root and does not issue `FileStat`, download,
+/// mutation, transfer, terminal or forwarding operations here.
+pub fn query_file_list(path: &str) -> Result<Vec<LocalFileListEntry>, DesktopIpcError> {
+    let endpoint = endpoint_from_environment()?;
+    let request_id =
+        LocalIpcRequestId::new(3).map_err(|_| DesktopIpcError::RequestIdGenerationFailed)?;
+    let request = build_file_list_management_request(request_id, path)
+        .map_err(|_| DesktopIpcError::ManagementRequestInvalid)?;
+    let frame = query_prebuilt_success_frame(&endpoint, request_id, &request)?;
+    decode_file_list_success_body(frame.payload().as_bytes())
+        .map_err(|_| DesktopIpcError::ResponseInvalid)
+}
+
+fn query_prebuilt_success_frame(
+    endpoint: &Path,
+    request_id: LocalIpcRequestId,
+    request: &LocalIpcFrame,
+) -> Result<LocalIpcFrame, DesktopIpcError> {
+    let mut stream = UnixStream::connect(endpoint).map_err(|_| DesktopIpcError::ConnectFailed)?;
+    stream
+        .set_read_timeout(Some(IPC_TIMEOUT))
+        .map_err(|_| DesktopIpcError::ConfigureFailed)?;
+    stream
+        .set_write_timeout(Some(IPC_TIMEOUT))
+        .map_err(|_| DesktopIpcError::ConfigureFailed)?;
+
+    write_frame(&mut stream, request).map_err(|_| DesktopIpcError::RequestWriteFailed)?;
+    stream
+        .flush()
+        .map_err(|_| DesktopIpcError::RequestWriteFailed)?;
+
+    let frame = read_frame(&mut stream).map_err(|_| DesktopIpcError::ResponseReadFailed)?;
+    let terminal =
+        validate_terminal_response_frame(&frame).map_err(|_| DesktopIpcError::ResponseInvalid)?;
+    ensure_response_id(request_id, terminal.request_id())?;
+    if !terminal.status().is_success() {
+        return Err(DesktopIpcError::AgentStatus(terminal.status()));
+    }
+    Ok(frame)
 }
 
 fn runtime_root_from_raw(raw: Option<&OsStr>) -> Result<PathBuf, DesktopIpcError> {
@@ -539,5 +590,14 @@ mod tests {
                 message,
             );
         }
+    }
+
+    #[test]
+    fn invalid_file_list_request_has_stable_error_contract() {
+        assert_error_contract(
+            DesktopIpcError::ManagementRequestInvalid,
+            AgentAvailability::Error,
+            "Ownspace file-list request is invalid",
+        );
     }
 }
