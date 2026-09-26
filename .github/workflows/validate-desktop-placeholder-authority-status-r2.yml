@@ -1,0 +1,50 @@
+name: Ownspace desktop placeholder authority status R2
+
+on:
+  push:
+    branches:
+      - validation/desktop-placeholder-authority-status-r2-2026-09-26
+
+permissions:
+  contents: read
+
+jobs:
+  desktop:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 3
+
+      - name: Reconstruct exact candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          base='5bfd65ec3c2bc61447f3d8f5c95e05e595f5a394'
+          test "$(git merge-base "$base" HEAD)" = "$base"
+          test "$(git rev-list --count "$base"..HEAD)" = '2'
+          test "$(git diff --name-only "$base" HEAD | sort)" = "$(printf '%s\n' '.github/validation/desktop-placeholder-authority-status-r2-2026-09-26.patch.b64' '.github/workflows/validate-desktop-placeholder-authority-status-r2.yml' | sort)"
+          printf '%s  %s\n' '27c002fa0d87bad33c37734189234257a634fd3a4d56bd208fa925888b246281' 'apps/desktop/src/ui.rs' | sha256sum -c -
+          base64 --decode .github/validation/desktop-placeholder-authority-status-r2-2026-09-26.patch.b64 > /tmp/candidate.patch
+          printf '%s  %s\n' '428e7e047bee1d5705e0a432c857918c6583c63482f9921de5d2d79bbb705363' '/tmp/candidate.patch' | sha256sum -c -
+          git apply --check /tmp/candidate.patch
+          git apply /tmp/candidate.patch
+          printf '%s  %s\n' '1e8cb425d76d8c9e5b097113abea6bcc350abda67990422491afae9007e50f11' 'apps/desktop/src/ui.rs' | sha256sum -c -
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgtk-4-dev libadwaita-1-dev pkg-config protobuf-compiler
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt --component clippy
+          rustup default 1.97.1
+
+      - name: Validate
+        run: |
+          cargo fmt --all -- --check
+          cargo test -p prw-desktop
+          cargo clippy -p prw-desktop --all-targets -- -D warnings
+          cargo build -p prw-desktop
+          cargo test --workspace
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo build --workspace
