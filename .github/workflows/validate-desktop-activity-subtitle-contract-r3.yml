@@ -1,0 +1,89 @@
+name: Ownspace desktop Activity subtitle contract validation R3
+
+on:
+  push:
+    branches:
+      - validation/desktop-activity-subtitle-contract-r3-2026-09-26
+
+permissions:
+  contents: read
+
+jobs:
+  desktop:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 3
+
+      - name: Verify validation carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_base='70c839299af632c8e5d5e3ffbdf1049764b82c86'
+          test "$(git merge-base "$expected_base" HEAD)" = "$expected_base"
+          test "$(git rev-list --count "$expected_base"..HEAD)" = '2'
+
+          expected_files="$(printf '%s\n' \
+            '.github/validation/desktop-activity-subtitle-contract-r3-2026-09-26.patch' \
+            '.github/workflows/validate-desktop-activity-subtitle-contract-r3.yml' | sort)"
+          actual_files="$(git diff --name-only "$expected_base" HEAD | sort)"
+          test "$actual_files" = "$expected_files"
+
+      - name: Verify authoritative base and apply candidate patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' \
+            'aa1ee9c4b61912e0a7a3c291269491780d4944c0fa197d17c75e5f135aba6941' 'apps/desktop/src/state.rs' \
+            'c394598255383b909058028516f4ce0175428488ded851911d526308beedad37' 'apps/desktop/src/ui.rs' \
+            '2df52ec4ca7ffc06c54a30cbaf41b999fb88228d970b9e5a3db8d55d837a8e11' 'apps/desktop/README.md' \
+            '628628cc5bbcbbec56ec6d46ce0d75f713a5191d711aa434eb4b360d89f671d2' 'apps/desktop/src/ipc.rs' \
+            | sha256sum -c -
+
+          printf '%s  %s\n' \
+            '0f69b8e5481a3b75cba6806194d3c27bd8235ff015c1df3187919933aae27178' \
+            '.github/validation/desktop-activity-subtitle-contract-r3-2026-09-26.patch' \
+            | sha256sum -c -
+
+          git apply --check .github/validation/desktop-activity-subtitle-contract-r3-2026-09-26.patch
+          git apply .github/validation/desktop-activity-subtitle-contract-r3-2026-09-26.patch
+
+          printf '%s  %s\n' \
+            'aa1ee9c4b61912e0a7a3c291269491780d4944c0fa197d17c75e5f135aba6941' 'apps/desktop/src/state.rs' \
+            '27c002fa0d87bad33c37734189234257a634fd3a4d56bd208fa925888b246281' 'apps/desktop/src/ui.rs' \
+            '2df52ec4ca7ffc06c54a30cbaf41b999fb88228d970b9e5a3db8d55d837a8e11' 'apps/desktop/README.md' \
+            '628628cc5bbcbbec56ec6d46ce0d75f713a5191d711aa434eb4b360d89f671d2' 'apps/desktop/src/ipc.rs' \
+            | sha256sum -c -
+
+      - name: Install GTK build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgtk-4-dev libadwaita-1-dev pkg-config protobuf-compiler
+
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt --component clippy
+          rustup default 1.97.1
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Test desktop
+        run: cargo test -p prw-desktop
+
+      - name: Clippy desktop
+        run: cargo clippy -p prw-desktop --all-targets -- -D warnings
+
+      - name: Build desktop
+        run: cargo build -p prw-desktop
+
+      - name: Test workspace
+        run: cargo test --workspace
+
+      - name: Clippy workspace
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Build workspace
+        run: cargo build --workspace
