@@ -1,0 +1,40 @@
+name: Ownspace desktop README placeholder boundary validation
+
+on:
+  push:
+    branches:
+      - validation/desktop-readme-placeholder-boundary-2026-09-26
+
+permissions:
+  contents: read
+
+jobs:
+  docs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 3
+
+      - name: Verify carrier and exact README candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          base='56e6f046881dbd65b2095551839b5e16b9c192a0'
+          test "$(git merge-base "$base" HEAD)" = "$base"
+          test "$(git rev-list --count "$base"..HEAD)" = '2'
+
+          expected_files="$(printf '%s\n'             '.github/validation/desktop-readme-placeholder-boundary-2026-09-26.patch'             '.github/workflows/validate-desktop-readme-placeholder-boundary.yml' | sort)"
+          actual_files="$(git diff --name-only "$base" HEAD | sort)"
+          test "$actual_files" = "$expected_files"
+
+          printf '%s  %s\n'             '2df52ec4ca7ffc06c54a30cbaf41b999fb88228d970b9e5a3db8d55d837a8e11' 'apps/desktop/README.md'             'aa1ee9c4b61912e0a7a3c291269491780d4944c0fa197d17c75e5f135aba6941' 'apps/desktop/src/state.rs'             '1e8cb425d76d8c9e5b097113abea6bcc350abda67990422491afae9007e50f11' 'apps/desktop/src/ui.rs'             '628628cc5bbcbbec56ec6d46ce0d75f713a5191d711aa434eb4b360d89f671d2' 'apps/desktop/src/ipc.rs'             | sha256sum -c -
+
+          printf '%s  %s\n'             '0a90b0a951efd4dc5416a471b9628ae69d63106792c65474a45f1d374ef58fc9'             '.github/validation/desktop-readme-placeholder-boundary-2026-09-26.patch'             | sha256sum -c -
+
+          git apply --check .github/validation/desktop-readme-placeholder-boundary-2026-09-26.patch
+          git apply .github/validation/desktop-readme-placeholder-boundary-2026-09-26.patch
+          git diff --check
+
+          printf '%s  %s\n'             '691cb313d1473fdd0f373029bc260f37d3378633d96ef80921d32f6179fa726a' 'apps/desktop/README.md'             'aa1ee9c4b61912e0a7a3c291269491780d4944c0fa197d17c75e5f135aba6941' 'apps/desktop/src/state.rs'             '1e8cb425d76d8c9e5b097113abea6bcc350abda67990422491afae9007e50f11' 'apps/desktop/src/ui.rs'             '628628cc5bbcbbec56ec6d46ce0d75f713a5191d711aa434eb4b360d89f671d2' 'apps/desktop/src/ipc.rs'             | sha256sum -c -
