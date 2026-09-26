@@ -1,0 +1,223 @@
+diff --git a/apps/desktop/README.md b/apps/desktop/README.md
+index d72aa7b..8ac70bf 100644
+--- a/apps/desktop/README.md
++++ b/apps/desktop/README.md
+@@ -15,7 +15,7 @@ The desktop shell provides:
+ - read-only local Agent availability/runtime presentation;
+ - read-only Private DNS summary presentation;
+ - manual bounded local status refresh that preserves the last rendered status while the read-only probe is active and gives explicit `Refreshing…` progress feedback;
+-- a read-only Settings diagnostics page that shows the local Ownspace Desktop package version and the desktop client’s compiled-in supported local IPC protocol version, exposes both the compatibility-sensitive endpoint contract and the session-resolved candidate endpoint derived through the existing `LocalIpcContract`, with a local-only copy action for the resolved path and no Agent configuration mutation;
++- a read-only Settings diagnostics page that shows the local Ownspace Desktop package version, the desktop client’s compiled-in supported local IPC protocol version, and the latest Agent-reported local IPC protocol version from the same bounded `GetAgentStatus` snapshot used by Overview and Activity; it also exposes both the compatibility-sensitive endpoint contract and the session-resolved candidate endpoint derived through the existing `LocalIpcContract`, with a local-only copy action for the resolved path and no Agent configuration mutation;
+ - a read-only Activity page that mirrors the latest local Agent/Private DNS probe snapshot, can trigger the same bounded local refresh as Overview, and can copy the currently rendered snapshot to the local desktop clipboard without persisting history or emitting external telemetry;
+ - explicit offline/error handling, including partial Private DNS query failure visibility;
+ - a bounded worker thread so local Unix-socket reads do not block the GTK main thread.
+@@ -26,7 +26,7 @@ The local control endpoint remains:
+ 
+ `$XDG_RUNTIME_DIR/private-remote-workspace/agent.sock`
+ 
+-Settings also displays the desktop client’s compiled-in supported local IPC protocol version without performing an Agent probe. It displays the session-resolved candidate path when `XDG_RUNTIME_DIR` is available and absolute. The resolved path can be copied to the local desktop clipboard for diagnostics; this is not Remote Desktop clipboard integration. The protocol/version and endpoint displays remain derivation-only, and endpoint trust, availability, connectivity, and live protocol acceptance remain governed by the existing validated IPC path.
++Settings also displays the desktop client’s compiled-in supported local IPC protocol version without performing an Agent probe. Separately, it mirrors the latest Agent-reported local IPC protocol version only from the existing bounded `GetAgentStatus` snapshot; this adds no command or additional socket read and is not itself a compatibility or authorization decision. Settings also displays the session-resolved candidate path when `XDG_RUNTIME_DIR` is available and absolute. The resolved path can be copied to the local desktop clipboard for diagnostics; this is not Remote Desktop clipboard integration. The protocol/version and endpoint displays do not alter endpoint trust, availability, connectivity, live protocol acceptance, or capability authorization, which remain governed by the existing validated IPC path.
+ 
+ That socket path and existing `prw-*` package, service, protocol, filesystem, and related identifiers are compatibility-sensitive internal identifiers. Public product terminology is **Ownspace**; this documentation update does not rename compatibility surfaces.
+ 
+diff --git a/apps/desktop/src/state.rs b/apps/desktop/src/state.rs
+index fcc4c53..1899641 100644
+--- a/apps/desktop/src/state.rs
++++ b/apps/desktop/src/state.rs
+@@ -2,6 +2,7 @@ use prw_agent::local_commands::private_dns_snapshot::LocalPrivateDnsSnapshot;
+ use prw_agent::local_commands::status_snapshot::{
+     LocalAgentRuntimeState, LocalAgentStatusSnapshot,
+ };
++use prw_agent::LocalIpcProtocolVersion;
+ 
+ #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+ pub enum NavigationDestination {
+@@ -129,6 +130,7 @@ impl From<&LocalPrivateDnsSnapshot> for PrivateDnsPresentation {
+ pub struct DesktopPresentationState {
+     pub(crate) availability: AgentAvailability,
+     pub(crate) runtime: Option<AgentRuntimePresentation>,
++    pub(crate) local_ipc_protocol: Option<LocalIpcProtocolVersion>,
+     pub(crate) private_dns: Option<PrivateDnsPresentation>,
+     pub(crate) selected: NavigationDestination,
+     pub(crate) detail: String,
+@@ -139,6 +141,7 @@ impl Default for DesktopPresentationState {
+         Self {
+             availability: AgentAvailability::Unknown,
+             runtime: None,
++            local_ipc_protocol: None,
+             private_dns: None,
+             selected: NavigationDestination::Overview,
+             detail: String::new(),
+@@ -156,12 +159,14 @@ impl DesktopPresentationState {
+     }
+ 
+     pub(crate) fn with_status(mut self, snapshot: LocalAgentStatusSnapshot) -> Self {
++        let protocol_version = snapshot.protocol_version();
+         self.availability = AgentAvailability::Online;
+         self.runtime = Some(snapshot.runtime_state().into());
++        self.local_ipc_protocol = Some(protocol_version);
+         self.detail = format!(
+             "Local IPC protocol {}.{}",
+-            snapshot.protocol_version().major(),
+-            snapshot.protocol_version().minor()
++            protocol_version.major(),
++            protocol_version.minor()
+         );
+         self
+     }
+@@ -207,6 +212,21 @@ impl DesktopPresentationState {
+             },
+         )
+     }
++
++    #[must_use]
++    pub(crate) fn agent_reported_protocol_text(&self) -> String {
++        match (self.local_ipc_protocol, self.availability) {
++            (Some(version), _) => format!(
++                "Agent-reported local IPC protocol {}.{}",
++                version.major(),
++                version.minor()
++            ),
++            (None, AgentAvailability::Connecting) => {
++                "Agent-reported local IPC protocol: Reading local Agent state…".to_owned()
++            }
++            (None, _) => "Agent-reported local IPC protocol: Not available".to_owned(),
++        }
++    }
+ }
+ 
+ const fn yes_no(value: bool) -> &'static str {
+@@ -237,9 +257,14 @@ mod tests {
+ 
+         assert_eq!(state.availability, AgentAvailability::Connecting);
+         assert_eq!(state.runtime, None);
++        assert_eq!(state.local_ipc_protocol, None);
+         assert_eq!(state.private_dns, None);
+         assert_eq!(state.selected, NavigationDestination::Overview);
+         assert_eq!(state.detail, "Reading local Agent state…");
++        assert_eq!(
++            state.agent_reported_protocol_text(),
++            "Agent-reported local IPC protocol: Reading local Agent state…"
++        );
+     }
+ 
+     #[test]
+@@ -266,6 +291,10 @@ mod tests {
+                 .with_status(LocalAgentStatusSnapshot::current(runtime));
+             assert_eq!(state.availability, AgentAvailability::Online);
+             assert_eq!(state.runtime, Some(expected));
++            assert_eq!(
++                state.agent_reported_protocol_text(),
++                "Agent-reported local IPC protocol 1.0"
++            );
+         }
+     }
+ 
+@@ -335,12 +364,17 @@ mod tests {
+ 
+         assert_eq!(state.availability, AgentAvailability::Error);
+         assert_eq!(state.runtime, None);
++        assert_eq!(state.local_ipc_protocol, None);
+         assert_eq!(state.private_dns, None);
+         assert_eq!(state.selected, NavigationDestination::Overview);
+         assert_eq!(
+             state.detail,
+             "Local Agent probe worker ended without a result"
+         );
++        assert_eq!(
++            state.agent_reported_protocol_text(),
++            "Agent-reported local IPC protocol: Not available"
++        );
+     }
+ 
+     #[test]
+diff --git a/apps/desktop/src/ui.rs b/apps/desktop/src/ui.rs
+index cf8d05f..0e640db 100644
+--- a/apps/desktop/src/ui.rs
++++ b/apps/desktop/src/ui.rs
+@@ -21,6 +21,7 @@ struct StatusProbeTargets {
+     activity_agent_label: gtk::Label,
+     activity_dns_label: gtk::Label,
+     activity_detail_label: gtk::Label,
++    settings_agent_protocol_label: gtk::Label,
+     activity_copy_button: gtk::Button,
+     overview_refresh_button: gtk::Button,
+     activity_refresh_button: gtk::Button,
+@@ -61,11 +62,12 @@ pub fn build(app: &adw::Application) {
+         activity_refresh_button,
+         activity_copy_button,
+     ) = activity_page();
++    let (settings, settings_agent_protocol_label) = settings_page();
+ 
+     for destination in NavigationDestination::ALL.into_iter().skip(1) {
+         let page = match destination {
+             NavigationDestination::Activity => activity.clone(),
+-            NavigationDestination::Settings => settings_page(),
++            NavigationDestination::Settings => settings.clone(),
+             _ => placeholder_page(destination),
+         };
+         stack.add_titled(&page, Some(destination.stack_name()), destination.title());
+@@ -90,6 +92,7 @@ pub fn build(app: &adw::Application) {
+         activity_agent_label,
+         activity_dns_label,
+         activity_detail_label,
++        settings_agent_protocol_label,
+         activity_copy_button,
+         overview_refresh_button: refresh_button,
+         activity_refresh_button,
+@@ -236,7 +239,7 @@ fn local_endpoint_contract_text() -> String {
+     format!("$XDG_RUNTIME_DIR/{AGENT_RUNTIME_SUBDIRECTORY}/{AGENT_SOCKET_FILENAME}")
+ }
+ 
+-fn settings_page() -> gtk::Box {
++fn settings_page() -> (gtk::Box, gtk::Label) {
+     let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
+     page.set_margin_top(32);
+     page.set_margin_bottom(32);
+@@ -291,6 +294,27 @@ fn settings_page() -> gtk::Box {
+     protocol_detail.add_css_class("dim-label");
+     page.append(&protocol_detail);
+ 
++    let agent_protocol_title = gtk::Label::new(Some("Latest Agent-reported protocol"));
++    agent_protocol_title.set_xalign(0.0);
++    agent_protocol_title.add_css_class("heading");
++    page.append(&agent_protocol_title);
++
++    let agent_protocol = gtk::Label::new(Some(
++        &DesktopPresentationState::connecting().agent_reported_protocol_text(),
++    ));
++    agent_protocol.set_xalign(0.0);
++    agent_protocol.set_selectable(true);
++    agent_protocol.add_css_class("monospace");
++    page.append(&agent_protocol);
++
++    let agent_protocol_detail = gtk::Label::new(Some(
++        "This value comes only from the existing bounded GetAgentStatus snapshot. It adds no Agent probe and does not by itself assert compatibility, endpoint trust, or capability authorization.",
++    ));
++    agent_protocol_detail.set_xalign(0.0);
++    agent_protocol_detail.set_wrap(true);
++    agent_protocol_detail.add_css_class("dim-label");
++    page.append(&agent_protocol_detail);
++
+     let endpoint_title = gtk::Label::new(Some("Local control endpoint"));
+     endpoint_title.set_xalign(0.0);
+     endpoint_title.add_css_class("heading");
+@@ -342,7 +366,7 @@ fn settings_page() -> gtk::Box {
+     resolved_detail.add_css_class("dim-label");
+     page.append(&resolved_detail);
+ 
+-    page
++    (page, agent_protocol)
+ }
+ 
+ fn placeholder_page(destination: NavigationDestination) -> gtk::Box {
+@@ -482,6 +506,9 @@ fn render_probe_state(state: &DesktopPresentationState, targets: &StatusProbeTar
+     targets
+         .activity_copy_button
+         .set_label(COPY_SNAPSHOT_IDLE_LABEL);
++    targets
++        .settings_agent_protocol_label
++        .set_text(&state.agent_reported_protocol_text());
+ }
+ 
+ fn set_refresh_controls_busy(
