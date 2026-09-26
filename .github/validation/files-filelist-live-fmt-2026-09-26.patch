@@ -1,0 +1,866 @@
+--- a/crates/prw-agent/src/local_commands/management_agent_status_runtime.rs
++++ b/crates/prw-agent/src/local_commands/management_agent_status_runtime.rs
+@@ -1,21 +1,30 @@
+-//! Narrow command-3 AgentStatus-only runtime adapter.
++//! Narrow command-3 AgentStatus + read-only FileList runtime adapter.
+ //!
+-//! This module intentionally omits filesystem authority, provider lifecycle and
+-//! terminal/forwarding backends. The management policy is fixed inside the adapter:
+-//! `AgentStatusRead` is allowed and every other represented capability is denied.
+-//! Callers cannot widen that policy through runtime assembly.
++//! This module intentionally omits mutable provider lifecycle and terminal/forwarding
++//! backends. The management policy is fixed inside the adapter: `AgentStatusRead` and
++//! `FilesRead` are admitted, then an explicit command gate permits only `AgentStatus`
++//! and `FileList`. `FileStat` and `DownloadChunk` therefore remain unsupported even
++//! though they share `FilesRead`. The FileList authority is anchored to the Agent
++//! user-service `$HOME`, never to `/` or a request-supplied host path.
+ 
+ #![cfg(target_os = "linux")]
+ 
++use std::ffi::OsStr;
++use std::path::PathBuf;
++
++use prw_file_service::FileServiceError;
+ use prw_policy::{BoundedLocalManagementDecisions, BoundedLocalManagementPolicy, Decision};
+ use prw_remote_bridge::BridgeCommand;
+ 
+ use super::LocalAgentResponseStatus;
++use super::management_authority::LocalManagementFilesystemAuthority;
+ use super::management_request::{
+     LocalManagementAdmissionError, admit_authenticated_linux_management_request,
+ };
+ use super::management_response::build_management_provider_response;
+-use super::management_typed_provider_dispatch::LocalManagementTypedProviderResult;
++use super::management_typed_provider_dispatch::{
++    LocalManagementTypedProviderDispatchError, LocalManagementTypedProviderResult,
++};
+ use super::status_snapshot::LocalAgentStatusSnapshot;
+ use super::terminal_response::builder::{
+     LocalTerminalResponseBuildError, build_terminal_response_frame,
+@@ -23,34 +32,52 @@
+ use crate::frame_object::LocalIpcFrame;
+ use crate::linux_identity::authenticated_connection::AuthenticatedLocalLinuxConnection;
+ 
+-const fn agent_status_only_policy() -> BoundedLocalManagementPolicy {
++const fn agent_status_file_list_policy() -> BoundedLocalManagementPolicy {
+     BoundedLocalManagementPolicy::new(BoundedLocalManagementDecisions {
+         agent_status: Decision::Allow,
+         private_dns: Decision::Deny,
+         terminal_open: Decision::Deny,
+         terminal_exec: Decision::Deny,
+-        files_read: Decision::Deny,
++        files_read: Decision::Allow,
+         files_write: Decision::Deny,
+         forwarding_create: Decision::Deny,
+     })
+ }
+ 
+-/// Processes one canonical command-3 request through the fixed AgentStatus-only slice.
++/// Processes one canonical command-3 request through the fixed AgentStatus + FileList slice.
+ ///
+-/// The caller supplies no management policy, filesystem authority or provider lifecycle.
+-/// Canonical admission still binds the request to the authenticated same-UID Linux peer.
+-/// Any represented command other than `AgentStatus` fails closed before a success response.
++/// The caller supplies no management policy or mutable provider lifecycle. Canonical
++/// admission still binds the request to the authenticated same-UID Linux peer.
++/// `FileList` is descriptor-anchored to the Agent user-service `$HOME`; the requested
++/// path remains a canonical relative `RemotePath`. Every other command fails closed.
+ ///
+ /// # Errors
+ ///
+ /// Returns only failures from the existing terminal-response frame builder.
+-pub(super) fn process_authenticated_linux_agent_status_management<S>(
++pub(super) fn process_authenticated_linux_agent_status_file_list_management<S>(
+     frame: &LocalIpcFrame,
+     connection: &AuthenticatedLocalLinuxConnection<S>,
+     agent_status: LocalAgentStatusSnapshot,
+ ) -> Result<LocalIpcFrame, LocalTerminalResponseBuildError> {
++    process_authenticated_linux_agent_status_file_list_management_with_filesystem_factory(
++        frame,
++        connection,
++        agent_status,
++        home_filesystem_authority,
++    )
++}
++
++fn process_authenticated_linux_agent_status_file_list_management_with_filesystem_factory<S, F>(
++    frame: &LocalIpcFrame,
++    connection: &AuthenticatedLocalLinuxConnection<S>,
++    agent_status: LocalAgentStatusSnapshot,
++    open_filesystem: F,
++) -> Result<LocalIpcFrame, LocalTerminalResponseBuildError>
++where
++    F: FnOnce() -> Result<LocalManagementFilesystemAuthority, FileServiceError>,
++{
+     let request_id = frame.header().request_id();
+-    let policy = agent_status_only_policy();
++    let policy = agent_status_file_list_policy();
+     let admission = match admit_authenticated_linux_management_request(frame, connection, &policy) {
+         Ok(admission) => admission,
+         Err(error) => {
+@@ -58,20 +85,55 @@
+         }
+     };
+ 
+-    if !matches!(admission.command(), BridgeCommand::AgentStatus) {
+-        return build_terminal_response_frame(
++    match admission.command() {
++        BridgeCommand::AgentStatus => build_management_provider_response(
++            request_id,
++            Ok(LocalManagementTypedProviderResult::AgentStatus(
++                agent_status,
++            )),
++        ),
++        BridgeCommand::FileList(path) => {
++            let filesystem = match open_filesystem() {
++                Ok(filesystem) => filesystem,
++                Err(_) => {
++                    return build_terminal_response_frame(
++                        request_id,
++                        LocalAgentResponseStatus::InternalError,
++                        &[],
++                    );
++                }
++            };
++            let result = filesystem
++                .root()
++                .list_directory(path)
++                .map(LocalManagementTypedProviderResult::DirectoryEntries)
++                .map_err(LocalManagementTypedProviderDispatchError::File);
++            build_management_provider_response(request_id, result)
++        }
++        _ => build_terminal_response_frame(
+             request_id,
+             LocalAgentResponseStatus::UnsupportedCommand,
+             &[],
+-        );
+-    }
+-
+-    build_management_provider_response(
+-        request_id,
+-        Ok(LocalManagementTypedProviderResult::AgentStatus(
+-            agent_status,
+-        )),
+-    )
++        ),
++    }
++}
++
++fn home_filesystem_authority() -> Result<LocalManagementFilesystemAuthority, FileServiceError> {
++    open_home_filesystem_authority_from_raw(std::env::var_os("HOME").as_deref())
++}
++
++fn open_home_filesystem_authority_from_raw(
++    raw: Option<&OsStr>,
++) -> Result<LocalManagementFilesystemAuthority, FileServiceError> {
++    let raw = raw.ok_or(FileServiceError::InvalidRoot)?;
++    if raw.is_empty() {
++        return Err(FileServiceError::InvalidRoot);
++    }
++    let path = PathBuf::from(raw);
++    if !path.is_absolute() {
++        return Err(FileServiceError::InvalidRoot);
++    }
++    LocalManagementFilesystemAuthority::open_trusted_root(&path)
+ }
+ 
+ const fn admission_error_status(error: LocalManagementAdmissionError) -> LocalAgentResponseStatus {
+@@ -86,12 +148,21 @@
+ 
+ #[cfg(test)]
+ mod tests {
++    use std::ffi::OsStr;
++    use std::fs;
+     use std::os::unix::net::UnixStream;
+-
++    use std::path::PathBuf;
++    use std::sync::atomic::{AtomicU64, Ordering};
++
++    use prw_file_service::RemotePath;
+     use prw_policy::{Capability, Decision, PolicyEvaluator};
+     use prw_remote_bridge::BridgeCommand;
+ 
+-    use super::{agent_status_only_policy, process_authenticated_linux_agent_status_management};
++    use super::{
++        agent_status_file_list_policy, open_home_filesystem_authority_from_raw,
++        process_authenticated_linux_agent_status_file_list_management,
++        process_authenticated_linux_agent_status_file_list_management_with_filesystem_factory,
++    };
+     use crate::LocalIpcRequestId;
+     use crate::linux_identity::authenticated_connection::AuthenticatedLocalLinuxConnection;
+     use crate::local_commands::LocalAgentResponseStatus;
+@@ -105,18 +176,35 @@
+         LocalIpcRequestId::new(value).expect("request id is non-zero")
+     }
+ 
+-    #[test]
+-    fn fixed_policy_allows_only_agent_status() {
+-        let policy = agent_status_only_policy();
++    fn request(request_id: u64, command: &BridgeCommand) -> crate::frame_object::LocalIpcFrame {
++        let bridge = command.encode().expect("command encodes");
++        build_local_management_request_frame(id(request_id), &bridge)
++            .expect("management frame builds")
++    }
++
++    fn test_root() -> PathBuf {
++        static NEXT: AtomicU64 = AtomicU64::new(1);
++        let path = std::env::temp_dir().join(format!(
++            "ownspace-file-list-{}-{}",
++            std::process::id(),
++            NEXT.fetch_add(1, Ordering::Relaxed)
++        ));
++        fs::create_dir(&path).expect("test root creates");
++        path
++    }
++
++    #[test]
++    fn fixed_policy_allows_agent_status_and_files_read_only() {
++        let policy = agent_status_file_list_policy();
+         assert_eq!(
+             policy.evaluate(Capability::AgentStatusRead),
+             Decision::Allow
+         );
++        assert_eq!(policy.evaluate(Capability::FilesRead), Decision::Allow);
+         for capability in [
+             Capability::PrivateDnsConfigRead,
+             Capability::TerminalOpen,
+             Capability::TerminalExec,
+-            Capability::FilesRead,
+             Capability::FilesWrite,
+             Capability::ForwardingCreate,
+             Capability::FilesDelete,
+@@ -125,6 +213,82 @@
+             Capability::PolicyManage,
+         ] {
+             assert_eq!(policy.evaluate(capability), Decision::Deny);
++        }
++    }
++
++    #[test]
++    fn file_list_home_root_requires_nonempty_absolute_path() {
++        assert!(open_home_filesystem_authority_from_raw(None).is_err());
++        assert!(open_home_filesystem_authority_from_raw(Some(OsStr::new(""))).is_err());
++        assert!(open_home_filesystem_authority_from_raw(Some(OsStr::new("relative"))).is_err());
++    }
++
++    #[test]
++    fn file_list_request_uses_only_supplied_descriptor_root_and_returns_directory_entries() {
++        let root = test_root();
++        fs::create_dir(root.join("docs")).expect("directory creates");
++        fs::write(root.join("notes.txt"), b"notes").expect("file creates");
++        let (server, _client) = UnixStream::pair().expect("local pair creates");
++        let connection = AuthenticatedLocalLinuxConnection::try_new(server)
++            .expect("same-UID local pair authenticates");
++        let frame = request(
++            902,
++            &BridgeCommand::FileList(RemotePath::parse("").expect("root path")),
++        );
++        let snapshot = LocalAgentStatusSnapshot::current(LocalAgentRuntimeState::Ready);
++
++        let response =
++            process_authenticated_linux_agent_status_file_list_management_with_filesystem_factory(
++                &frame,
++                &connection,
++                snapshot,
++                || open_home_filesystem_authority_from_raw(Some(root.as_os_str())),
++            )
++            .expect("FileList response builds");
++        let terminal =
++            validate_terminal_response_frame(&response).expect("terminal response validates");
++
++        assert_eq!(terminal.request_id(), id(902));
++        assert_eq!(terminal.status(), LocalAgentResponseStatus::Ok);
++        assert_eq!(response.payload().as_bytes().get(2), Some(&2));
++        fs::remove_dir_all(root).expect("test root removes");
++    }
++
++    #[test]
++    fn other_files_read_commands_remain_unsupported_after_capability_admission() {
++        for (request_id, command) in [
++            (
++                903,
++                BridgeCommand::FileStat(RemotePath::parse("notes.txt").expect("path")),
++            ),
++            (
++                904,
++                BridgeCommand::DownloadChunk {
++                    path: RemotePath::parse("notes.txt").expect("path"),
++                    offset: 0,
++                    requested_len: 1,
++                },
++            ),
++        ] {
++            let (server, _client) = UnixStream::pair().expect("local pair creates");
++            let connection = AuthenticatedLocalLinuxConnection::try_new(server)
++                .expect("same-UID local pair authenticates");
++            let frame = request(request_id, &command);
++            let snapshot = LocalAgentStatusSnapshot::current(LocalAgentRuntimeState::Ready);
++
++            let response = process_authenticated_linux_agent_status_file_list_management_with_filesystem_factory(
++                &frame,
++                &connection,
++                snapshot,
++                || panic!("unsupported command must not acquire filesystem authority"),
++            )
++            .expect("unsupported response builds");
++            let terminal =
++                validate_terminal_response_frame(&response).expect("terminal response validates");
++            assert_eq!(
++                terminal.status(),
++                LocalAgentResponseStatus::UnsupportedCommand
++            );
+         }
+     }
+ 
+@@ -140,9 +304,12 @@
+             .expect("management frame builds");
+         let snapshot = LocalAgentStatusSnapshot::current(LocalAgentRuntimeState::Ready);
+ 
+-        let response =
+-            process_authenticated_linux_agent_status_management(&frame, &connection, snapshot)
+-                .expect("AgentStatus response builds");
++        let response = process_authenticated_linux_agent_status_file_list_management(
++            &frame,
++            &connection,
++            snapshot,
++        )
++        .expect("AgentStatus response builds");
+         let terminal =
+             validate_terminal_response_frame(&response).expect("terminal response validates");
+ 
+--- a/crates/prw-agent/src/local_commands/management_agent_status_boundary.rs
++++ b/crates/prw-agent/src/local_commands/management_agent_status_boundary.rs
+@@ -1,8 +1,8 @@
+-//! Shared local boundary for legacy commands 1/2 plus fixed command-3 `AgentStatus`.
++//! Shared local boundary for legacy commands 1/2 plus fixed command-3 `AgentStatus`/`FileList`.
+ //!
+ //! Generic framing is acquired before command classification. Legacy commands retain
+ //! their existing decoder/policy/responder path. Code 3 is delegated only to the
+-//! fixed AgentStatus-only runtime adapter, which owns no mutable provider authority.
++//! fixed AgentStatus/FileList runtime adapter, which owns no mutable provider lifecycle.
+ 
+ #![cfg(target_os = "linux")]
+ 
+@@ -12,7 +12,7 @@
+ 
+ use super::boundary_request_response_transaction::LocalBoundaryRequestResponseOutcome;
+ use super::inbound_state::LocalInboundRequestState;
+-use super::management_agent_status_runtime::process_authenticated_linux_agent_status_management;
++use super::management_agent_status_runtime::process_authenticated_linux_agent_status_file_list_management;
+ use super::management_request::LOCAL_MANAGEMENT_BRIDGE_COMMAND_CODE;
+ use super::policy_response::{
+     LocalPolicyResponseBuildError, build_policy_gated_read_only_response,
+@@ -39,13 +39,13 @@
+     ReadOnlyDecode(LocalAgentRequestFrameDecodeError),
+     /// Legacy policy-response construction failed before response write.
+     ReadOnlyResponse(LocalPolicyResponseBuildError),
+-    /// Fixed `AgentStatus` management response construction failed before response write.
++    /// Fixed `AgentStatus`/`FileList` management response construction failed before response write.
+     ManagementResponse(LocalTerminalResponseBuildError),
+     /// Guarded response writing failed.
+     ResponseWrite(LocalTerminalResponseWriteError),
+ }
+ 
+-/// Processes one clean-EOF-aware local request with an AgentStatus-only command-3 slice.
++/// Processes one clean-EOF-aware local request with an AgentStatus/FileList-only command-3 slice.
+ ///
+ /// Command 3 receives no caller-supplied management policy or provider context. Commands
+ /// 1/2 retain the existing read-only evaluator and exact response path.
+@@ -54,7 +54,7 @@
+ ///
+ /// Preserves generic frame/read poisoning, legacy decode failures and guarded response
+ /// write failures. Canonical command-3 admission failures are encoded as correlated
+-/// terminal responses by the fixed AgentStatus-only runtime adapter.
++/// terminal responses by the fixed AgentStatus/FileList runtime adapter.
+ #[allow(
+     clippy::too_many_arguments,
+     reason = "authenticated connection, legacy policy and protocol snapshots remain explicit"
+@@ -97,8 +97,12 @@
+     };
+ 
+     let response = if payload_command_code(&frame) == Some(LOCAL_MANAGEMENT_BRIDGE_COMMAND_CODE) {
+-        process_authenticated_linux_agent_status_management(&frame, connection, status_snapshot)
+-            .map_err(LocalAgentStatusManagementBoundaryError::ManagementResponse)?
++        process_authenticated_linux_agent_status_file_list_management(
++            &frame,
++            connection,
++            status_snapshot,
++        )
++        .map_err(LocalAgentStatusManagementBoundaryError::ManagementResponse)?
+     } else {
+         let request = match decode_local_command_request_frame(&frame) {
+             Ok(request) => request,
+--- a/apps/desktop/src/local_management_ipc.rs
++++ b/apps/desktop/src/local_management_ipc.rs
+@@ -10,6 +10,7 @@
+         LocalManagementRequestBuildError, build_local_management_request_frame,
+     },
+ };
++use prw_file_service::{MAX_DIRECTORY_ENTRIES, RemotePath};
+ use prw_remote_bridge::{BridgeCommand, RemoteBridgeError};
+ 
+ /// Pure client-side failure while composing one typed local management request.
+@@ -19,6 +20,8 @@
+     Bridge(RemoteBridgeError),
+     /// Agent-owned local command-3 framing rejected the encoded body.
+     Local(LocalManagementRequestBuildError),
++    /// The requested file-list path is not a canonical relative remote path.
++    InvalidFilePath,
+ }
+ 
+ /// Encodes one existing typed bridge command and wraps it in the Agent-owned
+@@ -42,6 +45,107 @@
+         .map_err(LocalManagementClientError::Local)
+ }
+ 
++/// One decoded read-only file-list entry returned by the Agent.
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub(crate) struct LocalFileListEntry {
++    name: String,
++    kind: LocalFileListEntryKind,
++}
++
++impl LocalFileListEntry {
++    #[must_use]
++    pub(crate) fn display_text(&self) -> String {
++        match self.kind {
++            LocalFileListEntryKind::RegularFile => self.name.clone(),
++            LocalFileListEntryKind::Directory => format!("{}/", self.name),
++            LocalFileListEntryKind::SymbolicLink => format!("{} [symlink]", self.name),
++            LocalFileListEntryKind::Other => format!("{} [other]", self.name),
++        }
++    }
++}
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++enum LocalFileListEntryKind {
++    RegularFile,
++    Directory,
++    SymbolicLink,
++    Other,
++}
++
++/// Fail-closed decoder error for one successful directory-list response body.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub(crate) enum LocalFileListDecodeError {
++    MissingResult,
++    UnexpectedResult,
++    EntryCount,
++    EntryType,
++    EntryLength,
++    EntryUtf8,
++    TrailingBytes,
++}
++
++/// Builds the only live management request enabled by the desktop Files surface.
++pub(crate) fn build_file_list_management_request(
++    request_id: LocalIpcRequestId,
++    path: &str,
++) -> Result<LocalIpcFrame, LocalManagementClientError> {
++    let path = RemotePath::parse(path).map_err(|_| LocalManagementClientError::InvalidFilePath)?;
++    build_bridge_management_request(request_id, &BridgeCommand::FileList(path))
++}
++
++/// Decodes the command-specific body after the common two-byte success status prefix.
++pub(crate) fn decode_file_list_success_body(
++    payload: &[u8],
++) -> Result<Vec<LocalFileListEntry>, LocalFileListDecodeError> {
++    const STATUS_PREFIX_LENGTH: usize = 2;
++    const DIRECTORY_ENTRIES_RESULT: u8 = 2;
++
++    let body = payload
++        .get(STATUS_PREFIX_LENGTH..)
++        .ok_or(LocalFileListDecodeError::MissingResult)?;
++    if body.first().copied() != Some(DIRECTORY_ENTRIES_RESULT) {
++        return Err(LocalFileListDecodeError::UnexpectedResult);
++    }
++    let count_bytes = body.get(1..3).ok_or(LocalFileListDecodeError::EntryCount)?;
++    let count = usize::from(u16::from_be_bytes([count_bytes[0], count_bytes[1]]));
++    if count > MAX_DIRECTORY_ENTRIES {
++        return Err(LocalFileListDecodeError::EntryCount);
++    }
++
++    let mut cursor = 3_usize;
++    let mut entries = Vec::with_capacity(count);
++    for _ in 0..count {
++        let kind = match body.get(cursor).copied() {
++            Some(1) => LocalFileListEntryKind::RegularFile,
++            Some(2) => LocalFileListEntryKind::Directory,
++            Some(3) => LocalFileListEntryKind::SymbolicLink,
++            Some(4) => LocalFileListEntryKind::Other,
++            _ => return Err(LocalFileListDecodeError::EntryType),
++        };
++        cursor += 1;
++        let len_bytes = body
++            .get(cursor..cursor + 2)
++            .ok_or(LocalFileListDecodeError::EntryLength)?;
++        let name_len = usize::from(u16::from_be_bytes([len_bytes[0], len_bytes[1]]));
++        cursor += 2;
++        let name_bytes = body
++            .get(cursor..cursor + name_len)
++            .ok_or(LocalFileListDecodeError::EntryLength)?;
++        let name = std::str::from_utf8(name_bytes)
++            .map_err(|_| LocalFileListDecodeError::EntryUtf8)?
++            .to_owned();
++        if name.is_empty() {
++            return Err(LocalFileListDecodeError::EntryLength);
++        }
++        cursor += name_len;
++        entries.push(LocalFileListEntry { name, kind });
++    }
++    if cursor != body.len() {
++        return Err(LocalFileListDecodeError::TrailingBytes);
++    }
++    Ok(entries)
++}
++
+ #[cfg(test)]
+ mod tests {
+     use std::net::{IpAddr, Ipv4Addr};
+@@ -62,7 +166,10 @@
+     use prw_remote_bridge::BridgeCommand;
+     use prw_terminal::{TerminalGeometry, TerminalProfile, TerminalSessionId};
+ 
+-    use super::build_bridge_management_request;
++    use super::{
++        LocalManagementClientError, build_bridge_management_request,
++        build_file_list_management_request, decode_file_list_success_body,
++    };
+ 
+     fn id(value: u64) -> LocalIpcRequestId {
+         LocalIpcRequestId::new(value).expect("non-zero request id")
+@@ -157,4 +264,32 @@
+             LOCAL_MANAGEMENT_REQUEST_PREFIX_LENGTH + bridge_payload.len()
+         );
+     }
+-}
++
++    #[test]
++    fn live_file_list_builder_accepts_root_and_rejects_noncanonical_paths() {
++        let root = build_file_list_management_request(id(156), "").expect("root listing builds");
++        let local = decode_local_management_request_frame(&root).expect("local envelope decodes");
++        assert_eq!(
++            BridgeCommand::decode(local.bridge_payload()).expect("bridge decodes"),
++            BridgeCommand::FileList(RemotePath::parse("").expect("root path"))
++        );
++        assert!(matches!(
++            build_file_list_management_request(id(157), "../escape"),
++            Err(LocalManagementClientError::InvalidFilePath)
++        ));
++    }
++
++    #[test]
++    fn directory_entry_success_body_decodes_types_and_rejects_trailing_bytes() {
++        let payload = [
++            0, 0, 2, 0, 2, 2, 0, 4, b'd', b'o', b'c', b's', 1, 0, 5, b'n', b'o', b't', b'e', b's',
++        ];
++        let entries = decode_file_list_success_body(&payload).expect("directory body decodes");
++        assert_eq!(entries[0].display_text(), "docs/");
++        assert_eq!(entries[1].display_text(), "notes");
++
++        let mut trailing = payload.to_vec();
++        trailing.push(9);
++        assert!(decode_file_list_success_body(&trailing).is_err());
++    }
++}
+--- a/apps/desktop/src/ipc.rs
++++ b/apps/desktop/src/ipc.rs
+@@ -10,6 +10,7 @@
+ 
+ use prw_agent::frame_object::LocalIpcFrame;
+ use prw_agent::frame_object::reader::read_frame;
++use prw_agent::frame_object::writer::write_frame;
+ use prw_agent::local_commands::private_dns_response::decode_success_private_dns_frame;
+ use prw_agent::local_commands::private_dns_snapshot::LocalPrivateDnsSnapshot;
+ use prw_agent::local_commands::request_frame::stream::write_local_command_request;
+@@ -22,6 +23,9 @@
+ };
+ use rustix::process::geteuid;
+ 
++use crate::local_management_ipc::{
++    LocalFileListEntry, build_file_list_management_request, decode_file_list_success_body,
++};
+ use crate::state::{AgentAvailability, DesktopPresentationState};
+ 
+ const IPC_TIMEOUT: Duration = Duration::from_secs(2);
+@@ -78,6 +82,7 @@
+     ResponseInvalid,
+     RequestIdMismatch,
+     AgentStatus(LocalAgentResponseStatus),
++    ManagementRequestInvalid,
+ }
+ 
+ impl DesktopIpcError {
+@@ -98,7 +103,8 @@
+             | Self::ResponseReadFailed
+             | Self::ResponseInvalid
+             | Self::RequestIdMismatch
+-            | Self::AgentStatus(_) => AgentAvailability::Error,
++            | Self::AgentStatus(_)
++            | Self::ManagementRequestInvalid => AgentAvailability::Error,
+         }
+     }
+ }
+@@ -142,6 +148,7 @@
+                 "Ownspace Agent returned an unexpected success-status error"
+             }
+             Self::AgentStatus(_) => "Ownspace Agent returned an unknown response status",
++            Self::ManagementRequestInvalid => "Ownspace file-list request is invalid",
+         };
+         formatter.write_str(message)
+     }
+@@ -170,6 +177,50 @@
+         status,
+         private_dns,
+     }
++}
++
++/// Queries one read-only directory listing through the fixed local command-3 FileList slice.
++///
++/// Paths are canonical relative paths under the Agent-selected owner-home authority. The
++/// desktop cannot select a host filesystem root and does not issue FileStat, download,
++/// mutation, transfer, terminal or forwarding operations here.
++pub(crate) fn query_file_list(path: &str) -> Result<Vec<LocalFileListEntry>, DesktopIpcError> {
++    let endpoint = endpoint_from_environment()?;
++    let request_id =
++        LocalIpcRequestId::new(3).map_err(|_| DesktopIpcError::RequestIdGenerationFailed)?;
++    let request = build_file_list_management_request(request_id, path)
++        .map_err(|_| DesktopIpcError::ManagementRequestInvalid)?;
++    let frame = query_prebuilt_success_frame(&endpoint, request_id, &request)?;
++    decode_file_list_success_body(frame.payload().as_bytes())
++        .map_err(|_| DesktopIpcError::ResponseInvalid)
++}
++
++fn query_prebuilt_success_frame(
++    endpoint: &Path,
++    request_id: LocalIpcRequestId,
++    request: &LocalIpcFrame,
++) -> Result<LocalIpcFrame, DesktopIpcError> {
++    let mut stream = UnixStream::connect(endpoint).map_err(|_| DesktopIpcError::ConnectFailed)?;
++    stream
++        .set_read_timeout(Some(IPC_TIMEOUT))
++        .map_err(|_| DesktopIpcError::ConfigureFailed)?;
++    stream
++        .set_write_timeout(Some(IPC_TIMEOUT))
++        .map_err(|_| DesktopIpcError::ConfigureFailed)?;
++
++    write_frame(&mut stream, request).map_err(|_| DesktopIpcError::RequestWriteFailed)?;
++    stream
++        .flush()
++        .map_err(|_| DesktopIpcError::RequestWriteFailed)?;
++
++    let frame = read_frame(&mut stream).map_err(|_| DesktopIpcError::ResponseReadFailed)?;
++    let terminal =
++        validate_terminal_response_frame(&frame).map_err(|_| DesktopIpcError::ResponseInvalid)?;
++    ensure_response_id(request_id, terminal.request_id())?;
++    if !terminal.status().is_success() {
++        return Err(DesktopIpcError::AgentStatus(terminal.status()));
++    }
++    Ok(frame)
+ }
+ 
+ fn runtime_root_from_raw(raw: Option<&OsStr>) -> Result<PathBuf, DesktopIpcError> {
+@@ -540,4 +591,13 @@
+             );
+         }
+     }
+-}
++
++    #[test]
++    fn invalid_file_list_request_has_stable_error_contract() {
++        assert_error_contract(
++            DesktopIpcError::ManagementRequestInvalid,
++            AgentAvailability::Error,
++            "Ownspace file-list request is invalid",
++        );
++    }
++}
+--- a/apps/desktop/src/ui.rs
++++ b/apps/desktop/src/ui.rs
+@@ -13,6 +13,12 @@
+ const COPY_SNAPSHOT_IDLE_LABEL: &str = "Copy current snapshot";
+ const COPY_SNAPSHOT_DONE_LABEL: &str = "Copied";
+ const PLACEHOLDER_STATUS: &str = "No live state source available";
++const FILES_LIST_IDLE_LABEL: &str = "List files";
++const FILES_LIST_BUSY_LABEL: &str = "Listing…";
++const FILES_SUBTITLE: &str = concat!(
++    "Read-only directory listing under the local owner home authority. ",
++    "Paths are relative; this surface does not read file contents, mutate files, transfer data, open terminals, or create forwarding."
++);
+ const MACHINES_SUBTITLE: &str = concat!(
+     "Current local owner-host status from the same bounded Agent snapshot as Overview. ",
+     "This surface does not enumerate remote devices, infer identity from endpoint data, or grant capabilities."
+@@ -84,11 +90,13 @@
+         activity_refresh_button,
+         activity_copy_button,
+     ) = activity_page();
++    let files = files_page();
+     let (settings, settings_agent_protocol_label) = settings_page();
+ 
+     for destination in NavigationDestination::ALL.into_iter().skip(1) {
+         let page = match destination {
+             NavigationDestination::Machines => machines.clone(),
++            NavigationDestination::Files => files.clone(),
+             NavigationDestination::Activity => activity.clone(),
+             NavigationDestination::Settings => settings.clone(),
+             _ => placeholder_page(destination),
+@@ -206,6 +214,111 @@
+     (page, agent_label, dns_label, detail_label, refresh_button)
+ }
+ 
++fn files_page() -> gtk::Box {
++    let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
++    page.set_margin_top(32);
++    page.set_margin_bottom(32);
++    page.set_margin_start(32);
++    page.set_margin_end(32);
++
++    let title = gtk::Label::new(Some("Files"));
++    title.set_xalign(0.0);
++    title.add_css_class("title-1");
++    page.append(&title);
++
++    let subtitle = gtk::Label::new(Some(FILES_SUBTITLE));
++    subtitle.set_xalign(0.0);
++    subtitle.set_wrap(true);
++    subtitle.add_css_class("dim-label");
++    page.append(&subtitle);
++
++    let path_entry = gtk::Entry::new();
++    path_entry.set_placeholder_text(Some("Relative path; blank = home"));
++    page.append(&path_entry);
++
++    let list_button = gtk::Button::with_label(FILES_LIST_IDLE_LABEL);
++    list_button.set_halign(gtk::Align::Start);
++    page.append(&list_button);
++
++    let status = gtk::Label::new(Some("No directory listing requested yet"));
++    status.set_xalign(0.0);
++    status.add_css_class("title-3");
++    page.append(&status);
++
++    let entries = gtk::Label::new(None);
++    entries.set_xalign(0.0);
++    entries.set_yalign(0.0);
++    entries.set_selectable(true);
++    entries.set_wrap(false);
++    page.append(&entries);
++
++    let path_for_click = path_entry.clone();
++    let status_for_click = status.clone();
++    let entries_for_click = entries.clone();
++    list_button.connect_clicked(move |button| {
++        let path = path_for_click.text().to_string();
++        button.set_sensitive(false);
++        button.set_label(FILES_LIST_BUSY_LABEL);
++        status_for_click.set_text("Reading authorized directory listing…");
++        entries_for_click.set_text("");
++
++        let (sender, receiver) = mpsc::sync_channel(1);
++        let spawn_result = std::thread::Builder::new()
++            .name("prw-desktop-readonly-file-list".to_owned())
++            .spawn(move || {
++                let _ = sender.send(ipc::query_file_list(&path));
++            });
++
++        if spawn_result.is_err() {
++            status_for_click.set_text("Unable to start the read-only file-list worker");
++            button.set_sensitive(true);
++            button.set_label(FILES_LIST_IDLE_LABEL);
++            return;
++        }
++
++        let button = button.clone();
++        let status = status_for_click.clone();
++        let entries = entries_for_click.clone();
++        let _source_id = glib::timeout_add_local(Duration::from_millis(75), move || match receiver
++            .try_recv()
++        {
++            Ok(Ok(listing)) => {
++                let rendered = listing
++                    .iter()
++                    .map(crate::local_management_ipc::LocalFileListEntry::display_text)
++                    .collect::<Vec<_>>()
++                    .join("\n");
++                if rendered.is_empty() {
++                    entries.set_text("(empty directory)");
++                } else {
++                    entries.set_text(&rendered);
++                }
++                status.set_text("Read-only listing loaded");
++                button.set_sensitive(true);
++                button.set_label(FILES_LIST_IDLE_LABEL);
++                glib::ControlFlow::Break
++            }
++            Ok(Err(error)) => {
++                entries.set_text("");
++                status.set_text(&format!("Unavailable: {error}"));
++                button.set_sensitive(true);
++                button.set_label(FILES_LIST_IDLE_LABEL);
++                glib::ControlFlow::Break
++            }
++            Err(TryRecvError::Empty) => glib::ControlFlow::Continue,
++            Err(TryRecvError::Disconnected) => {
++                entries.set_text("");
++                status.set_text("Read-only file-list worker ended without a result");
++                button.set_sensitive(true);
++                button.set_label(FILES_LIST_IDLE_LABEL);
++                glib::ControlFlow::Break
++            }
++        });
++    });
++
++    page
++}
++
+ fn activity_page() -> (
+     gtk::Box,
+     gtk::Label,
+@@ -486,7 +599,7 @@
+             "Reserved for authorized terminal, Remote Desktop, and forwarding session presentation when runtime state is available."
+         }
+         NavigationDestination::Files => {
+-            "Reserved for remote browsing and file operations through the existing authenticated file authority."
++            "Files is implemented as a read-only local owner-home directory listing through authenticated command-3 FileList."
+         }
+         NavigationDestination::Transfers => {
+             "Reserved for verified upload/download progress and completion state."
+@@ -640,7 +753,8 @@
+ #[cfg(test)]
+ mod tests {
+     use super::{
+-        ACTIVITY_SUBTITLE, COPY_SNAPSHOT_DONE_LABEL, COPY_SNAPSHOT_IDLE_LABEL, MACHINES_SUBTITLE,
++        ACTIVITY_SUBTITLE, COPY_SNAPSHOT_DONE_LABEL, COPY_SNAPSHOT_IDLE_LABEL,
++        FILES_LIST_BUSY_LABEL, FILES_LIST_IDLE_LABEL, FILES_SUBTITLE, MACHINES_SUBTITLE,
+         NavigationDestination, PLACEHOLDER_STATUS, REFRESH_BUTTON_BUSY_LABEL,
+         REFRESH_BUTTON_IDLE_LABEL, activity_snapshot_clipboard_text,
+         desktop_local_ipc_protocol_text, desktop_version_text, local_endpoint_contract_text,
+@@ -651,6 +765,19 @@
+     fn refresh_button_labels_have_stable_presentation_contract() {
+         assert_eq!(REFRESH_BUTTON_IDLE_LABEL, "Refresh status");
+         assert_eq!(REFRESH_BUTTON_BUSY_LABEL, "Refreshing…");
++    }
++
++    #[test]
++    fn files_surface_labels_lock_read_only_file_list_boundary() {
++        assert_eq!(FILES_LIST_IDLE_LABEL, "List files");
++        assert_eq!(FILES_LIST_BUSY_LABEL, "Listing…");
++        assert_eq!(
++            FILES_SUBTITLE,
++            concat!(
++                "Read-only directory listing under the local owner home authority. ",
++                "Paths are relative; this surface does not read file contents, mutate files, transfer data, open terminals, or create forwarding."
++            )
++        );
+     }
+ 
+     #[test]
+@@ -734,7 +861,7 @@
+             ),
+             (
+                 NavigationDestination::Files,
+-                "Reserved for remote browsing and file operations through the existing authenticated file authority.",
++                "Files is implemented as a read-only local owner-home directory listing through authenticated command-3 FileList.",
+             ),
+             (
+                 NavigationDestination::Transfers,
