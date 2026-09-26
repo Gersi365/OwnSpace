@@ -1,0 +1,77 @@
+name: Ownspace desktop Machines local status UI validation
+
+on:
+  push:
+    branches:
+      - validation/desktop-machines-local-status-ui-2026-09-26
+
+permissions:
+  contents: read
+
+jobs:
+  desktop:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 3
+
+      - name: Verify carrier and exact source candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          base='bdff2b95372477f6b8d73e5855ed2c466257e485'
+          test "$(git merge-base "$base" HEAD)" = "$base"
+          test "$(git rev-list --count "$base"..HEAD)" = '2'
+
+          expected_files="$(printf '%s\n' \
+            '.github/validation/desktop-machines-local-status-ui-2026-09-26.patch' \
+            '.github/workflows/validate-desktop-machines-local-status-ui.yml' | sort)"
+          actual_files="$(git diff --name-only "$base" HEAD | sort)"
+          test "$actual_files" = "$expected_files"
+
+          printf '%s  %s\n' \
+            '1e8cb425d76d8c9e5b097113abea6bcc350abda67990422491afae9007e50f11' 'apps/desktop/src/ui.rs' \
+            'aa1ee9c4b61912e0a7a3c291269491780d4944c0fa197d17c75e5f135aba6941' 'apps/desktop/src/state.rs' \
+            '628628cc5bbcbbec56ec6d46ce0d75f713a5191d711aa434eb4b360d89f671d2' 'apps/desktop/src/ipc.rs' \
+            'f46f9b3ba8027383b7e841e38d7d3013f690df82051d290aa4470fc9da6bcbc0' 'apps/desktop/src/local_management_ipc.rs' \
+            | sha256sum -c -
+
+          printf '%s  %s\n' \
+            'edd2c0a93252de66e41d3a48a6bcba426f1ced71e2422f2b34d8a0b0e7e593be' \
+            '.github/validation/desktop-machines-local-status-ui-2026-09-26.patch' \
+            | sha256sum -c -
+
+          git apply --check .github/validation/desktop-machines-local-status-ui-2026-09-26.patch
+          git apply .github/validation/desktop-machines-local-status-ui-2026-09-26.patch
+          git diff --check
+          test "$(git diff --name-only)" = 'apps/desktop/src/ui.rs'
+          printf '%s  %s\n' \
+            '55f9f5db1f0751730593c278993adcb47d49e014db8e9e32659b28f6d6fa57b3' \
+            'apps/desktop/src/ui.rs' \
+            | sha256sum -c -
+
+      - name: Install desktop system dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libgtk-4-dev libadwaita-1-dev
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: rustfmt, clippy
+
+      - name: Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Desktop compile check
+        run: cargo check --locked -p prw-desktop --all-targets
+
+      - name: Desktop tests
+        run: cargo test --locked -p prw-desktop --all-targets
+
+      - name: Desktop clippy
+        run: cargo clippy --locked -p prw-desktop --all-targets -- -D warnings
