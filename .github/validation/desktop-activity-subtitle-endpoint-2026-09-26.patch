@@ -1,0 +1,13 @@
+diff --git a/apps/desktop/src/ui.rs b/apps/desktop/src/ui.rs
+index 69afc57..e4ae880 100644
+--- a/apps/desktop/src/ui.rs
++++ b/apps/desktop/src/ui.rs
+@@ -162,7 +162,7 @@ fn activity_page() -> (
+     page.append(&title);
+ 
+     let subtitle = gtk::Label::new(Some(
+-        "Latest local diagnostics snapshot. Refresh uses the same bounded local status probe as Overview; copy writes only the currently rendered snapshot to the local desktop clipboard.",
++        "Latest local diagnostics snapshot. Refresh uses the same bounded local status probe as Overview; copy writes the rendered snapshot plus the session endpoint candidate to the local desktop clipboard.",
+     ));
+     subtitle.set_xalign(0.0);
+     subtitle.set_wrap(true);
