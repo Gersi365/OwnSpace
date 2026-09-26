@@ -22,6 +22,6 @@ The current source still uses internal identifiers such as `prw-*`, `com.private
 
 The public application name is **Ownspace**.
 
-## Authority and workflow
+## Workflow authority
 
-The authoritative working source is the `02_Source_Current` folder inside the Ownspace Drive workspace. Development and validation are performed in temporary workspaces created from that Drive snapshot. Results are written back to the Ownspace Drive workspace.
+Permanent Ownspace workflow/process rules are defined only by `OWNSPACE_WORKFLOW_AUTHORITY.md` in the Ownspace Drive workspace.
