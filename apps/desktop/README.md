@@ -15,7 +15,7 @@ The desktop shell provides:
 - read-only local Agent availability/runtime presentation;
 - read-only Private DNS summary presentation;
 - manual bounded local status refresh that preserves the last rendered status while the read-only probe is active and gives explicit `Refreshing…` progress feedback;
-- a read-only Settings diagnostics page that shows the local Ownspace Desktop package version and the desktop client’s compiled-in supported local IPC protocol version, exposes both the compatibility-sensitive endpoint contract and the session-resolved candidate endpoint derived through the existing `LocalIpcContract`, with a local-only copy action for the resolved path and no Agent configuration mutation;
+- a read-only Settings diagnostics page that shows the local Ownspace Desktop package version, the desktop client’s compiled-in supported local IPC protocol version, and the latest Agent-reported local IPC protocol version from the same bounded `GetAgentStatus` snapshot used by Overview and Activity; it also exposes both the compatibility-sensitive endpoint contract and the session-resolved candidate endpoint derived through the existing `LocalIpcContract`, with a local-only copy action for the resolved path and no Agent configuration mutation;
 - a read-only Activity page that mirrors the latest local Agent/Private DNS probe snapshot, can trigger the same bounded local refresh as Overview, and can copy the currently rendered snapshot to the local desktop clipboard without persisting history or emitting external telemetry;
 - explicit offline/error handling, including partial Private DNS query failure visibility;
 - a bounded worker thread so local Unix-socket reads do not block the GTK main thread.
@@ -26,7 +26,7 @@ The local control endpoint remains:
 
 `$XDG_RUNTIME_DIR/private-remote-workspace/agent.sock`
 
-Settings also displays the desktop client’s compiled-in supported local IPC protocol version without performing an Agent probe. It displays the session-resolved candidate path when `XDG_RUNTIME_DIR` is available and absolute. The resolved path can be copied to the local desktop clipboard for diagnostics; this is not Remote Desktop clipboard integration. The protocol/version and endpoint displays remain derivation-only, and endpoint trust, availability, connectivity, and live protocol acceptance remain governed by the existing validated IPC path.
+Settings also displays the desktop client’s compiled-in supported local IPC protocol version without performing an Agent probe. Separately, it mirrors the latest Agent-reported local IPC protocol version only from the existing bounded `GetAgentStatus` snapshot; this adds no command or additional socket read and is not itself a compatibility or authorization decision. Settings also displays the session-resolved candidate path when `XDG_RUNTIME_DIR` is available and absolute. The resolved path can be copied to the local desktop clipboard for diagnostics; this is not Remote Desktop clipboard integration. The protocol/version and endpoint displays do not alter endpoint trust, availability, connectivity, live protocol acceptance, or capability authorization, which remain governed by the existing validated IPC path.
 
 That socket path and existing `prw-*` package, service, protocol, filesystem, and related identifiers are compatibility-sensitive internal identifiers. Public product terminology is **Ownspace**; this documentation update does not rename compatibility surfaces.
 

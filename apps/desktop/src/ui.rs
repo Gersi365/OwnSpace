@@ -21,6 +21,7 @@ struct StatusProbeTargets {
     activity_agent_label: gtk::Label,
     activity_dns_label: gtk::Label,
     activity_detail_label: gtk::Label,
+    settings_agent_protocol_label: gtk::Label,
     activity_copy_button: gtk::Button,
     overview_refresh_button: gtk::Button,
     activity_refresh_button: gtk::Button,
@@ -61,11 +62,12 @@ pub fn build(app: &adw::Application) {
         activity_refresh_button,
         activity_copy_button,
     ) = activity_page();
+    let (settings, settings_agent_protocol_label) = settings_page();
 
     for destination in NavigationDestination::ALL.into_iter().skip(1) {
         let page = match destination {
             NavigationDestination::Activity => activity.clone(),
-            NavigationDestination::Settings => settings_page(),
+            NavigationDestination::Settings => settings.clone(),
             _ => placeholder_page(destination),
         };
         stack.add_titled(&page, Some(destination.stack_name()), destination.title());
@@ -90,6 +92,7 @@ pub fn build(app: &adw::Application) {
         activity_agent_label,
         activity_dns_label,
         activity_detail_label,
+        settings_agent_protocol_label,
         activity_copy_button,
         overview_refresh_button: refresh_button,
         activity_refresh_button,
@@ -236,7 +239,7 @@ fn local_endpoint_contract_text() -> String {
     format!("$XDG_RUNTIME_DIR/{AGENT_RUNTIME_SUBDIRECTORY}/{AGENT_SOCKET_FILENAME}")
 }
 
-fn settings_page() -> gtk::Box {
+fn settings_page() -> (gtk::Box, gtk::Label) {
     let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
     page.set_margin_top(32);
     page.set_margin_bottom(32);
@@ -291,6 +294,8 @@ fn settings_page() -> gtk::Box {
     protocol_detail.add_css_class("dim-label");
     page.append(&protocol_detail);
 
+    let agent_protocol = append_agent_reported_protocol_section(&page);
+
     let endpoint_title = gtk::Label::new(Some("Local control endpoint"));
     endpoint_title.set_xalign(0.0);
     endpoint_title.add_css_class("heading");
@@ -342,7 +347,32 @@ fn settings_page() -> gtk::Box {
     resolved_detail.add_css_class("dim-label");
     page.append(&resolved_detail);
 
-    page
+    (page, agent_protocol)
+}
+
+fn append_agent_reported_protocol_section(page: &gtk::Box) -> gtk::Label {
+    let title = gtk::Label::new(Some("Latest Agent-reported protocol"));
+    title.set_xalign(0.0);
+    title.add_css_class("heading");
+    page.append(&title);
+
+    let protocol = gtk::Label::new(Some(
+        &DesktopPresentationState::connecting().agent_reported_protocol_text(),
+    ));
+    protocol.set_xalign(0.0);
+    protocol.set_selectable(true);
+    protocol.add_css_class("monospace");
+    page.append(&protocol);
+
+    let detail = gtk::Label::new(Some(
+        "This value comes only from the existing bounded GetAgentStatus snapshot. It adds no Agent probe and does not by itself assert compatibility, endpoint trust, or capability authorization.",
+    ));
+    detail.set_xalign(0.0);
+    detail.set_wrap(true);
+    detail.add_css_class("dim-label");
+    page.append(&detail);
+
+    protocol
 }
 
 fn placeholder_page(destination: NavigationDestination) -> gtk::Box {
@@ -482,6 +512,9 @@ fn render_probe_state(state: &DesktopPresentationState, targets: &StatusProbeTar
     targets
         .activity_copy_button
         .set_label(COPY_SNAPSHOT_IDLE_LABEL);
+    targets
+        .settings_agent_protocol_label
+        .set_text(&state.agent_reported_protocol_text());
 }
 
 fn set_refresh_controls_busy(

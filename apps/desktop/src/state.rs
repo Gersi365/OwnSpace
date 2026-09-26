@@ -1,3 +1,4 @@
+use prw_agent::LocalIpcProtocolVersion;
 use prw_agent::local_commands::private_dns_snapshot::LocalPrivateDnsSnapshot;
 use prw_agent::local_commands::status_snapshot::{
     LocalAgentRuntimeState, LocalAgentStatusSnapshot,
@@ -129,6 +130,7 @@ impl From<&LocalPrivateDnsSnapshot> for PrivateDnsPresentation {
 pub struct DesktopPresentationState {
     pub(crate) availability: AgentAvailability,
     pub(crate) runtime: Option<AgentRuntimePresentation>,
+    pub(crate) local_ipc_protocol: Option<LocalIpcProtocolVersion>,
     pub(crate) private_dns: Option<PrivateDnsPresentation>,
     pub(crate) selected: NavigationDestination,
     pub(crate) detail: String,
@@ -139,6 +141,7 @@ impl Default for DesktopPresentationState {
         Self {
             availability: AgentAvailability::Unknown,
             runtime: None,
+            local_ipc_protocol: None,
             private_dns: None,
             selected: NavigationDestination::Overview,
             detail: String::new(),
@@ -156,12 +159,14 @@ impl DesktopPresentationState {
     }
 
     pub(crate) fn with_status(mut self, snapshot: LocalAgentStatusSnapshot) -> Self {
+        let protocol_version = snapshot.protocol_version();
         self.availability = AgentAvailability::Online;
         self.runtime = Some(snapshot.runtime_state().into());
+        self.local_ipc_protocol = Some(protocol_version);
         self.detail = format!(
             "Local IPC protocol {}.{}",
-            snapshot.protocol_version().major(),
-            snapshot.protocol_version().minor()
+            protocol_version.major(),
+            protocol_version.minor()
         );
         self
     }
@@ -207,6 +212,21 @@ impl DesktopPresentationState {
             },
         )
     }
+
+    #[must_use]
+    pub(crate) fn agent_reported_protocol_text(&self) -> String {
+        match (self.local_ipc_protocol, self.availability) {
+            (Some(version), _) => format!(
+                "Agent-reported local IPC protocol {}.{}",
+                version.major(),
+                version.minor()
+            ),
+            (None, AgentAvailability::Connecting) => {
+                "Agent-reported local IPC protocol: Reading local Agent state…".to_owned()
+            }
+            (None, _) => "Agent-reported local IPC protocol: Not available".to_owned(),
+        }
+    }
 }
 
 const fn yes_no(value: bool) -> &'static str {
@@ -237,9 +257,14 @@ mod tests {
 
         assert_eq!(state.availability, AgentAvailability::Connecting);
         assert_eq!(state.runtime, None);
+        assert_eq!(state.local_ipc_protocol, None);
         assert_eq!(state.private_dns, None);
         assert_eq!(state.selected, NavigationDestination::Overview);
         assert_eq!(state.detail, "Reading local Agent state…");
+        assert_eq!(
+            state.agent_reported_protocol_text(),
+            "Agent-reported local IPC protocol: Reading local Agent state…"
+        );
     }
 
     #[test]
@@ -266,6 +291,10 @@ mod tests {
                 .with_status(LocalAgentStatusSnapshot::current(runtime));
             assert_eq!(state.availability, AgentAvailability::Online);
             assert_eq!(state.runtime, Some(expected));
+            assert_eq!(
+                state.agent_reported_protocol_text(),
+                "Agent-reported local IPC protocol 1.0"
+            );
         }
     }
 
@@ -335,11 +364,16 @@ mod tests {
 
         assert_eq!(state.availability, AgentAvailability::Error);
         assert_eq!(state.runtime, None);
+        assert_eq!(state.local_ipc_protocol, None);
         assert_eq!(state.private_dns, None);
         assert_eq!(state.selected, NavigationDestination::Overview);
         assert_eq!(
             state.detail,
             "Local Agent probe worker ended without a result"
+        );
+        assert_eq!(
+            state.agent_reported_protocol_text(),
+            "Agent-reported local IPC protocol: Not available"
         );
     }
 
