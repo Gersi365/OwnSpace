@@ -164,9 +164,10 @@ impl DesktopPresentationState {
         self.runtime = Some(snapshot.runtime_state().into());
         self.local_ipc_protocol = Some(protocol_version);
         self.detail = format!(
-            "Local IPC protocol {}.{}",
+            "Local IPC protocol {}.{}\nCompatibility: {}",
             protocol_version.major(),
-            protocol_version.minor()
+            protocol_version.minor(),
+            agent_reported_protocol_compatibility_label(protocol_version)
         );
         self
     }
@@ -347,7 +348,10 @@ mod tests {
         assert_eq!(state.runtime, Some(AgentRuntimePresentation::Ready));
         assert_eq!(state.selected, NavigationDestination::Files);
         assert_eq!(state.private_dns, Some(expected_dns));
-        assert!(state.detail.starts_with("Local IPC protocol "));
+        assert_eq!(
+            state.detail,
+            "Local IPC protocol 1.0\nCompatibility: Supported by this desktop client"
+        );
     }
 
     #[test]
