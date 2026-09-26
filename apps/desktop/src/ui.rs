@@ -190,11 +190,15 @@ fn activity_page() -> (
     let copy_agent_label = agent_label.clone();
     let copy_dns_label = dns_label.clone();
     let copy_detail_label = detail_label.clone();
+    let copy_endpoint = ipc::endpoint_candidate_from_environment().map_or_else(
+        |error| format!("Unavailable: {error}"),
+        |path| path.display().to_string(),
+    );
     copy_button.connect_clicked(move |button| {
         let agent = copy_agent_label.text().to_string();
         let dns = copy_dns_label.text().to_string();
         let detail = copy_detail_label.text().to_string();
-        let copy_text = activity_snapshot_clipboard_text(&agent, &dns, &detail);
+        let copy_text = activity_snapshot_clipboard_text(&agent, &dns, &detail, &copy_endpoint);
         button.display().clipboard().set_text(&copy_text);
         button.set_label(COPY_SNAPSHOT_DONE_LABEL);
     });
@@ -210,8 +214,15 @@ fn activity_page() -> (
     )
 }
 
-fn activity_snapshot_clipboard_text(agent: &str, dns: &str, detail: &str) -> String {
-    format!("{agent}\n\n{dns}\n\nDetail\n{detail}")
+fn activity_snapshot_clipboard_text(
+    agent: &str,
+    dns: &str,
+    detail: &str,
+    endpoint_candidate: &str,
+) -> String {
+    format!(
+        "{agent}\n\n{dns}\n\nDetail\n{detail}\n\nSession endpoint candidate\n{endpoint_candidate}"
+    )
 }
 
 fn section_label(title: &str) -> gtk::Label {
@@ -567,9 +578,10 @@ mod tests {
             activity_snapshot_clipboard_text(
                 "Agent status\nAvailability: Online\nRuntime: Ready",
                 "Private DNS\nEnabled: Yes",
-                "Local IPC protocol 1.0",
+                "Local IPC protocol 1.0\nCompatibility: Supported by this desktop client",
+                "/run/user/1000/private-remote-workspace/agent.sock",
             ),
-            "Agent status\nAvailability: Online\nRuntime: Ready\n\nPrivate DNS\nEnabled: Yes\n\nDetail\nLocal IPC protocol 1.0"
+            "Agent status\nAvailability: Online\nRuntime: Ready\n\nPrivate DNS\nEnabled: Yes\n\nDetail\nLocal IPC protocol 1.0\nCompatibility: Supported by this desktop client\n\nSession endpoint candidate\n/run/user/1000/private-remote-workspace/agent.sock"
         );
     }
 
