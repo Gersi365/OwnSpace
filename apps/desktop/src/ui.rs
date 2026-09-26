@@ -365,7 +365,7 @@ fn append_agent_reported_protocol_section(page: &gtk::Box) -> gtk::Label {
     page.append(&protocol);
 
     let detail = gtk::Label::new(Some(
-        "This value comes only from the existing bounded GetAgentStatus snapshot. It adds no Agent probe and does not by itself assert compatibility, endpoint trust, or capability authorization.",
+        "This value and compatibility classification come only from the existing bounded GetAgentStatus snapshot and the authoritative LocalIpcProtocolVersion support rule. They add no Agent probe and do not assert endpoint trust or capability authorization.",
     ));
     detail.set_xalign(0.0);
     detail.set_wrap(true);

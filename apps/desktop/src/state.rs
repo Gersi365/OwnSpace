@@ -217,15 +217,26 @@ impl DesktopPresentationState {
     pub(crate) fn agent_reported_protocol_text(&self) -> String {
         match (self.local_ipc_protocol, self.availability) {
             (Some(version), _) => format!(
-                "Agent-reported local IPC protocol {}.{}",
+                "Agent-reported local IPC protocol {}.{}\nCompatibility: {}",
                 version.major(),
-                version.minor()
+                version.minor(),
+                agent_reported_protocol_compatibility_label(version)
             ),
             (None, AgentAvailability::Connecting) => {
                 "Agent-reported local IPC protocol: Reading local Agent state…".to_owned()
             }
             (None, _) => "Agent-reported local IPC protocol: Not available".to_owned(),
         }
+    }
+}
+
+const fn agent_reported_protocol_compatibility_label(
+    version: LocalIpcProtocolVersion,
+) -> &'static str {
+    if version.is_supported() {
+        "Supported by this desktop client"
+    } else {
+        "Not supported by this desktop client"
     }
 }
 
@@ -293,9 +304,25 @@ mod tests {
             assert_eq!(state.runtime, Some(expected));
             assert_eq!(
                 state.agent_reported_protocol_text(),
-                "Agent-reported local IPC protocol 1.0"
+                "Agent-reported local IPC protocol 1.0\nCompatibility: Supported by this desktop client"
             );
         }
+    }
+
+    #[test]
+    fn agent_reported_protocol_compatibility_uses_authoritative_exact_support_rule() {
+        assert_eq!(
+            super::agent_reported_protocol_compatibility_label(
+                prw_agent::LocalIpcProtocolVersion::current(),
+            ),
+            "Supported by this desktop client"
+        );
+        assert_eq!(
+            super::agent_reported_protocol_compatibility_label(
+                prw_agent::LocalIpcProtocolVersion::from_parts(2, 0),
+            ),
+            "Not supported by this desktop client"
+        );
     }
 
     #[test]
