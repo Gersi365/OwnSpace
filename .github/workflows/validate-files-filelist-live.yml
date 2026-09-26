@@ -1,0 +1,79 @@
+name: Ownspace Files FileList live validation
+
+on:
+  push:
+    branches:
+      - validation/files-filelist-live-fmt-2026-09-26
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout validation carrier
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify carrier and exact candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE=6aa9dd82f46ee14e6a0f4981c0fee15c0c59b2d2
+          PATCH=.github/validation/files-filelist-live-fmt-2026-09-26.patch
+          test "$(git merge-base HEAD "$BASE")" = "$BASE"
+          test "$(git rev-list --count "$BASE"..HEAD)" = "2"
+          mapfile -t carrier_files < <(git diff --name-only "$BASE"..HEAD | sort)
+          expected_carrier=(
+            .github/validation/files-filelist-live-fmt-2026-09-26.patch
+            .github/workflows/validate-files-filelist-live.yml
+          )
+          test "${carrier_files[*]}" = "${expected_carrier[*]}"
+          echo '93ecc99a8a79ed34e8f21263f57178757e0e082b4fd45432ede0ad4f9f4cf700  crates/prw-agent/src/local_commands/management_agent_status_runtime.rs' | sha256sum --check
+          echo '70d71670b3b6b83966efdbfdd9416a2a8f3e7867f37780480f1ec3d149e01a94  crates/prw-agent/src/local_commands/management_agent_status_boundary.rs' | sha256sum --check
+          echo 'f46f9b3ba8027383b7e841e38d7d3013f690df82051d290aa4470fc9da6bcbc0  apps/desktop/src/local_management_ipc.rs' | sha256sum --check
+          echo '628628cc5bbcbbec56ec6d46ce0d75f713a5191d711aa434eb4b360d89f671d2  apps/desktop/src/ipc.rs' | sha256sum --check
+          echo '55f9f5db1f0751730593c278993adcb47d49e014db8e9e32659b28f6d6fa57b3  apps/desktop/src/ui.rs' | sha256sum --check
+          echo 'abf98da4e788e8147e19f426f943cc26bbc68a2c0a3f06d94c23695a910e2f5f  .github/validation/files-filelist-live-fmt-2026-09-26.patch' | sha256sum --check
+          git apply --check "$PATCH"
+          git apply "$PATCH"
+          git diff --check
+          mapfile -t changed < <(git diff --name-only | sort)
+          expected_changed=(
+            apps/desktop/src/ipc.rs
+            apps/desktop/src/local_management_ipc.rs
+            apps/desktop/src/ui.rs
+            crates/prw-agent/src/local_commands/management_agent_status_boundary.rs
+            crates/prw-agent/src/local_commands/management_agent_status_runtime.rs
+          )
+          test "${changed[*]}" = "${expected_changed[*]}"
+          echo 'f64b862195dd35ca5abba68201c90db989ef30f6e3fa048dccee7df44fd42745  crates/prw-agent/src/local_commands/management_agent_status_runtime.rs' | sha256sum --check
+          echo '088a1f0c74db6f38efaa01e7246a4dd67f7289c8cd932a580137c581d08a583e  crates/prw-agent/src/local_commands/management_agent_status_boundary.rs' | sha256sum --check
+          echo '009786670703a0063a35dc68c4bdf2c09afbb48281b4139c5eee6ce6b66d98de  apps/desktop/src/local_management_ipc.rs' | sha256sum --check
+          echo 'a56a3b56d2c46f8c7ca4b6a243287be6fd6ef58146c79fa3fbc357d5c84ca155  apps/desktop/src/ipc.rs' | sha256sum --check
+          echo 'd93cd871b829e32eb1139a6ff4e04cbce4f18934ce4b7249be6387ab99f3d288  apps/desktop/src/ui.rs' | sha256sum --check
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config protobuf-compiler libgtk-4-dev libadwaita-1-dev
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: rustfmt, clippy
+
+      - name: Formatting check
+        run: cargo fmt --all -- --check
+
+      - name: Agent and desktop compile check
+        run: cargo check --locked -p prw-agent -p prw-desktop --all-targets
+
+      - name: Agent and desktop tests
+        run: cargo test --locked -p prw-agent -p prw-desktop --all-targets
+
+      - name: Agent and desktop Clippy
+        run: cargo clippy --locked -p prw-agent -p prw-desktop --all-targets -- -D warnings
