@@ -1,0 +1,89 @@
+name: Ownspace desktop Settings Agent-reported IPC validation
+
+on:
+  push:
+    branches:
+      - validation/settings-agent-reported-ipc-2026-09-26
+
+permissions:
+  contents: read
+
+jobs:
+  desktop:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Verify validation carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_parent='6fcf8b1490c322661c501030ed93c194193cc214'
+          actual_parent="$(git rev-parse HEAD^)"
+          test "$actual_parent" = "$expected_parent"
+
+          expected_files="$(printf '%s\n' \
+            '.github/validation/settings-agent-reported-ipc-2026-09-26.patch' \
+            '.github/workflows/validate-settings-agent-reported-ipc.yml' | sort)"
+          actual_files="$(git diff --name-only "$expected_parent" HEAD | sort)"
+          test "$actual_files" = "$expected_files"
+
+      - name: Verify authoritative base and apply candidate patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' \
+            'bdc3a6ef2d987c659cfaec4fe11ffec4906f40542f17766ccdabe3e942d268f8' 'apps/desktop/src/state.rs' \
+            '2d21ff4783a4619074d7833af34fd9947ea72582002d6a75a23d83a88ad7b1b6' 'apps/desktop/src/ui.rs' \
+            'b7a1102214b8076dbaaa382412a1b6595990408dd3f7c33b4ade2b6885306959' 'apps/desktop/README.md' \
+            '628628cc5bbcbbec56ec6d46ce0d75f713a5191d711aa434eb4b360d89f671d2' 'apps/desktop/src/ipc.rs' \
+            | sha256sum -c -
+
+          printf '%s  %s\n' \
+            '574113341a851258ee4f30ddf3143c99ad8056c7c1355db48e7f4083c07970c6' \
+            '.github/validation/settings-agent-reported-ipc-2026-09-26.patch' \
+            | sha256sum -c -
+
+          git apply --check .github/validation/settings-agent-reported-ipc-2026-09-26.patch
+          git apply .github/validation/settings-agent-reported-ipc-2026-09-26.patch
+
+          printf '%s  %s\n' \
+            '30045dde57aaa169eb025cb8f0c497d0e1b8a40844d187b0ce40f44a163de3e6' 'apps/desktop/src/state.rs' \
+            '770e545a0c98d35ec941d92fa5598ba050f170a550c4b50145bbfdf83ff8c282' 'apps/desktop/src/ui.rs' \
+            '25e637878e1b09bf4637492108024edfff02288e2537dc9648b3bee42c4aee30' 'apps/desktop/README.md' \
+            '628628cc5bbcbbec56ec6d46ce0d75f713a5191d711aa434eb4b360d89f671d2' 'apps/desktop/src/ipc.rs' \
+            | sha256sum -c -
+
+      - name: Install GTK build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgtk-4-dev libadwaita-1-dev pkg-config protobuf-compiler
+
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt --component clippy
+          rustup default 1.97.1
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Test desktop
+        run: cargo test -p prw-desktop
+
+      - name: Clippy desktop
+        run: cargo clippy -p prw-desktop --all-targets -- -D warnings
+
+      - name: Build desktop
+        run: cargo build -p prw-desktop
+
+      - name: Test workspace
+        run: cargo test --workspace
+
+      - name: Clippy workspace
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Build workspace
+        run: cargo build --workspace
