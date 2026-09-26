@@ -1,0 +1,42 @@
+diff --git a/apps/desktop/README.md b/apps/desktop/README.md
+index 9c5a820..3c1acfe 100644
+--- a/apps/desktop/README.md
++++ b/apps/desktop/README.md
+@@ -26,7 +26,7 @@ The local control endpoint remains:
+ 
+ `$XDG_RUNTIME_DIR/private-remote-workspace/agent.sock`
+ 
+-Settings also displays the desktop client’s compiled-in supported local IPC protocol version without performing an Agent probe. Separately, it mirrors the latest Agent-reported local IPC protocol version only from the existing bounded `GetAgentStatus` snapshot and classifies that reported version with the existing authoritative `LocalIpcProtocolVersion::is_supported()` rule. This adds no command or additional socket read; the classification is limited to exact local IPC version support and does not assert endpoint trust or capability authorization. Settings also displays the session-resolved candidate path when `XDG_RUNTIME_DIR` is available and absolute. The resolved path can be copied to the local desktop clipboard for diagnostics; this is not Remote Desktop clipboard integration. The protocol/version and endpoint displays do not alter endpoint trust, availability, connectivity, live protocol acceptance, or capability authorization, which remain governed by the existing validated IPC path.
++Settings also displays the desktop client’s compiled-in supported local IPC protocol version without performing an Agent probe. Separately, it mirrors the latest Agent-reported local IPC protocol version only from the existing bounded `GetAgentStatus` snapshot and classifies that reported version with the existing authoritative `LocalIpcProtocolVersion::is_supported()` rule. This adds no command or additional socket read; the classification is limited to exact local IPC version support and does not assert endpoint trust or capability authorization. Overview and Activity reuse that same snapshot and support rule in their rendered protocol detail, so the current snapshot copied from Activity includes the same exact compatibility classification without any additional read. Settings also displays the session-resolved candidate path when `XDG_RUNTIME_DIR` is available and absolute. The resolved path can be copied to the local desktop clipboard for diagnostics; this is not Remote Desktop clipboard integration. The protocol/version and endpoint displays do not alter endpoint trust, availability, connectivity, live protocol acceptance, or capability authorization, which remain governed by the existing validated IPC path.
+ 
+ That socket path and existing `prw-*` package, service, protocol, filesystem, and related identifiers are compatibility-sensitive internal identifiers. Public product terminology is **Ownspace**; this documentation update does not rename compatibility surfaces.
+ 
+diff --git a/apps/desktop/src/state.rs b/apps/desktop/src/state.rs
+index cfdbae5..5d8e7d5 100644
+--- a/apps/desktop/src/state.rs
++++ b/apps/desktop/src/state.rs
+@@ -164,9 +164,10 @@ impl DesktopPresentationState {
+         self.runtime = Some(snapshot.runtime_state().into());
+         self.local_ipc_protocol = Some(protocol_version);
+         self.detail = format!(
+-            "Local IPC protocol {}.{}",
++            "Local IPC protocol {}.{}\nCompatibility: {}",
+             protocol_version.major(),
+-            protocol_version.minor()
++            protocol_version.minor(),
++            agent_reported_protocol_compatibility_label(protocol_version)
+         );
+         self
+     }
+@@ -347,7 +348,10 @@ mod tests {
+         assert_eq!(state.runtime, Some(AgentRuntimePresentation::Ready));
+         assert_eq!(state.selected, NavigationDestination::Files);
+         assert_eq!(state.private_dns, Some(expected_dns));
+-        assert!(state.detail.starts_with("Local IPC protocol "));
++        assert_eq!(
++            state.detail,
++            "Local IPC protocol 1.0\nCompatibility: Supported by this desktop client"
++        );
+     }
+ 
+     #[test]
