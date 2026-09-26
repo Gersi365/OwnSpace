@@ -6,4 +6,4 @@ The files here are source packaging assets only. They do not by themselves insta
 
 Current compatibility identifiers such as `prw-agent`, existing unit names and existing filesystem paths are retained so the current source remains build/runtime compatible during the Ownspace Drive cutover.
 
-Build and installation validation must be performed from a temporary workspace created from the authoritative `02_Source_Current` Drive snapshot. Validation results belong in the Ownspace Drive workspace, not in an external repository or machine-specific workspace.
+Permanent Ownspace workflow/process rules are defined only by `OWNSPACE_WORKFLOW_AUTHORITY.md` in the Ownspace Drive workspace.
