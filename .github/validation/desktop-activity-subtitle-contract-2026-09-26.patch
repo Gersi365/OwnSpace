@@ -1,0 +1,58 @@
+diff --git a/apps/desktop/src/ui.rs b/apps/desktop/src/ui.rs
+index e4ae880..411a5b9 100644
+--- a/apps/desktop/src/ui.rs
++++ b/apps/desktop/src/ui.rs
+@@ -12,6 +12,11 @@ const REFRESH_BUTTON_IDLE_LABEL: &str = "Refresh status";
+ const REFRESH_BUTTON_BUSY_LABEL: &str = "Refreshing…";
+ const COPY_SNAPSHOT_IDLE_LABEL: &str = "Copy current snapshot";
+ const COPY_SNAPSHOT_DONE_LABEL: &str = "Copied";
++const ACTIVITY_SUBTITLE: &str = concat!(
++    "Latest local diagnostics snapshot. ",
++    "Refresh uses the same bounded local status probe as Overview; ",
++    "copy writes the rendered snapshot plus the session endpoint candidate to the local desktop clipboard."
++);
+ 
+ #[derive(Clone)]
+ struct StatusProbeTargets {
+@@ -161,9 +166,7 @@ fn activity_page() -> (
+     title.add_css_class("title-1");
+     page.append(&title);
+ 
+-    let subtitle = gtk::Label::new(Some(
+-        "Latest local diagnostics snapshot. Refresh uses the same bounded local status probe as Overview; copy writes the rendered snapshot plus the session endpoint candidate to the local desktop clipboard.",
+-    ));
++    let subtitle = gtk::Label::new(Some(ACTIVITY_SUBTITLE));
+     subtitle.set_xalign(0.0);
+     subtitle.set_wrap(true);
+     subtitle.add_css_class("dim-label");
+@@ -558,8 +561,9 @@ fn render_state(
+ #[cfg(test)]
+ mod tests {
+     use super::{
+-        COPY_SNAPSHOT_DONE_LABEL, COPY_SNAPSHOT_IDLE_LABEL, NavigationDestination,
+-        REFRESH_BUTTON_BUSY_LABEL, REFRESH_BUTTON_IDLE_LABEL, activity_snapshot_clipboard_text,
++        ACTIVITY_SUBTITLE, COPY_SNAPSHOT_DONE_LABEL, COPY_SNAPSHOT_IDLE_LABEL,
++        NavigationDestination, REFRESH_BUTTON_BUSY_LABEL, REFRESH_BUTTON_IDLE_LABEL,
++        activity_snapshot_clipboard_text,
+         desktop_local_ipc_protocol_text, desktop_version_text, local_endpoint_contract_text,
+         placeholder_description,
+     };
+@@ -570,6 +574,18 @@ mod tests {
+         assert_eq!(REFRESH_BUTTON_BUSY_LABEL, "Refreshing…");
+     }
+ 
++    #[test]
++    fn activity_subtitle_matches_copy_projection_contract() {
++        assert_eq!(
++            ACTIVITY_SUBTITLE,
++            concat!(
++                "Latest local diagnostics snapshot. ",
++                "Refresh uses the same bounded local status probe as Overview; ",
++                "copy writes the rendered snapshot plus the session endpoint candidate to the local desktop clipboard."
++            )
++        );
++    }
++
+     #[test]
+     fn activity_snapshot_clipboard_projection_is_local_text_only() {
+         assert_eq!(COPY_SNAPSHOT_IDLE_LABEL, "Copy current snapshot");
