@@ -13,6 +13,10 @@ const REFRESH_BUTTON_BUSY_LABEL: &str = "Refreshing…";
 const COPY_SNAPSHOT_IDLE_LABEL: &str = "Copy current snapshot";
 const COPY_SNAPSHOT_DONE_LABEL: &str = "Copied";
 const PLACEHOLDER_STATUS: &str = "No live state source available";
+const MACHINES_SUBTITLE: &str = concat!(
+    "Current local owner-host status from the same bounded Agent snapshot as Overview. ",
+    "This surface does not enumerate remote devices, infer identity from endpoint data, or grant capabilities."
+);
 const ACTIVITY_SUBTITLE: &str = concat!(
     "Latest local diagnostics snapshot. ",
     "Refresh uses the same bounded local status probe as Overview; ",
@@ -24,12 +28,16 @@ struct StatusProbeTargets {
     overview_agent_label: gtk::Label,
     overview_dns_label: gtk::Label,
     overview_detail_label: gtk::Label,
+    machines_agent_label: gtk::Label,
+    machines_dns_label: gtk::Label,
+    machines_detail_label: gtk::Label,
     activity_agent_label: gtk::Label,
     activity_dns_label: gtk::Label,
     activity_detail_label: gtk::Label,
     settings_agent_protocol_label: gtk::Label,
     activity_copy_button: gtk::Button,
     overview_refresh_button: gtk::Button,
+    machines_refresh_button: gtk::Button,
     activity_refresh_button: gtk::Button,
 }
 
@@ -61,6 +69,14 @@ pub fn build(app: &adw::Application) {
     );
 
     let (
+        machines,
+        machines_agent_label,
+        machines_dns_label,
+        machines_detail_label,
+        machines_refresh_button,
+    ) = machines_page();
+
+    let (
         activity,
         activity_agent_label,
         activity_dns_label,
@@ -72,6 +88,7 @@ pub fn build(app: &adw::Application) {
 
     for destination in NavigationDestination::ALL.into_iter().skip(1) {
         let page = match destination {
+            NavigationDestination::Machines => machines.clone(),
             NavigationDestination::Activity => activity.clone(),
             NavigationDestination::Settings => settings.clone(),
             _ => placeholder_page(destination),
@@ -95,12 +112,16 @@ pub fn build(app: &adw::Application) {
         overview_agent_label: agent_label,
         overview_dns_label: dns_label,
         overview_detail_label: detail_label,
+        machines_agent_label,
+        machines_dns_label,
+        machines_detail_label,
         activity_agent_label,
         activity_dns_label,
         activity_detail_label,
         settings_agent_protocol_label,
         activity_copy_button,
         overview_refresh_button: refresh_button,
+        machines_refresh_button,
         activity_refresh_button,
     };
     let connecting = DesktopPresentationState::connecting();
@@ -137,6 +158,43 @@ fn overview_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label, gtk::Button
     page.append(&agent_label);
 
     let dns_label = section_label("Private DNS");
+    page.append(&dns_label);
+
+    let detail_label = gtk::Label::new(None);
+    detail_label.set_xalign(0.0);
+    detail_label.set_wrap(true);
+    detail_label.add_css_class("dim-label");
+    page.append(&detail_label);
+
+    (page, agent_label, dns_label, detail_label, refresh_button)
+}
+
+fn machines_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label, gtk::Button) {
+    let page = gtk::Box::new(gtk::Orientation::Vertical, 18);
+    page.set_margin_top(32);
+    page.set_margin_bottom(32);
+    page.set_margin_start(32);
+    page.set_margin_end(32);
+
+    let title = gtk::Label::new(Some("Machines"));
+    title.set_xalign(0.0);
+    title.add_css_class("title-1");
+    page.append(&title);
+
+    let subtitle = gtk::Label::new(Some(MACHINES_SUBTITLE));
+    subtitle.set_xalign(0.0);
+    subtitle.set_wrap(true);
+    subtitle.add_css_class("dim-label");
+    page.append(&subtitle);
+
+    let refresh_button = gtk::Button::with_label(REFRESH_BUTTON_IDLE_LABEL);
+    refresh_button.set_halign(gtk::Align::Start);
+    page.append(&refresh_button);
+
+    let agent_label = section_label("Local host Agent");
+    page.append(&agent_label);
+
+    let dns_label = section_label("Local host Private DNS");
     page.append(&dns_label);
 
     let detail_label = gtk::Label::new(None);
@@ -422,7 +480,7 @@ const fn placeholder_description(destination: NavigationDestination) -> &'static
             "Overview is implemented as a read-only local status surface."
         }
         NavigationDestination::Machines => {
-            "Reserved for enrolled-device and reachability presentation. Endpoint data is not identity or authorization."
+            "Machines uses the existing bounded local Agent snapshot for this host only; it does not enumerate remote devices or grant capabilities."
         }
         NavigationDestination::Sessions => {
             "Reserved for authorized terminal, Remote Desktop, and forwarding session presentation when runtime state is available."
@@ -448,6 +506,11 @@ fn connect_refresh_controls(targets: &StatusProbeTargets) {
         .overview_refresh_button
         .connect_clicked(move |_| start_startup_probe(overview_targets.clone()));
 
+    let machines_targets = targets.clone();
+    targets
+        .machines_refresh_button
+        .connect_clicked(move |_| start_startup_probe(machines_targets.clone()));
+
     let activity_targets = targets.clone();
     targets
         .activity_refresh_button
@@ -457,6 +520,7 @@ fn connect_refresh_controls(targets: &StatusProbeTargets) {
 fn start_startup_probe(targets: StatusProbeTargets) {
     set_refresh_controls_busy(
         &targets.overview_refresh_button,
+        &targets.machines_refresh_button,
         &targets.activity_refresh_button,
         true,
     );
@@ -475,6 +539,7 @@ fn start_startup_probe(targets: StatusProbeTargets) {
         render_probe_state(&state, &targets);
         set_refresh_controls_busy(
             &targets.overview_refresh_button,
+            &targets.machines_refresh_button,
             &targets.activity_refresh_button,
             false,
         );
@@ -488,6 +553,7 @@ fn start_startup_probe(targets: StatusProbeTargets) {
                 render_probe_state(&state, &targets);
                 set_refresh_controls_busy(
                     &targets.overview_refresh_button,
+                    &targets.machines_refresh_button,
                     &targets.activity_refresh_button,
                     false,
                 );
@@ -502,6 +568,7 @@ fn start_startup_probe(targets: StatusProbeTargets) {
                 render_probe_state(&state, &targets);
                 set_refresh_controls_busy(
                     &targets.overview_refresh_button,
+                    &targets.machines_refresh_button,
                     &targets.activity_refresh_button,
                     false,
                 );
@@ -520,6 +587,12 @@ fn render_probe_state(state: &DesktopPresentationState, targets: &StatusProbeTar
     );
     render_state(
         state,
+        &targets.machines_agent_label,
+        &targets.machines_dns_label,
+        &targets.machines_detail_label,
+    );
+    render_state(
+        state,
         &targets.activity_agent_label,
         &targets.activity_dns_label,
         &targets.activity_detail_label,
@@ -534,6 +607,7 @@ fn render_probe_state(state: &DesktopPresentationState, targets: &StatusProbeTar
 
 fn set_refresh_controls_busy(
     overview_refresh_button: &gtk::Button,
+    machines_refresh_button: &gtk::Button,
     activity_refresh_button: &gtk::Button,
     busy: bool,
 ) {
@@ -542,7 +616,11 @@ fn set_refresh_controls_busy(
     } else {
         REFRESH_BUTTON_IDLE_LABEL
     };
-    for button in [overview_refresh_button, activity_refresh_button] {
+    for button in [
+        overview_refresh_button,
+        machines_refresh_button,
+        activity_refresh_button,
+    ] {
         button.set_sensitive(!busy);
         button.set_label(label);
     }
@@ -562,7 +640,7 @@ fn render_state(
 #[cfg(test)]
 mod tests {
     use super::{
-        ACTIVITY_SUBTITLE, COPY_SNAPSHOT_DONE_LABEL, COPY_SNAPSHOT_IDLE_LABEL,
+        ACTIVITY_SUBTITLE, COPY_SNAPSHOT_DONE_LABEL, COPY_SNAPSHOT_IDLE_LABEL, MACHINES_SUBTITLE,
         NavigationDestination, PLACEHOLDER_STATUS, REFRESH_BUTTON_BUSY_LABEL,
         REFRESH_BUTTON_IDLE_LABEL, activity_snapshot_clipboard_text,
         desktop_local_ipc_protocol_text, desktop_version_text, local_endpoint_contract_text,
@@ -573,6 +651,17 @@ mod tests {
     fn refresh_button_labels_have_stable_presentation_contract() {
         assert_eq!(REFRESH_BUTTON_IDLE_LABEL, "Refresh status");
         assert_eq!(REFRESH_BUTTON_BUSY_LABEL, "Refreshing…");
+    }
+
+    #[test]
+    fn machines_subtitle_locks_existing_read_only_snapshot_boundary() {
+        assert_eq!(
+            MACHINES_SUBTITLE,
+            concat!(
+                "Current local owner-host status from the same bounded Agent snapshot as Overview. ",
+                "This surface does not enumerate remote devices, infer identity from endpoint data, or grant capabilities."
+            )
+        );
     }
 
     #[test]
@@ -637,7 +726,7 @@ mod tests {
             ),
             (
                 NavigationDestination::Machines,
-                "Reserved for enrolled-device and reachability presentation. Endpoint data is not identity or authorization.",
+                "Machines uses the existing bounded local Agent snapshot for this host only; it does not enumerate remote devices or grant capabilities.",
             ),
             (
                 NavigationDestination::Sessions,
