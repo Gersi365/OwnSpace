@@ -1,0 +1,76 @@
+name: Ownspace Files directory navigation validation
+
+on:
+  push:
+    branches:
+      - validation/files-directory-nav-2026-09-26
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout validation carrier
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install desktop build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libgtk-4-dev libadwaita-1-dev
+
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt clippy
+          rustup override set 1.97.1
+          rustc --version
+          cargo --version
+          rustfmt --version
+          cargo clippy --version
+
+      - name: Verify carrier and exact candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="ac5f3bf8a99dad928ce2bc4f5ba4245c076e1ffb"
+          PATCH=".github/validation/OWNSPACE_FILES_DIRECTORY_NAV_CANDIDATE_2026-09-26.patch"
+
+          test "$(git merge-base "$BASE" HEAD)" = "$BASE"
+
+          expected_carrier="$(printf '%s\n'             ".github/validation/OWNSPACE_FILES_DIRECTORY_NAV_CANDIDATE_2026-09-26.patch"             ".github/workflows/validate-files-directory-nav.yml" | sort)"
+          actual_carrier="$(git diff --name-only "$BASE"...HEAD | sort)"
+          test "$actual_carrier" = "$expected_carrier"
+
+          echo "d4d8ce37cce6a4298ab8d625045be2bb12b0a12b1851cc62a58831ec0826b3de  $PATCH" | sha256sum -c -
+          echo "474e8ca733a319ba4886e8ed20cab7b6edc7c9225f220be63e40325c85fb5470  apps/desktop/src/local_management_ipc.rs" | sha256sum -c -
+          echo "1e78ab29681ff437e3aa2b3f2a2f632e1c66c441cf24288f0bce72e79e64c95e  apps/desktop/src/ui.rs" | sha256sum -c -
+          echo "4ec37bebda600f75919964fb500b61843f637c4092f9f65a4e6c82ceaae796d4  apps/desktop/src/ipc.rs" | sha256sum -c -
+
+          git apply --check "$PATCH"
+          git apply "$PATCH"
+          git diff --check
+
+          expected_source="$(printf '%s\n'             "apps/desktop/src/local_management_ipc.rs"             "apps/desktop/src/ui.rs" | sort)"
+          actual_source="$(git diff --name-only | sort)"
+          test "$actual_source" = "$expected_source"
+
+          echo "7ff6f71af20d1c66bff1cd8724c4ab5cc2f581c70147781d8e35ffbbe961eb0f  apps/desktop/src/local_management_ipc.rs" | sha256sum -c -
+          echo "3ae59c093b6a613d24eeff007c680bc18801952ae9fa32f4b6cbec626a34f1fe  apps/desktop/src/ui.rs" | sha256sum -c -
+          echo "4ec37bebda600f75919964fb500b61843f637c4092f9f65a4e6c82ceaae796d4  apps/desktop/src/ipc.rs" | sha256sum -c -
+
+      - name: Formatting check
+        run: cargo fmt --check
+
+      - name: Desktop tests
+        run: cargo test --locked -p prw-desktop
+
+      - name: Desktop compile check
+        run: cargo check --locked -p prw-desktop
+
+      - name: Desktop Clippy
+        run: cargo clippy --locked -p prw-desktop --all-targets -- -D warnings
