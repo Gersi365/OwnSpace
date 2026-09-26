@@ -1,4 +1,4 @@
-# PRW Android Application
+# Ownspace Android Application
 
 Phase 149 completes the currently planned non-production Android functional-client slices.
 
