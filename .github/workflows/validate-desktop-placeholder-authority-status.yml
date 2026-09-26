@@ -1,0 +1,89 @@
+name: Ownspace desktop placeholder authority status validation
+
+on:
+  push:
+    branches:
+      - validation/desktop-placeholder-authority-status-2026-09-26
+
+permissions:
+  contents: read
+
+jobs:
+  desktop:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 3
+
+      - name: Verify validation carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_base='5bfd65ec3c2bc61447f3d8f5c95e05e595f5a394'
+          test "$(git merge-base "$expected_base" HEAD)" = "$expected_base"
+          test "$(git rev-list --count "$expected_base"..HEAD)" = '2'
+
+          expected_files="$(printf '%s\n' \
+            '.github/validation/desktop-placeholder-authority-status-2026-09-26.patch' \
+            '.github/workflows/validate-desktop-placeholder-authority-status.yml' | sort)"
+          actual_files="$(git diff --name-only "$expected_base" HEAD | sort)"
+          test "$actual_files" = "$expected_files"
+
+      - name: Verify authoritative base and apply candidate patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' \
+            'aa1ee9c4b61912e0a7a3c291269491780d4944c0fa197d17c75e5f135aba6941' 'apps/desktop/src/state.rs' \
+            '27c002fa0d87bad33c37734189234257a634fd3a4d56bd208fa925888b246281' 'apps/desktop/src/ui.rs' \
+            '2df52ec4ca7ffc06c54a30cbaf41b999fb88228d970b9e5a3db8d55d837a8e11' 'apps/desktop/README.md' \
+            '628628cc5bbcbbec56ec6d46ce0d75f713a5191d711aa434eb4b360d89f671d2' 'apps/desktop/src/ipc.rs' \
+            | sha256sum -c -
+
+          printf '%s  %s\n' \
+            '383c67a39249f52716d4432561365207a4182314e189c5a944ef15b3850d6e5f' \
+            '.github/validation/desktop-placeholder-authority-status-2026-09-26.patch' \
+            | sha256sum -c -
+
+          git apply --check .github/validation/desktop-placeholder-authority-status-2026-09-26.patch
+          git apply .github/validation/desktop-placeholder-authority-status-2026-09-26.patch
+
+          printf '%s  %s\n' \
+            'aa1ee9c4b61912e0a7a3c291269491780d4944c0fa197d17c75e5f135aba6941' 'apps/desktop/src/state.rs' \
+            'e47bb8870839aa80fa316e8bf04e2e9123557786faabfe8c1ca26afa3e805b38' 'apps/desktop/src/ui.rs' \
+            '2df52ec4ca7ffc06c54a30cbaf41b999fb88228d970b9e5a3db8d55d837a8e11' 'apps/desktop/README.md' \
+            '628628cc5bbcbbec56ec6d46ce0d75f713a5191d711aa434eb4b360d89f671d2' 'apps/desktop/src/ipc.rs' \
+            | sha256sum -c -
+
+      - name: Install GTK build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgtk-4-dev libadwaita-1-dev pkg-config protobuf-compiler
+
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt --component clippy
+          rustup default 1.97.1
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Test desktop
+        run: cargo test -p prw-desktop
+
+      - name: Clippy desktop
+        run: cargo clippy -p prw-desktop --all-targets -- -D warnings
+
+      - name: Build desktop
+        run: cargo build -p prw-desktop
+
+      - name: Test workspace
+        run: cargo test --workspace
+
+      - name: Clippy workspace
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Build workspace
+        run: cargo build --workspace
