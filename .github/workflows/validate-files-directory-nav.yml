@@ -42,7 +42,9 @@ jobs:
 
           test "$(git merge-base "$BASE" HEAD)" = "$BASE"
 
-          expected_carrier="$(printf '%s\n'             ".github/validation/OWNSPACE_FILES_DIRECTORY_NAV_CANDIDATE_2026-09-26.patch"             ".github/workflows/validate-files-directory-nav.yml" | sort)"
+          expected_carrier="$(printf '%s\n' \
+            ".github/validation/OWNSPACE_FILES_DIRECTORY_NAV_CANDIDATE_2026-09-26.patch" \
+            ".github/workflows/validate-files-directory-nav.yml" | sort)"
           actual_carrier="$(git diff --name-only "$BASE"...HEAD | sort)"
           test "$actual_carrier" = "$expected_carrier"
 
@@ -53,14 +55,53 @@ jobs:
 
           git apply --check "$PATCH"
           git apply "$PATCH"
+
+          echo "7ff6f71af20d1c66bff1cd8724c4ab5cc2f581c70147781d8e35ffbbe961eb0f  apps/desktop/src/local_management_ipc.rs" | sha256sum -c -
+          echo "3ae59c093b6a613d24eeff007c680bc18801952ae9fa32f4b6cbec626a34f1fe  apps/desktop/src/ui.rs" | sha256sum -c -
+
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("apps/desktop/src/ui.rs")
+          text = path.read_text()
+          replacements = [
+              (
+                  "fn append_file_list_entry(targets: &FilesPageTargets, parent_path: &str, entry: LocalFileListEntry) {",
+                  "fn append_file_list_entry(\n    targets: &FilesPageTargets,\n    parent_path: &str,\n    entry: LocalFileListEntry,\n) {",
+              ),
+              (
+                  '            button.set_tooltip_text(Some("Directory entry cannot form a canonical relative path"));',
+                  '            button.set_tooltip_text(Some(\n                "Directory entry cannot form a canonical relative path",\n            ));',
+              ),
+              (
+                  '    targets.status.set_text("Reading authorized directory listing…");',
+                  '    targets\n        .status\n        .set_text("Reading authorized directory listing…");',
+              ),
+              (
+                  '                poll_targets.status.set_text(&format!("Unavailable: {error}"));',
+                  '                poll_targets\n                    .status\n                    .set_text(&format!("Unavailable: {error}"));',
+              ),
+              (
+                  '        assert_eq!(file_list_parent_path("docs/reports"), Some("docs".to_owned()));',
+                  '        assert_eq!(\n            file_list_parent_path("docs/reports"),\n            Some("docs".to_owned())\n        );',
+              ),
+          ]
+          for old, new in replacements:
+              if text.count(old) != 1:
+                  raise SystemExit(f"unexpected rustfmt correction match count: {old!r}")
+              text = text.replace(old, new)
+          path.write_text(text)
+          PY
+
           git diff --check
 
-          expected_source="$(printf '%s\n'             "apps/desktop/src/local_management_ipc.rs"             "apps/desktop/src/ui.rs" | sort)"
+          expected_source="$(printf '%s\n' \
+            "apps/desktop/src/local_management_ipc.rs" \
+            "apps/desktop/src/ui.rs" | sort)"
           actual_source="$(git diff --name-only | sort)"
           test "$actual_source" = "$expected_source"
 
           echo "7ff6f71af20d1c66bff1cd8724c4ab5cc2f581c70147781d8e35ffbbe961eb0f  apps/desktop/src/local_management_ipc.rs" | sha256sum -c -
-          echo "3ae59c093b6a613d24eeff007c680bc18801952ae9fa32f4b6cbec626a34f1fe  apps/desktop/src/ui.rs" | sha256sum -c -
+          echo "d47063ac72ad017321f8a47dc60f07a99912fc78a39ff248fe9513f2497e4107  apps/desktop/src/ui.rs" | sha256sum -c -
           echo "4ec37bebda600f75919964fb500b61843f637c4092f9f65a4e6c82ceaae796d4  apps/desktop/src/ipc.rs" | sha256sum -c -
 
       - name: Formatting check
