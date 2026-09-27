@@ -1,0 +1,21 @@
+diff --git a/apps/desktop/src/ui.rs b/apps/desktop/src/ui.rs
+index 48cbeea..4d49aea 100644
+--- a/apps/desktop/src/ui.rs
++++ b/apps/desktop/src/ui.rs
+@@ -286,10 +286,12 @@ fn set_file_list_controls_enabled(targets: &FilesPageTargets, enabled: bool) {
+     targets.path_entry.set_sensitive(enabled);
+     targets.list_button.set_sensitive(enabled);
+     targets.home_button.set_sensitive(enabled);
+-    targets.refresh_button.set_sensitive(file_list_refresh_enabled(
+-        enabled,
+-        targets.has_successful_listing.get(),
+-    ));
++    targets
++        .refresh_button
++        .set_sensitive(file_list_refresh_enabled(
++            enabled,
++            targets.has_successful_listing.get(),
++        ));
+     targets
+         .up_button
+         .set_sensitive(enabled && !targets.current_path.borrow().is_empty());
