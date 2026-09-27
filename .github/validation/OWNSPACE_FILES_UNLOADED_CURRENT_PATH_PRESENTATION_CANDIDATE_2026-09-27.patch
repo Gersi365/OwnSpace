@@ -1,0 +1,38 @@
+diff --git a/apps/desktop/src/ui.rs b/apps/desktop/src/ui.rs
+index 55d9612..3bf9f4d 100644
+--- a/apps/desktop/src/ui.rs
++++ b/apps/desktop/src/ui.rs
+@@ -20,6 +20,7 @@ const PLACEHOLDER_STATUS: &str = "No live state source available";
+ const FILES_LIST_IDLE_LABEL: &str = "List files";
+ const FILES_LIST_BUSY_LABEL: &str = "Listing…";
+ const FILES_REFRESH_LABEL: &str = "Refresh";
++const FILES_PATH_UNLOADED_LABEL: &str = "Current path: not loaded";
+ const FILES_PATH_INVALID_STATUS: &str = "Invalid path: use a canonical relative path under home";
+ const FILES_SUBTITLE: &str = concat!(
+     "Read-only directory listing under the local owner home authority. ",
+@@ -432,7 +433,7 @@ fn files_page() -> gtk::Box {
+     subtitle.add_css_class("dim-label");
+     page.append(&subtitle);
+ 
+-    let current_path_label = gtk::Label::new(Some(&file_list_path_label("")));
++    let current_path_label = gtk::Label::new(Some(FILES_PATH_UNLOADED_LABEL));
+     current_path_label.set_xalign(0.0);
+     current_path_label.add_css_class("title-3");
+     page.append(&current_path_label);
+@@ -975,6 +976,16 @@ mod tests {
+         );
+     }
+ 
++    #[test]
++    fn files_path_labels_distinguish_unloaded_from_committed_paths() {
++        assert_eq!(super::FILES_PATH_UNLOADED_LABEL, "Current path: not loaded");
++        assert_eq!(super::file_list_path_label(""), "Current path: home");
++        assert_eq!(
++            super::file_list_path_label("docs/reports"),
++            "Current path: docs/reports"
++        );
++    }
++
+     #[test]
+     fn files_manual_paths_fail_fast_on_noncanonical_input() {
+         assert!(file_list_manual_path_is_canonical(""));
