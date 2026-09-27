@@ -1,0 +1,55 @@
+name: Ownspace Files Refresh availability gate validation
+
+on:
+  push:
+    branches:
+      - validation/files-refresh-availability-gate-2026-09-27
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout validation carrier
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Verify exact carrier and candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE_SHA='85e8564d4323680088b95a566e16eaef3cc8812a'
+          BASE_UI_SHA256='ff8ca885e3889fe270a0cdd0aaa76388317cdc5c0c5da48ee4101facdc3ecab1'
+          PATCH_SHA256='d6c5f16c008d0a11932e5608279556e2f9911cb1be059ccb049b37747f615513'
+          CANDIDATE_UI_SHA256='e8810f9daa3f75504f68e5d06005fc7e7f250230ee9e8837ae433e1123d61e1b'
+          PATCH='.github/validation/OWNSPACE_FILES_REFRESH_AVAILABILITY_GATE_CANDIDATE_2026-09-27.patch'
+
+          test "$(git rev-parse HEAD^)" = "$BASE_SHA"
+          test "$(sha256sum apps/desktop/src/ui.rs | awk '{print $1}')" = "$BASE_UI_SHA256"
+          test "$(sha256sum "$PATCH" | awk '{print $1}')" = "$PATCH_SHA256"
+
+          git apply --check "$PATCH"
+          git apply "$PATCH"
+          git diff --check
+          test "$(git diff --name-only)" = 'apps/desktop/src/ui.rs'
+          test "$(sha256sum apps/desktop/src/ui.rs | awk '{print $1}')" = "$CANDIDATE_UI_SHA256"
+
+          grep -Fq 'has_successful_listing: Rc<Cell<bool>>' apps/desktop/src/ui.rs
+          grep -Fq 'refresh_button.set_sensitive(false);' apps/desktop/src/ui.rs
+          grep -Fq 'poll_targets.has_successful_listing.set(true);' apps/desktop/src/ui.rs
+          grep -Fq 'assert!(file_list_refresh_enabled(true, true));' apps/desktop/src/ui.rs
+
+      - name: Formatting check
+        run: cargo fmt --check
+
+      - name: Desktop tests
+        run: cargo test --locked -p prw-desktop
+
+      - name: Desktop compile check
+        run: cargo check --locked -p prw-desktop
+
+      - name: Desktop Clippy
+        run: cargo clippy --locked -p prw-desktop --all-targets -- -D warnings
