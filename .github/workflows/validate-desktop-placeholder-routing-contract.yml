@@ -1,0 +1,74 @@
+name: Ownspace Desktop placeholder routing contract validation
+
+on:
+  push:
+    branches:
+      - validation/desktop-placeholder-routing-contract-narrowing-2026-09-27
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout validation carrier
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Verify exact carrier and candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE_SHA='48e59288d37f387d951dfea89c8c03e6d02e1cd5'
+          BASE_UI_SHA256='4322b0a59f8530645c8df243ba7357d25aa5344db9d43328e1e8c3d9cc4376a8'
+          PATCH_SHA256='8edf2371f85a5ff5e860ee4d8cdadb445fc654dc3139db28cd5a81b3bd5d32f5'
+          FINAL_UI_SHA256='82f86b27bb09037393701e272e20977c4a17b892345d25565f24dfa14cc44d39'
+          PATCH='.github/validation/OWNSPACE_DESKTOP_PLACEHOLDER_ROUTING_CONTRACT_CANDIDATE_2026-09-27.patch'
+
+          test "$(git rev-parse HEAD^)" = "$BASE_SHA"
+          test "$(sha256sum apps/desktop/src/ui.rs | awk '{print $1}')" = "$BASE_UI_SHA256"
+          test "$(sha256sum "$PATCH" | awk '{print $1}')" = "$PATCH_SHA256"
+
+          git apply --check "$PATCH"
+          git apply "$PATCH"
+          git diff --check
+          test "$(git diff --name-only)" = 'apps/desktop/src/ui.rs'
+          test "$(sha256sum apps/desktop/src/ui.rs | awk '{print $1}')" = "$FINAL_UI_SHA256"
+
+          grep -Fq 'NavigationDestination::Overview => continue,' apps/desktop/src/ui.rs
+          grep -Fq 'NavigationDestination::Sessions | NavigationDestination::Transfers => {' apps/desktop/src/ui.rs
+          grep -Fq 'NavigationDestination::Machines => machines.clone(),' apps/desktop/src/ui.rs
+          grep -Fq 'NavigationDestination::Files => files.clone(),' apps/desktop/src/ui.rs
+          grep -Fq 'NavigationDestination::Activity => activity.clone(),' apps/desktop/src/ui.rs
+          grep -Fq 'NavigationDestination::Settings => settings.clone(),' apps/desktop/src/ui.rs
+          grep -Fq 'fn placeholder_descriptions_cover_only_session_and_transfer_routes()' apps/desktop/src/ui.rs
+          if grep -Fq '_ => placeholder_page(destination)' apps/desktop/src/ui.rs; then
+            echo 'wildcard placeholder routing unexpectedly remains' >&2
+            exit 1
+          fi
+          if grep -Fq 'fn placeholder_descriptions_have_stable_presentation_contract()' apps/desktop/src/ui.rs; then
+            echo 'broad placeholder-description test unexpectedly remains' >&2
+            exit 1
+          fi
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config protobuf-compiler libgtk-4-dev libadwaita-1-dev
+
+      - name: Focused placeholder contract test
+        run: cargo test --locked -p prw-desktop placeholder_descriptions_cover_only_session_and_transfer_routes -- --nocapture
+
+      - name: Formatting check
+        run: cargo fmt --check
+
+      - name: Desktop tests
+        run: cargo test --locked -p prw-desktop
+
+      - name: Desktop compile check
+        run: cargo check --locked -p prw-desktop
+
+      - name: Desktop Clippy
+        run: cargo clippy --locked -p prw-desktop --all-targets -- -D warnings

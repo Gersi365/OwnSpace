@@ -1,0 +1,94 @@
+diff --git a/apps/desktop/src/ui.rs b/apps/desktop/src/ui.rs
+index 91d13af..5a1f7ad 100644
+--- a/apps/desktop/src/ui.rs
++++ b/apps/desktop/src/ui.rs
+@@ -116,11 +116,14 @@ pub fn build(app: &adw::Application) {
+ 
+     for destination in NavigationDestination::ALL.into_iter().skip(1) {
+         let page = match destination {
++            NavigationDestination::Overview => continue,
+             NavigationDestination::Machines => machines.clone(),
++            NavigationDestination::Sessions | NavigationDestination::Transfers => {
++                placeholder_page(destination)
++            }
+             NavigationDestination::Files => files.clone(),
+             NavigationDestination::Activity => activity.clone(),
+             NavigationDestination::Settings => settings.clone(),
+-            _ => placeholder_page(destination),
+         };
+         stack.add_titled(&page, Some(destination.stack_name()), destination.title());
+     }
+@@ -781,28 +784,20 @@ fn placeholder_page(destination: NavigationDestination) -> gtk::Box {
+     page
+ }
+ 
+-const fn placeholder_description(destination: NavigationDestination) -> &'static str {
++fn placeholder_description(destination: NavigationDestination) -> &'static str {
+     match destination {
+-        NavigationDestination::Overview => {
+-            "Overview is implemented as a read-only local status surface."
+-        }
+-        NavigationDestination::Machines => {
+-            "Machines uses the existing bounded local Agent snapshot for this host only; it does not enumerate remote devices or grant capabilities."
+-        }
+         NavigationDestination::Sessions => {
+             "Reserved for authorized terminal, Remote Desktop, and forwarding session presentation when runtime state is available."
+         }
+-        NavigationDestination::Files => {
+-            "Files is implemented as a read-only local owner-home directory listing through authenticated command-3 FileList."
+-        }
+         NavigationDestination::Transfers => {
+             "Reserved for verified upload/download progress and completion state."
+         }
+-        NavigationDestination::Activity => {
+-            "Reserved for locally available Ownspace activity and diagnostics. No external telemetry is implied."
+-        }
+-        NavigationDestination::Settings => {
+-            "Reserved for explicit owner-controlled local settings and diagnostics; no cloud account dependency is implied."
++        NavigationDestination::Overview
++        | NavigationDestination::Machines
++        | NavigationDestination::Files
++        | NavigationDestination::Activity
++        | NavigationDestination::Settings => {
++            unreachable!("implemented destinations must not use placeholder descriptions")
+         }
+     }
+ }
+@@ -1105,36 +1100,16 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn placeholder_descriptions_have_stable_presentation_contract() {
++    fn placeholder_descriptions_cover_only_session_and_transfer_routes() {
+         for (destination, description) in [
+-            (
+-                NavigationDestination::Overview,
+-                "Overview is implemented as a read-only local status surface.",
+-            ),
+-            (
+-                NavigationDestination::Machines,
+-                "Machines uses the existing bounded local Agent snapshot for this host only; it does not enumerate remote devices or grant capabilities.",
+-            ),
+             (
+                 NavigationDestination::Sessions,
+                 "Reserved for authorized terminal, Remote Desktop, and forwarding session presentation when runtime state is available.",
+             ),
+-            (
+-                NavigationDestination::Files,
+-                "Files is implemented as a read-only local owner-home directory listing through authenticated command-3 FileList.",
+-            ),
+             (
+                 NavigationDestination::Transfers,
+                 "Reserved for verified upload/download progress and completion state.",
+             ),
+-            (
+-                NavigationDestination::Activity,
+-                "Reserved for locally available Ownspace activity and diagnostics. No external telemetry is implied.",
+-            ),
+-            (
+-                NavigationDestination::Settings,
+-                "Reserved for explicit owner-controlled local settings and diagnostics; no cloud account dependency is implied.",
+-            ),
+         ] {
+             assert_eq!(placeholder_description(destination), description);
+         }
