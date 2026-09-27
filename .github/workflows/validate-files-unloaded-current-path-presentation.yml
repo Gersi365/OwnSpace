@@ -1,0 +1,72 @@
+name: Ownspace Files unloaded current-path presentation validation
+
+on:
+  push:
+    branches:
+      - validation/files-unloaded-current-path-presentation-test-import-2026-09-27
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout validation carrier
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Verify exact carrier and corrected candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE_SHA='a94d8b234a7f2baabcfd028ed9764c3f1af69600'
+          BASE_UI_SHA256='2c044e753b947d15ccd3d0b7eb7d1738723920fe474df477ef69d9a51609e86f'
+          ORIGINAL_PATCH_SHA256='d7d77af521501524b85db09ac7c5863144701a4433f6d624bba89549f4fa38c1'
+          ORIGINAL_UI_SHA256='c171cacdc6579b6dc62ce905e6c006133e91f4a37111fa77d3d076c1b89740e3'
+          CORRECTION_PATCH_SHA256='c3fa5aab41d5caaaf2075ed18f14f0ad7ce2650dea00e41d674ef0fd31361371'
+          FINAL_UI_SHA256='364c469f974782f4bb567c4001ddaea6883141f85be33526258bf7c85d82dc12'
+          ORIGINAL_PATCH='.github/validation/OWNSPACE_FILES_UNLOADED_CURRENT_PATH_PRESENTATION_CANDIDATE_2026-09-27.patch'
+          CORRECTION_PATCH='.github/validation/OWNSPACE_FILES_UNLOADED_CURRENT_PATH_PRESENTATION_TEST_IMPORT_CORRECTION_2026-09-27.patch'
+
+          test "$(git rev-parse HEAD^)" = "$BASE_SHA"
+          test "$(sha256sum apps/desktop/src/ui.rs | awk '{print $1}')" = "$BASE_UI_SHA256"
+          test "$(sha256sum "$ORIGINAL_PATCH" | awk '{print $1}')" = "$ORIGINAL_PATCH_SHA256"
+          test "$(sha256sum "$CORRECTION_PATCH" | awk '{print $1}')" = "$CORRECTION_PATCH_SHA256"
+
+          git apply --check "$ORIGINAL_PATCH"
+          git apply "$ORIGINAL_PATCH"
+          test "$(sha256sum apps/desktop/src/ui.rs | awk '{print $1}')" = "$ORIGINAL_UI_SHA256"
+
+          git apply --check "$CORRECTION_PATCH"
+          git apply "$CORRECTION_PATCH"
+          git diff --check
+          test "$(git diff --name-only)" = 'apps/desktop/src/ui.rs'
+          test "$(sha256sum apps/desktop/src/ui.rs | awk '{print $1}')" = "$FINAL_UI_SHA256"
+
+          grep -Fq 'const FILES_PATH_UNLOADED_LABEL: &str = "Current path: not loaded";' apps/desktop/src/ui.rs
+          grep -Fq 'gtk::Label::new(Some(FILES_PATH_UNLOADED_LABEL))' apps/desktop/src/ui.rs
+          grep -Fq 'file_list_path_label, file_list_refresh_enabled' apps/desktop/src/ui.rs
+          grep -Fq 'assert_eq!(file_list_path_label(""), "Current path: home");' apps/desktop/src/ui.rs
+          grep -Fq 'assert_eq!(file_list_path_label("docs"), "Current path: docs");' apps/desktop/src/ui.rs
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config protobuf-compiler libgtk-4-dev libadwaita-1-dev
+
+      - name: Focused presentation test
+        run: cargo test --locked -p prw-desktop files_current_path_distinguishes_unloaded_from_committed_paths -- --nocapture
+
+      - name: Formatting check
+        run: cargo fmt --check
+
+      - name: Desktop tests
+        run: cargo test --locked -p prw-desktop
+
+      - name: Desktop compile check
+        run: cargo check --locked -p prw-desktop
+
+      - name: Desktop Clippy
+        run: cargo clippy --locked -p prw-desktop --all-targets -- -D warnings
