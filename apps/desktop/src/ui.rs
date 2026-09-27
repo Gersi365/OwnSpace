@@ -19,6 +19,7 @@ const COPY_SNAPSHOT_DONE_LABEL: &str = "Copied";
 const PLACEHOLDER_STATUS: &str = "No live state source available";
 const FILES_LIST_IDLE_LABEL: &str = "List files";
 const FILES_LIST_BUSY_LABEL: &str = "Listing…";
+const FILES_PATH_INVALID_STATUS: &str = "Invalid path: use a canonical relative path under home";
 const FILES_SUBTITLE: &str = concat!(
     "Read-only directory listing under the local owner home authority. ",
     "Paths are relative; this surface does not read file contents, mutate files, transfer data, open terminals, or create forwarding."
@@ -264,6 +265,10 @@ fn file_list_path_label(path: &str) -> String {
     }
 }
 
+fn file_list_manual_path_is_canonical(path: &str) -> bool {
+    RemotePath::parse(path).is_ok()
+}
+
 fn clear_file_list_entries(entries: &gtk::Box) {
     while let Some(child) = entries.first_child() {
         entries.remove(&child);
@@ -312,6 +317,15 @@ fn append_file_list_entry(
         label.set_selectable(true);
         targets.entries.append(&label);
     }
+}
+
+fn request_manual_file_listing(targets: &FilesPageTargets, path: String) {
+    if !file_list_manual_path_is_canonical(&path) {
+        targets.status.set_text(FILES_PATH_INVALID_STATUS);
+        return;
+    }
+
+    request_file_listing(targets, path);
 }
 
 fn request_file_listing(targets: &FilesPageTargets, path: String) {
@@ -449,12 +463,12 @@ fn files_page() -> gtk::Box {
     let list_targets = targets.clone();
     targets.list_button.connect_clicked(move |_| {
         let path = list_targets.path_entry.text().to_string();
-        request_file_listing(&list_targets, path);
+        request_manual_file_listing(&list_targets, path);
     });
 
     let entry_targets = targets.clone();
     targets.path_entry.connect_activate(move |entry| {
-        request_file_listing(&entry_targets, entry.text().to_string());
+        request_manual_file_listing(&entry_targets, entry.text().to_string());
     });
 
     let home_targets = targets.clone();
@@ -908,11 +922,12 @@ fn render_state(
 mod tests {
     use super::{
         ACTIVITY_SUBTITLE, COPY_SNAPSHOT_DONE_LABEL, COPY_SNAPSHOT_IDLE_LABEL,
-        FILES_LIST_BUSY_LABEL, FILES_LIST_IDLE_LABEL, FILES_SUBTITLE, MACHINES_SUBTITLE,
-        NavigationDestination, PLACEHOLDER_STATUS, REFRESH_BUTTON_BUSY_LABEL,
+        FILES_LIST_BUSY_LABEL, FILES_LIST_IDLE_LABEL, FILES_PATH_INVALID_STATUS, FILES_SUBTITLE,
+        MACHINES_SUBTITLE, NavigationDestination, PLACEHOLDER_STATUS, REFRESH_BUTTON_BUSY_LABEL,
         REFRESH_BUTTON_IDLE_LABEL, activity_snapshot_clipboard_text,
         desktop_local_ipc_protocol_text, desktop_version_text, file_list_child_path,
-        file_list_parent_path, local_endpoint_contract_text, placeholder_description,
+        file_list_manual_path_is_canonical, file_list_parent_path, local_endpoint_contract_text,
+        placeholder_description,
     };
 
     #[test]
@@ -931,6 +946,33 @@ mod tests {
                 "Read-only directory listing under the local owner home authority. ",
                 "Paths are relative; this surface does not read file contents, mutate files, transfer data, open terminals, or create forwarding."
             )
+        );
+    }
+
+    #[test]
+    fn files_manual_paths_fail_fast_on_noncanonical_input() {
+        assert!(file_list_manual_path_is_canonical(""));
+        assert!(file_list_manual_path_is_canonical("docs/reports"));
+
+        for invalid_path in [
+            "/etc",
+            "../escape",
+            "docs/../escape",
+            "./docs",
+            "docs//reports",
+            "docs/./reports",
+            "docs/reports/",
+            r"docs\reports",
+        ] {
+            assert!(
+                !file_list_manual_path_is_canonical(invalid_path),
+                "{invalid_path}"
+            );
+        }
+
+        assert_eq!(
+            FILES_PATH_INVALID_STATUS,
+            "Invalid path: use a canonical relative path under home"
         );
     }
 
