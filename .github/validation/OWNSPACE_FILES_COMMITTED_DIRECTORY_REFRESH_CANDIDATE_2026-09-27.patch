@@ -1,0 +1,79 @@
+diff --git a/apps/desktop/src/ui.rs b/apps/desktop/src/ui.rs
+index 692c16d..e793523 100644
+--- a/apps/desktop/src/ui.rs
++++ b/apps/desktop/src/ui.rs
+@@ -19,6 +19,7 @@ const COPY_SNAPSHOT_DONE_LABEL: &str = "Copied";
+ const PLACEHOLDER_STATUS: &str = "No live state source available";
+ const FILES_LIST_IDLE_LABEL: &str = "List files";
+ const FILES_LIST_BUSY_LABEL: &str = "Listing…";
++const FILES_REFRESH_LABEL: &str = "Refresh";
+ const FILES_PATH_INVALID_STATUS: &str = "Invalid path: use a canonical relative path under home";
+ const FILES_SUBTITLE: &str = concat!(
+     "Read-only directory listing under the local owner home authority. ",
+@@ -58,6 +59,7 @@ struct FilesPageTargets {
+     list_button: gtk::Button,
+     home_button: gtk::Button,
+     up_button: gtk::Button,
++    refresh_button: gtk::Button,
+     current_path_label: gtk::Label,
+     status: gtk::Label,
+     entries: gtk::Box,
+@@ -279,6 +281,7 @@ fn set_file_list_controls_enabled(targets: &FilesPageTargets, enabled: bool) {
+     targets.path_entry.set_sensitive(enabled);
+     targets.list_button.set_sensitive(enabled);
+     targets.home_button.set_sensitive(enabled);
++    targets.refresh_button.set_sensitive(enabled);
+     targets
+         .up_button
+         .set_sensitive(enabled && !targets.current_path.borrow().is_empty());
+@@ -431,9 +434,11 @@ fn files_page() -> gtk::Box {
+     let home_button = gtk::Button::with_label("Home");
+     let up_button = gtk::Button::with_label("Up");
+     up_button.set_sensitive(false);
++    let refresh_button = gtk::Button::with_label(FILES_REFRESH_LABEL);
+     let list_button = gtk::Button::with_label(FILES_LIST_IDLE_LABEL);
+     navigation.append(&home_button);
+     navigation.append(&up_button);
++    navigation.append(&refresh_button);
+     navigation.append(&list_button);
+     page.append(&navigation);
+ 
+@@ -454,6 +459,7 @@ fn files_page() -> gtk::Box {
+         list_button,
+         home_button,
+         up_button,
++        refresh_button,
+         current_path_label,
+         status,
+         entries,
+@@ -471,6 +477,12 @@ fn files_page() -> gtk::Box {
+         request_manual_file_listing(&entry_targets, entry.text().to_string());
+     });
+ 
++    let refresh_targets = targets.clone();
++    targets.refresh_button.connect_clicked(move |_| {
++        let current_path = refresh_targets.current_path.borrow().clone();
++        request_file_listing(&refresh_targets, current_path);
++    });
++
+     let home_targets = targets.clone();
+     targets.home_button.connect_clicked(move |_| {
+         request_file_listing(&home_targets, String::new());
+@@ -922,7 +934,8 @@ fn render_state(
+ mod tests {
+     use super::{
+         ACTIVITY_SUBTITLE, COPY_SNAPSHOT_DONE_LABEL, COPY_SNAPSHOT_IDLE_LABEL,
+-        FILES_LIST_BUSY_LABEL, FILES_LIST_IDLE_LABEL, FILES_PATH_INVALID_STATUS, FILES_SUBTITLE,
++        FILES_LIST_BUSY_LABEL, FILES_LIST_IDLE_LABEL, FILES_PATH_INVALID_STATUS,
++        FILES_REFRESH_LABEL, FILES_SUBTITLE,
+         MACHINES_SUBTITLE, NavigationDestination, PLACEHOLDER_STATUS, REFRESH_BUTTON_BUSY_LABEL,
+         REFRESH_BUTTON_IDLE_LABEL, activity_snapshot_clipboard_text,
+         desktop_local_ipc_protocol_text, desktop_version_text, file_list_child_path,
+@@ -940,6 +953,7 @@ mod tests {
+     fn files_surface_labels_lock_read_only_file_list_boundary() {
+         assert_eq!(FILES_LIST_IDLE_LABEL, "List files");
+         assert_eq!(FILES_LIST_BUSY_LABEL, "Listing…");
++        assert_eq!(FILES_REFRESH_LABEL, "Refresh");
+         assert_eq!(
+             FILES_SUBTITLE,
+             concat!(
