@@ -43,7 +43,7 @@ jobs:
           mapfile -t expected_sorted < <(printf '%s\n' "${expected_carrier[@]}" | sort)
           test "${carrier_files[*]}" = "${expected_sorted[*]}"
 
-          echo 'f14b51e80e72ea05ba5aca8d85bbe5a091bcfba200d1895917086ec799e6d629  '"$PATCH" | sha256sum -c -
+          echo 'bfaf34c8dbc8b53680efa0ee8092041051d98179934c4eaaaee0e4e3b08e1c80  '"$PATCH" | sha256sum -c -
           echo '6740a43ec2825fd5b3b191b8ae46ad005e7a46575c4221b0058a2346d929d399  apps/desktop/src/ui.rs' | sha256sum -c -
           echo '7ff6f71af20d1c66bff1cd8724c4ab5cc2f581c70147781d8e35ffbbe961eb0f  apps/desktop/src/local_management_ipc.rs' | sha256sum -c -
           echo '4ec37bebda600f75919964fb500b61843f637c4092f9f65a4e6c82ceaae796d4  apps/desktop/src/ipc.rs' | sha256sum -c -
@@ -53,7 +53,7 @@ jobs:
           git diff --check
 
           test "$(git diff --name-only)" = "apps/desktop/src/ui.rs"
-          echo '5d968bde2afbf6839fdc7891a244b5c0823cfaae2918bd4f3e5b66d21a5ca53c  apps/desktop/src/ui.rs' | sha256sum -c -
+          echo 'feef599184914929d988681cd7832c893c4ddfd1ca2f7bb30b5c8f5de743f126  apps/desktop/src/ui.rs' | sha256sum -c -
           echo '7ff6f71af20d1c66bff1cd8724c4ab5cc2f581c70147781d8e35ffbbe961eb0f  apps/desktop/src/local_management_ipc.rs' | sha256sum -c -
           echo '4ec37bebda600f75919964fb500b61843f637c4092f9f65a4e6c82ceaae796d4  apps/desktop/src/ipc.rs' | sha256sum -c -
 
