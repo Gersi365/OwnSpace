@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::mpsc::{self, TryRecvError};
 use std::time::Duration;
@@ -64,6 +64,7 @@ struct FilesPageTargets {
     status: gtk::Label,
     entries: gtk::Box,
     current_path: Rc<RefCell<String>>,
+    has_successful_listing: Rc<Cell<bool>>,
 }
 
 pub fn build(app: &adw::Application) {
@@ -271,6 +272,10 @@ fn file_list_manual_path_is_canonical(path: &str) -> bool {
     RemotePath::parse(path).is_ok()
 }
 
+const fn file_list_refresh_enabled(controls_enabled: bool, has_successful_listing: bool) -> bool {
+    controls_enabled && has_successful_listing
+}
+
 fn clear_file_list_entries(entries: &gtk::Box) {
     while let Some(child) = entries.first_child() {
         entries.remove(&child);
@@ -281,7 +286,12 @@ fn set_file_list_controls_enabled(targets: &FilesPageTargets, enabled: bool) {
     targets.path_entry.set_sensitive(enabled);
     targets.list_button.set_sensitive(enabled);
     targets.home_button.set_sensitive(enabled);
-    targets.refresh_button.set_sensitive(enabled);
+    targets
+        .refresh_button
+        .set_sensitive(file_list_refresh_enabled(
+            enabled,
+            targets.has_successful_listing.get(),
+        ));
     targets
         .up_button
         .set_sensitive(enabled && !targets.current_path.borrow().is_empty());
@@ -360,6 +370,7 @@ fn request_file_listing(targets: &FilesPageTargets, path: String) {
     let _source_id = glib::timeout_add_local(Duration::from_millis(75), move || {
         match receiver.try_recv() {
             Ok(Ok(listing)) => {
+                poll_targets.has_successful_listing.set(true);
                 poll_targets.current_path.borrow_mut().clone_from(&path);
                 poll_targets.path_entry.set_text(&path);
                 poll_targets
@@ -435,6 +446,7 @@ fn files_page() -> gtk::Box {
     let up_button = gtk::Button::with_label("Up");
     up_button.set_sensitive(false);
     let refresh_button = gtk::Button::with_label(FILES_REFRESH_LABEL);
+    refresh_button.set_sensitive(false);
     let list_button = gtk::Button::with_label(FILES_LIST_IDLE_LABEL);
     navigation.append(&home_button);
     navigation.append(&up_button);
@@ -464,6 +476,7 @@ fn files_page() -> gtk::Box {
         status,
         entries,
         current_path: Rc::new(RefCell::new(String::new())),
+        has_successful_listing: Rc::new(Cell::new(false)),
     };
 
     let list_targets = targets.clone();
@@ -939,7 +952,7 @@ mod tests {
         PLACEHOLDER_STATUS, REFRESH_BUTTON_BUSY_LABEL, REFRESH_BUTTON_IDLE_LABEL,
         activity_snapshot_clipboard_text, desktop_local_ipc_protocol_text, desktop_version_text,
         file_list_child_path, file_list_manual_path_is_canonical, file_list_parent_path,
-        local_endpoint_contract_text, placeholder_description,
+        file_list_refresh_enabled, local_endpoint_contract_text, placeholder_description,
     };
 
     #[test]
@@ -987,6 +1000,14 @@ mod tests {
             FILES_PATH_INVALID_STATUS,
             "Invalid path: use a canonical relative path under home"
         );
+    }
+
+    #[test]
+    fn files_refresh_requires_idle_controls_and_a_successful_listing() {
+        assert!(!file_list_refresh_enabled(false, false));
+        assert!(!file_list_refresh_enabled(true, false));
+        assert!(!file_list_refresh_enabled(false, true));
+        assert!(file_list_refresh_enabled(true, true));
     }
 
     #[test]
