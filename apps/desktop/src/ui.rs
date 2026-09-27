@@ -277,6 +277,13 @@ fn set_file_list_controls_enabled(targets: &FilesPageTargets, enabled: bool) {
     targets
         .up_button
         .set_sensitive(enabled && !targets.current_path.borrow().is_empty());
+    targets.entries.set_sensitive(enabled);
+}
+
+fn restore_file_list_path_entry(targets: &FilesPageTargets) {
+    targets
+        .path_entry
+        .set_text(targets.current_path.borrow().as_str());
 }
 
 fn append_file_list_entry(
@@ -308,13 +315,11 @@ fn append_file_list_entry(
 }
 
 fn request_file_listing(targets: &FilesPageTargets, path: String) {
-    targets.path_entry.set_text(&path);
     set_file_list_controls_enabled(targets, false);
     targets.list_button.set_label(FILES_LIST_BUSY_LABEL);
     targets
         .status
         .set_text("Reading authorized directory listing…");
-    clear_file_list_entries(&targets.entries);
 
     let worker_path = path.clone();
     let (sender, receiver) = mpsc::sync_channel(1);
@@ -325,6 +330,7 @@ fn request_file_listing(targets: &FilesPageTargets, path: String) {
         });
 
     if spawn_result.is_err() {
+        restore_file_list_path_entry(targets);
         targets
             .status
             .set_text("Unable to start the read-only file-list worker");
@@ -338,6 +344,7 @@ fn request_file_listing(targets: &FilesPageTargets, path: String) {
         match receiver.try_recv() {
             Ok(Ok(listing)) => {
                 poll_targets.current_path.borrow_mut().clone_from(&path);
+                poll_targets.path_entry.set_text(&path);
                 poll_targets
                     .current_path_label
                     .set_text(&file_list_path_label(&path));
@@ -357,6 +364,7 @@ fn request_file_listing(targets: &FilesPageTargets, path: String) {
                 glib::ControlFlow::Break
             }
             Ok(Err(error)) => {
+                restore_file_list_path_entry(&poll_targets);
                 poll_targets
                     .status
                     .set_text(&format!("Unavailable: {error}"));
@@ -366,6 +374,7 @@ fn request_file_listing(targets: &FilesPageTargets, path: String) {
             }
             Err(TryRecvError::Empty) => glib::ControlFlow::Continue,
             Err(TryRecvError::Disconnected) => {
+                restore_file_list_path_entry(&poll_targets);
                 poll_targets
                     .status
                     .set_text("Read-only file-list worker ended without a result");
@@ -441,6 +450,11 @@ fn files_page() -> gtk::Box {
     targets.list_button.connect_clicked(move |_| {
         let path = list_targets.path_entry.text().to_string();
         request_file_listing(&list_targets, path);
+    });
+
+    let entry_targets = targets.clone();
+    targets.path_entry.connect_activate(move |entry| {
+        request_file_listing(&entry_targets, entry.text().to_string());
     });
 
     let home_targets = targets.clone();
