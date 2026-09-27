@@ -1,11 +1,15 @@
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::mpsc::{self, TryRecvError};
 use std::time::Duration;
 
 use adw::prelude::*;
 use gtk::glib;
 use prw_agent::{AGENT_RUNTIME_SUBDIRECTORY, AGENT_SOCKET_FILENAME, LocalIpcProtocolVersion};
+use prw_file_service::RemotePath;
 
 use crate::ipc;
+use crate::local_management_ipc::LocalFileListEntry;
 use crate::state::{DesktopPresentationState, NavigationDestination};
 
 const REFRESH_BUTTON_IDLE_LABEL: &str = "Refresh status";
@@ -45,6 +49,18 @@ struct StatusProbeTargets {
     overview_refresh_button: gtk::Button,
     machines_refresh_button: gtk::Button,
     activity_refresh_button: gtk::Button,
+}
+
+#[derive(Clone)]
+struct FilesPageTargets {
+    path_entry: gtk::Entry,
+    list_button: gtk::Button,
+    home_button: gtk::Button,
+    up_button: gtk::Button,
+    current_path_label: gtk::Label,
+    status: gtk::Label,
+    entries: gtk::Box,
+    current_path: Rc<RefCell<String>>,
 }
 
 pub fn build(app: &adw::Application) {
@@ -214,6 +230,153 @@ fn machines_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label, gtk::Button
     (page, agent_label, dns_label, detail_label, refresh_button)
 }
 
+fn file_list_child_path(parent: &str, child_name: &str) -> Option<String> {
+    if child_name.is_empty() || child_name.contains('/') {
+        return None;
+    }
+
+    let candidate = if parent.is_empty() {
+        child_name.to_owned()
+    } else {
+        format!("{parent}/{child_name}")
+    };
+    RemotePath::parse(&candidate).ok()?;
+    Some(candidate)
+}
+
+fn file_list_parent_path(path: &str) -> Option<String> {
+    RemotePath::parse(path).ok()?;
+    if path.is_empty() {
+        return None;
+    }
+
+    match path.rsplit_once('/') {
+        Some((parent, _)) => Some(parent.to_owned()),
+        None => Some(String::new()),
+    }
+}
+
+fn file_list_path_label(path: &str) -> String {
+    if path.is_empty() {
+        "Current path: home".to_owned()
+    } else {
+        format!("Current path: {path}")
+    }
+}
+
+fn clear_file_list_entries(entries: &gtk::Box) {
+    while let Some(child) = entries.first_child() {
+        entries.remove(&child);
+    }
+}
+
+fn set_file_list_controls_enabled(targets: &FilesPageTargets, enabled: bool) {
+    targets.path_entry.set_sensitive(enabled);
+    targets.list_button.set_sensitive(enabled);
+    targets.home_button.set_sensitive(enabled);
+    targets
+        .up_button
+        .set_sensitive(enabled && !targets.current_path.borrow().is_empty());
+}
+
+fn append_file_list_entry(
+    targets: &FilesPageTargets,
+    parent_path: &str,
+    entry: &LocalFileListEntry,
+) {
+    if entry.is_directory() {
+        let button = gtk::Button::with_label(&entry.display_text());
+        button.set_halign(gtk::Align::Start);
+        if let Some(child_path) = file_list_child_path(parent_path, entry.name()) {
+            let navigation_targets = targets.clone();
+            button.connect_clicked(move |_| {
+                request_file_listing(&navigation_targets, child_path.clone());
+            });
+        } else {
+            button.set_sensitive(false);
+            button.set_tooltip_text(Some(
+                "Directory entry cannot form a canonical relative path",
+            ));
+        }
+        targets.entries.append(&button);
+    } else {
+        let label = gtk::Label::new(Some(&entry.display_text()));
+        label.set_xalign(0.0);
+        label.set_selectable(true);
+        targets.entries.append(&label);
+    }
+}
+
+fn request_file_listing(targets: &FilesPageTargets, path: String) {
+    targets.path_entry.set_text(&path);
+    set_file_list_controls_enabled(targets, false);
+    targets.list_button.set_label(FILES_LIST_BUSY_LABEL);
+    targets
+        .status
+        .set_text("Reading authorized directory listing…");
+    clear_file_list_entries(&targets.entries);
+
+    let worker_path = path.clone();
+    let (sender, receiver) = mpsc::sync_channel(1);
+    let spawn_result = std::thread::Builder::new()
+        .name("prw-desktop-readonly-file-list".to_owned())
+        .spawn(move || {
+            let _ = sender.send(ipc::query_file_list(&worker_path));
+        });
+
+    if spawn_result.is_err() {
+        targets
+            .status
+            .set_text("Unable to start the read-only file-list worker");
+        targets.list_button.set_label(FILES_LIST_IDLE_LABEL);
+        set_file_list_controls_enabled(targets, true);
+        return;
+    }
+
+    let poll_targets = targets.clone();
+    let _source_id = glib::timeout_add_local(Duration::from_millis(75), move || {
+        match receiver.try_recv() {
+            Ok(Ok(listing)) => {
+                poll_targets.current_path.borrow_mut().clone_from(&path);
+                poll_targets
+                    .current_path_label
+                    .set_text(&file_list_path_label(&path));
+                clear_file_list_entries(&poll_targets.entries);
+                if listing.is_empty() {
+                    let empty = gtk::Label::new(Some("(empty directory)"));
+                    empty.set_xalign(0.0);
+                    poll_targets.entries.append(&empty);
+                } else {
+                    for entry in listing {
+                        append_file_list_entry(&poll_targets, &path, &entry);
+                    }
+                }
+                poll_targets.status.set_text("Read-only listing loaded");
+                poll_targets.list_button.set_label(FILES_LIST_IDLE_LABEL);
+                set_file_list_controls_enabled(&poll_targets, true);
+                glib::ControlFlow::Break
+            }
+            Ok(Err(error)) => {
+                poll_targets
+                    .status
+                    .set_text(&format!("Unavailable: {error}"));
+                poll_targets.list_button.set_label(FILES_LIST_IDLE_LABEL);
+                set_file_list_controls_enabled(&poll_targets, true);
+                glib::ControlFlow::Break
+            }
+            Err(TryRecvError::Empty) => glib::ControlFlow::Continue,
+            Err(TryRecvError::Disconnected) => {
+                poll_targets
+                    .status
+                    .set_text("Read-only file-list worker ended without a result");
+                poll_targets.list_button.set_label(FILES_LIST_IDLE_LABEL);
+                set_file_list_controls_enabled(&poll_targets, true);
+                glib::ControlFlow::Break
+            }
+        }
+    });
+}
+
 fn files_page() -> gtk::Box {
     let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
     page.set_margin_top(32);
@@ -232,85 +395,65 @@ fn files_page() -> gtk::Box {
     subtitle.add_css_class("dim-label");
     page.append(&subtitle);
 
+    let current_path_label = gtk::Label::new(Some(&file_list_path_label("")));
+    current_path_label.set_xalign(0.0);
+    current_path_label.add_css_class("title-3");
+    page.append(&current_path_label);
+
     let path_entry = gtk::Entry::new();
     path_entry.set_placeholder_text(Some("Relative path; blank = home"));
     page.append(&path_entry);
 
+    let navigation = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let home_button = gtk::Button::with_label("Home");
+    let up_button = gtk::Button::with_label("Up");
+    up_button.set_sensitive(false);
     let list_button = gtk::Button::with_label(FILES_LIST_IDLE_LABEL);
-    list_button.set_halign(gtk::Align::Start);
-    page.append(&list_button);
+    navigation.append(&home_button);
+    navigation.append(&up_button);
+    navigation.append(&list_button);
+    page.append(&navigation);
 
     let status = gtk::Label::new(Some("No directory listing requested yet"));
     status.set_xalign(0.0);
     status.add_css_class("title-3");
     page.append(&status);
 
-    let entries = gtk::Label::new(None);
-    entries.set_xalign(0.0);
-    entries.set_yalign(0.0);
-    entries.set_selectable(true);
-    entries.set_wrap(false);
-    page.append(&entries);
+    let entries = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    let scroller = gtk::ScrolledWindow::new();
+    scroller.set_hexpand(true);
+    scroller.set_vexpand(true);
+    scroller.set_child(Some(&entries));
+    page.append(&scroller);
 
-    list_button.connect_clicked(move |button| {
-        let path = path_entry.text().to_string();
-        button.set_sensitive(false);
-        button.set_label(FILES_LIST_BUSY_LABEL);
-        status.set_text("Reading authorized directory listing…");
-        entries.set_text("");
+    let targets = FilesPageTargets {
+        path_entry,
+        list_button,
+        home_button,
+        up_button,
+        current_path_label,
+        status,
+        entries,
+        current_path: Rc::new(RefCell::new(String::new())),
+    };
 
-        let (sender, receiver) = mpsc::sync_channel(1);
-        let spawn_result = std::thread::Builder::new()
-            .name("prw-desktop-readonly-file-list".to_owned())
-            .spawn(move || {
-                let _ = sender.send(ipc::query_file_list(&path));
-            });
+    let list_targets = targets.clone();
+    targets.list_button.connect_clicked(move |_| {
+        let path = list_targets.path_entry.text().to_string();
+        request_file_listing(&list_targets, path);
+    });
 
-        if spawn_result.is_err() {
-            status.set_text("Unable to start the read-only file-list worker");
-            button.set_sensitive(true);
-            button.set_label(FILES_LIST_IDLE_LABEL);
-            return;
+    let home_targets = targets.clone();
+    targets.home_button.connect_clicked(move |_| {
+        request_file_listing(&home_targets, String::new());
+    });
+
+    let up_targets = targets.clone();
+    targets.up_button.connect_clicked(move |_| {
+        let current_path = up_targets.current_path.borrow().clone();
+        if let Some(parent_path) = file_list_parent_path(&current_path) {
+            request_file_listing(&up_targets, parent_path);
         }
-
-        let button = button.clone();
-        let status = status.clone();
-        let entries = entries.clone();
-        let _source_id = glib::timeout_add_local(Duration::from_millis(75), move || match receiver
-            .try_recv()
-        {
-            Ok(Ok(listing)) => {
-                let rendered = listing
-                    .iter()
-                    .map(crate::local_management_ipc::LocalFileListEntry::display_text)
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                if rendered.is_empty() {
-                    entries.set_text("(empty directory)");
-                } else {
-                    entries.set_text(&rendered);
-                }
-                status.set_text("Read-only listing loaded");
-                button.set_sensitive(true);
-                button.set_label(FILES_LIST_IDLE_LABEL);
-                glib::ControlFlow::Break
-            }
-            Ok(Err(error)) => {
-                entries.set_text("");
-                status.set_text(&format!("Unavailable: {error}"));
-                button.set_sensitive(true);
-                button.set_label(FILES_LIST_IDLE_LABEL);
-                glib::ControlFlow::Break
-            }
-            Err(TryRecvError::Empty) => glib::ControlFlow::Continue,
-            Err(TryRecvError::Disconnected) => {
-                entries.set_text("");
-                status.set_text("Read-only file-list worker ended without a result");
-                button.set_sensitive(true);
-                button.set_label(FILES_LIST_IDLE_LABEL);
-                glib::ControlFlow::Break
-            }
-        });
     });
 
     page
@@ -754,8 +897,8 @@ mod tests {
         FILES_LIST_BUSY_LABEL, FILES_LIST_IDLE_LABEL, FILES_SUBTITLE, MACHINES_SUBTITLE,
         NavigationDestination, PLACEHOLDER_STATUS, REFRESH_BUTTON_BUSY_LABEL,
         REFRESH_BUTTON_IDLE_LABEL, activity_snapshot_clipboard_text,
-        desktop_local_ipc_protocol_text, desktop_version_text, local_endpoint_contract_text,
-        placeholder_description,
+        desktop_local_ipc_protocol_text, desktop_version_text, file_list_child_path,
+        file_list_parent_path, local_endpoint_contract_text, placeholder_description,
     };
 
     #[test]
@@ -775,6 +918,27 @@ mod tests {
                 "Paths are relative; this surface does not read file contents, mutate files, transfer data, open terminals, or create forwarding."
             )
         );
+    }
+
+    #[test]
+    fn files_navigation_paths_remain_canonical_and_root_bounded() {
+        assert_eq!(file_list_child_path("", "docs"), Some("docs".to_owned()));
+        assert_eq!(
+            file_list_child_path("docs", "reports"),
+            Some("docs/reports".to_owned())
+        );
+        assert_eq!(
+            file_list_parent_path("docs/reports"),
+            Some("docs".to_owned())
+        );
+        assert_eq!(file_list_parent_path("docs"), Some(String::new()));
+        assert_eq!(file_list_parent_path(""), None);
+
+        for invalid_child in ["", ".", "..", "nested/name", r"nested\name"] {
+            assert_eq!(file_list_child_path("docs", invalid_child), None);
+        }
+        assert_eq!(file_list_parent_path("../escape"), None);
+        assert_eq!(file_list_parent_path("docs//reports"), None);
     }
 
     #[test]

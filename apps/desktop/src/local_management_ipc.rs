@@ -54,6 +54,16 @@ pub struct LocalFileListEntry {
 
 impl LocalFileListEntry {
     #[must_use]
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    #[must_use]
+    pub(crate) fn is_directory(&self) -> bool {
+        self.kind == LocalFileListEntryKind::Directory
+    }
+
+    #[must_use]
     pub(crate) fn display_text(&self) -> String {
         match self.kind {
             LocalFileListEntryKind::RegularFile => self.name.clone(),
@@ -277,16 +287,35 @@ mod tests {
             build_file_list_management_request(id(157), "../escape"),
             Err(LocalManagementClientError::InvalidFilePath)
         ));
+        assert!(matches!(
+            build_file_list_management_request(id(158), "docs/../escape"),
+            Err(LocalManagementClientError::InvalidFilePath)
+        ));
+        assert!(matches!(
+            build_file_list_management_request(id(159), "docs//nested"),
+            Err(LocalManagementClientError::InvalidFilePath)
+        ));
     }
 
     #[test]
     fn directory_entry_success_body_decodes_types_and_rejects_trailing_bytes() {
         let payload = [
-            0, 0, 2, 0, 2, 2, 0, 4, b'd', b'o', b'c', b's', 1, 0, 5, b'n', b'o', b't', b'e', b's',
+            0, 0, 2, 0, 4, 2, 0, 4, b'd', b'o', b'c', b's', 1, 0, 5, b'n', b'o', b't', b'e', b's',
+            3, 0, 4, b'l', b'i', b'n', b'k', 4, 0, 4, b's', b'o', b'c', b'k',
         ];
         let entries = decode_file_list_success_body(&payload).expect("directory body decodes");
+        assert_eq!(entries[0].name(), "docs");
+        assert!(entries[0].is_directory());
         assert_eq!(entries[0].display_text(), "docs/");
+        assert_eq!(entries[1].name(), "notes");
+        assert!(!entries[1].is_directory());
         assert_eq!(entries[1].display_text(), "notes");
+        assert_eq!(entries[2].name(), "link");
+        assert!(!entries[2].is_directory());
+        assert_eq!(entries[2].display_text(), "link [symlink]");
+        assert_eq!(entries[3].name(), "sock");
+        assert!(!entries[3].is_directory());
+        assert_eq!(entries[3].display_text(), "sock [other]");
 
         let mut trailing = payload.to_vec();
         trailing.push(9);
