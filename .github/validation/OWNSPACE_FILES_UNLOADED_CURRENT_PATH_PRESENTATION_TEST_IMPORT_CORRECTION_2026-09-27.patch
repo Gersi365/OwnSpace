@@ -1,0 +1,12 @@
+--- a/apps/desktop/src/ui.rs
++++ b/apps/desktop/src/ui.rs
+@@ -954,7 +954,8 @@
+         PLACEHOLDER_STATUS, REFRESH_BUTTON_BUSY_LABEL, REFRESH_BUTTON_IDLE_LABEL,
+         activity_snapshot_clipboard_text, desktop_local_ipc_protocol_text, desktop_version_text,
+         file_list_child_path, file_list_manual_path_is_canonical, file_list_parent_path,
+-        file_list_refresh_enabled, local_endpoint_contract_text, placeholder_description,
++        file_list_path_label, file_list_refresh_enabled, local_endpoint_contract_text,
++        placeholder_description,
+     };
+ 
+     #[test]

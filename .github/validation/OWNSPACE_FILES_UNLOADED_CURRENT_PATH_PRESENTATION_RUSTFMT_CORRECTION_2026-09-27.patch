@@ -1,0 +1,24 @@
+diff --git a/apps/desktop/src/ui.rs b/apps/desktop/src/ui.rs
+index 9da0e2b..91d13af 100644
+--- a/apps/desktop/src/ui.rs
++++ b/apps/desktop/src/ui.rs
+@@ -949,13 +949,12 @@ mod tests {
+     use super::{
+         ACTIVITY_SUBTITLE, COPY_SNAPSHOT_DONE_LABEL, COPY_SNAPSHOT_IDLE_LABEL,
+         FILES_LIST_BUSY_LABEL, FILES_LIST_IDLE_LABEL, FILES_PATH_INVALID_STATUS,
+-        FILES_PATH_UNLOADED_LABEL,
+-        FILES_REFRESH_LABEL, FILES_SUBTITLE, MACHINES_SUBTITLE, NavigationDestination,
+-        PLACEHOLDER_STATUS, REFRESH_BUTTON_BUSY_LABEL, REFRESH_BUTTON_IDLE_LABEL,
+-        activity_snapshot_clipboard_text, desktop_local_ipc_protocol_text, desktop_version_text,
+-        file_list_child_path, file_list_manual_path_is_canonical, file_list_parent_path,
+-        file_list_path_label, file_list_refresh_enabled, local_endpoint_contract_text,
+-        placeholder_description,
++        FILES_PATH_UNLOADED_LABEL, FILES_REFRESH_LABEL, FILES_SUBTITLE, MACHINES_SUBTITLE,
++        NavigationDestination, PLACEHOLDER_STATUS, REFRESH_BUTTON_BUSY_LABEL,
++        REFRESH_BUTTON_IDLE_LABEL, activity_snapshot_clipboard_text,
++        desktop_local_ipc_protocol_text, desktop_version_text, file_list_child_path,
++        file_list_manual_path_is_canonical, file_list_parent_path, file_list_path_label,
++        file_list_refresh_enabled, local_endpoint_contract_text, placeholder_description,
+     };
+ 
+     #[test]
