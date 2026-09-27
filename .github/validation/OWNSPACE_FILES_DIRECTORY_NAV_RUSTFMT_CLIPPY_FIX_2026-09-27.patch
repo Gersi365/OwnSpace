@@ -1,0 +1,122 @@
+diff --git a/apps/desktop/src/ui.rs b/apps/desktop/src/ui.rs
+index 8f92d22..e5e6bb9 100644
+--- a/apps/desktop/src/ui.rs
++++ b/apps/desktop/src/ui.rs
+@@ -279,18 +279,24 @@ fn set_file_list_controls_enabled(targets: &FilesPageTargets, enabled: bool) {
+         .set_sensitive(enabled && !targets.current_path.borrow().is_empty());
+ }
+ 
+-fn append_file_list_entry(targets: &FilesPageTargets, parent_path: &str, entry: LocalFileListEntry) {
++fn append_file_list_entry(
++    targets: &FilesPageTargets,
++    parent_path: &str,
++    entry: &LocalFileListEntry,
++) {
+     if entry.is_directory() {
+         let button = gtk::Button::with_label(&entry.display_text());
+         button.set_halign(gtk::Align::Start);
+         if let Some(child_path) = file_list_child_path(parent_path, entry.name()) {
+             let navigation_targets = targets.clone();
+             button.connect_clicked(move |_| {
+-                request_file_listing(navigation_targets.clone(), child_path.clone());
++                request_file_listing(&navigation_targets, child_path.clone());
+             });
+         } else {
+             button.set_sensitive(false);
+-            button.set_tooltip_text(Some("Directory entry cannot form a canonical relative path"));
++            button.set_tooltip_text(Some(
++                "Directory entry cannot form a canonical relative path",
++            ));
+         }
+         targets.entries.append(&button);
+     } else {
+@@ -301,11 +307,13 @@ fn append_file_list_entry(targets: &FilesPageTargets, parent_path: &str, entry:
+     }
+ }
+ 
+-fn request_file_listing(targets: FilesPageTargets, path: String) {
++fn request_file_listing(targets: &FilesPageTargets, path: String) {
+     targets.path_entry.set_text(&path);
+-    set_file_list_controls_enabled(&targets, false);
++    set_file_list_controls_enabled(targets, false);
+     targets.list_button.set_label(FILES_LIST_BUSY_LABEL);
+-    targets.status.set_text("Reading authorized directory listing…");
++    targets
++        .status
++        .set_text("Reading authorized directory listing…");
+     clear_file_list_entries(&targets.entries);
+ 
+     let worker_path = path.clone();
+@@ -321,7 +329,7 @@ fn request_file_listing(targets: FilesPageTargets, path: String) {
+             .status
+             .set_text("Unable to start the read-only file-list worker");
+         targets.list_button.set_label(FILES_LIST_IDLE_LABEL);
+-        set_file_list_controls_enabled(&targets, true);
++        set_file_list_controls_enabled(targets, true);
+         return;
+     }
+ 
+@@ -329,7 +337,7 @@ fn request_file_listing(targets: FilesPageTargets, path: String) {
+     let _source_id = glib::timeout_add_local(Duration::from_millis(75), move || {
+         match receiver.try_recv() {
+             Ok(Ok(listing)) => {
+-                *poll_targets.current_path.borrow_mut() = path.clone();
++                poll_targets.current_path.borrow_mut().clone_from(&path);
+                 poll_targets
+                     .current_path_label
+                     .set_text(&file_list_path_label(&path));
+@@ -340,7 +348,7 @@ fn request_file_listing(targets: FilesPageTargets, path: String) {
+                     poll_targets.entries.append(&empty);
+                 } else {
+                     for entry in listing {
+-                        append_file_list_entry(&poll_targets, &path, entry);
++                        append_file_list_entry(&poll_targets, &path, &entry);
+                     }
+                 }
+                 poll_targets.status.set_text("Read-only listing loaded");
+@@ -349,7 +357,9 @@ fn request_file_listing(targets: FilesPageTargets, path: String) {
+                 glib::ControlFlow::Break
+             }
+             Ok(Err(error)) => {
+-                poll_targets.status.set_text(&format!("Unavailable: {error}"));
++                poll_targets
++                    .status
++                    .set_text(&format!("Unavailable: {error}"));
+                 poll_targets.list_button.set_label(FILES_LIST_IDLE_LABEL);
+                 set_file_list_controls_enabled(&poll_targets, true);
+                 glib::ControlFlow::Break
+@@ -430,19 +440,19 @@ fn files_page() -> gtk::Box {
+     let list_targets = targets.clone();
+     targets.list_button.connect_clicked(move |_| {
+         let path = list_targets.path_entry.text().to_string();
+-        request_file_listing(list_targets.clone(), path);
++        request_file_listing(&list_targets, path);
+     });
+ 
+     let home_targets = targets.clone();
+     targets.home_button.connect_clicked(move |_| {
+-        request_file_listing(home_targets.clone(), String::new());
++        request_file_listing(&home_targets, String::new());
+     });
+ 
+     let up_targets = targets.clone();
+     targets.up_button.connect_clicked(move |_| {
+         let current_path = up_targets.current_path.borrow().clone();
+         if let Some(parent_path) = file_list_parent_path(&current_path) {
+-            request_file_listing(up_targets.clone(), parent_path);
++            request_file_listing(&up_targets, parent_path);
+         }
+     });
+ 
+@@ -917,7 +927,10 @@ mod tests {
+             file_list_child_path("docs", "reports"),
+             Some("docs/reports".to_owned())
+         );
+-        assert_eq!(file_list_parent_path("docs/reports"), Some("docs".to_owned()));
++        assert_eq!(
++            file_list_parent_path("docs/reports"),
++            Some("docs".to_owned())
++        );
+         assert_eq!(file_list_parent_path("docs"), Some(String::new()));
+         assert_eq!(file_list_parent_path(""), None);
+ 
