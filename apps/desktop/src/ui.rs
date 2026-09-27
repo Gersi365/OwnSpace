@@ -21,6 +21,7 @@ const FILES_LIST_IDLE_LABEL: &str = "List files";
 const FILES_LIST_BUSY_LABEL: &str = "Listing…";
 const FILES_REFRESH_LABEL: &str = "Refresh";
 const FILES_PATH_INVALID_STATUS: &str = "Invalid path: use a canonical relative path under home";
+const FILES_PATH_UNLOADED_LABEL: &str = "Current path: not loaded";
 const FILES_SUBTITLE: &str = concat!(
     "Read-only directory listing under the local owner home authority. ",
     "Paths are relative; this surface does not read file contents, mutate files, transfer data, open terminals, or create forwarding."
@@ -432,7 +433,7 @@ fn files_page() -> gtk::Box {
     subtitle.add_css_class("dim-label");
     page.append(&subtitle);
 
-    let current_path_label = gtk::Label::new(Some(&file_list_path_label("")));
+    let current_path_label = gtk::Label::new(Some(FILES_PATH_UNLOADED_LABEL));
     current_path_label.set_xalign(0.0);
     current_path_label.add_css_class("title-3");
     page.append(&current_path_label);
@@ -948,10 +949,11 @@ mod tests {
     use super::{
         ACTIVITY_SUBTITLE, COPY_SNAPSHOT_DONE_LABEL, COPY_SNAPSHOT_IDLE_LABEL,
         FILES_LIST_BUSY_LABEL, FILES_LIST_IDLE_LABEL, FILES_PATH_INVALID_STATUS,
-        FILES_REFRESH_LABEL, FILES_SUBTITLE, MACHINES_SUBTITLE, NavigationDestination,
-        PLACEHOLDER_STATUS, REFRESH_BUTTON_BUSY_LABEL, REFRESH_BUTTON_IDLE_LABEL,
-        activity_snapshot_clipboard_text, desktop_local_ipc_protocol_text, desktop_version_text,
-        file_list_child_path, file_list_manual_path_is_canonical, file_list_parent_path,
+        FILES_PATH_UNLOADED_LABEL, FILES_REFRESH_LABEL, FILES_SUBTITLE, MACHINES_SUBTITLE,
+        NavigationDestination, PLACEHOLDER_STATUS, REFRESH_BUTTON_BUSY_LABEL,
+        REFRESH_BUTTON_IDLE_LABEL, activity_snapshot_clipboard_text,
+        desktop_local_ipc_protocol_text, desktop_version_text, file_list_child_path,
+        file_list_manual_path_is_canonical, file_list_parent_path, file_list_path_label,
         file_list_refresh_enabled, local_endpoint_contract_text, placeholder_description,
     };
 
@@ -1008,6 +1010,13 @@ mod tests {
         assert!(!file_list_refresh_enabled(true, false));
         assert!(!file_list_refresh_enabled(false, true));
         assert!(file_list_refresh_enabled(true, true));
+    }
+
+    #[test]
+    fn files_current_path_distinguishes_unloaded_from_committed_paths() {
+        assert_eq!(FILES_PATH_UNLOADED_LABEL, "Current path: not loaded");
+        assert_eq!(file_list_path_label(""), "Current path: home");
+        assert_eq!(file_list_path_label("docs"), "Current path: docs");
     }
 
     #[test]
