@@ -28,7 +28,7 @@ jobs:
           rustup toolchain install 1.97.1 --profile minimal --component rustfmt --component clippy
           rustup default 1.97.1
 
-      - name: Verify carrier and exact candidate
+      - name: Verify carrier and exact corrected candidate
         shell: bash
         run: |
           set -euo pipefail
@@ -50,10 +50,23 @@ jobs:
 
           git apply --check "$PATCH"
           git apply "$PATCH"
-          git diff --check
-
-          test "$(git diff --name-only)" = "apps/desktop/src/ui.rs"
           echo '33d89043d974ec3cc0ffe25bd50609424819995dec9ba4ccfaa4576f19018c45  apps/desktop/src/ui.rs' | sha256sum -c -
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("apps/desktop/src/ui.rs")
+          source = path.read_text()
+          old = '''    use super::{\n        ACTIVITY_SUBTITLE, COPY_SNAPSHOT_DONE_LABEL, COPY_SNAPSHOT_IDLE_LABEL,\n        FILES_LIST_BUSY_LABEL, FILES_LIST_IDLE_LABEL, FILES_PATH_INVALID_STATUS,\n        FILES_REFRESH_LABEL, FILES_SUBTITLE,\n        MACHINES_SUBTITLE, NavigationDestination, PLACEHOLDER_STATUS, REFRESH_BUTTON_BUSY_LABEL,\n        REFRESH_BUTTON_IDLE_LABEL, activity_snapshot_clipboard_text,\n        desktop_local_ipc_protocol_text, desktop_version_text, file_list_child_path,\n        file_list_manual_path_is_canonical, file_list_parent_path, local_endpoint_contract_text,\n        placeholder_description,\n    };'''
+          new = '''    use super::{\n        ACTIVITY_SUBTITLE, COPY_SNAPSHOT_DONE_LABEL, COPY_SNAPSHOT_IDLE_LABEL,\n        FILES_LIST_BUSY_LABEL, FILES_LIST_IDLE_LABEL, FILES_PATH_INVALID_STATUS,\n        FILES_REFRESH_LABEL, FILES_SUBTITLE, MACHINES_SUBTITLE, NavigationDestination,\n        PLACEHOLDER_STATUS, REFRESH_BUTTON_BUSY_LABEL, REFRESH_BUTTON_IDLE_LABEL,\n        activity_snapshot_clipboard_text, desktop_local_ipc_protocol_text, desktop_version_text,\n        file_list_child_path, file_list_manual_path_is_canonical, file_list_parent_path,\n        local_endpoint_contract_text, placeholder_description,\n    };'''
+          if source.count(old) != 1:
+              raise SystemExit("guarded rustfmt import block not found exactly once")
+          path.write_text(source.replace(old, new, 1))
+          PY
+
+          git diff --check
+          test "$(git diff --name-only)" = "apps/desktop/src/ui.rs"
+          echo 'ff8ca885e3889fe270a0cdd0aaa76388317cdc5c0c5da48ee4101facdc3ecab1  apps/desktop/src/ui.rs' | sha256sum -c -
           echo '7ff6f71af20d1c66bff1cd8724c4ab5cc2f581c70147781d8e35ffbbe961eb0f  apps/desktop/src/local_management_ipc.rs' | sha256sum -c -
           echo '4ec37bebda600f75919964fb500b61843f637c4092f9f65a4e6c82ceaae796d4  apps/desktop/src/ipc.rs' | sha256sum -c -
 
