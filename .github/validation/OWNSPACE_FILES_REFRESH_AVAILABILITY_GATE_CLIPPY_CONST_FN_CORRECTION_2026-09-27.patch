@@ -1,0 +1,11 @@
+--- a/apps/desktop/src/ui.rs
++++ b/apps/desktop/src/ui.rs
+@@ -272,7 +272,7 @@
+     RemotePath::parse(path).is_ok()
+ }
+ 
+-fn file_list_refresh_enabled(controls_enabled: bool, has_successful_listing: bool) -> bool {
++const fn file_list_refresh_enabled(controls_enabled: bool, has_successful_listing: bool) -> bool {
+     controls_enabled && has_successful_listing
+ }
+ 
