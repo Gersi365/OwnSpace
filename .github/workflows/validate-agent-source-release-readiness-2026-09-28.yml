@@ -1,0 +1,174 @@
+name: Ownspace Agent source release-readiness validation
+
+on:
+  push:
+    branches:
+      - validation/agent-source-release-readiness-2026-09-28
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout carrier
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Verify exact authoritative base and carrier scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_base='e76a81acea47dd362e7c383b723de99f93875409'
+          actual_base=$(git rev-parse HEAD^)
+          test "$actual_base" = "$expected_base"
+          mapfile -t changed < <(git diff --name-only "$expected_base"..HEAD)
+          test "${#changed[@]}" -eq 1
+          test "${changed[0]}" = '.github/workflows/validate-agent-source-release-readiness-2026-09-28.yml'
+
+      - name: Install native build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config protobuf-compiler libgtk-4-dev libadwaita-1-dev
+
+      - name: Install exact Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
+          rustup default 1.97.1
+          rustc --version
+          cargo --version
+          rustfmt --version
+          cargo clippy -V
+
+      - name: Verify locked metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo metadata --locked --no-deps --format-version 1 >/tmp/ownspace-cargo-metadata.json
+          test -s /tmp/ownspace-cargo-metadata.json
+
+      - name: Formatting check
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check
+
+      - name: Workspace tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --workspace --all-targets
+
+      - name: Workspace Clippy
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Build Agent release binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked --release -p prw-agent --bin prw-agent --bin prw-first-run --bin prw-agent-command3-agent-status-probe
+          cargo build --locked --release -p prw-agent-systemd-orchestration --bin prw-agent-configure
+          cargo build --locked --release -p prw-device-identity-provisioning --bin prw-device-identity-provision
+          cargo build --locked --release -p prw-agent-package-reconciliation --bin prw-agent-package-reconcile
+          for f in \
+            target/release/prw-agent \
+            target/release/prw-first-run \
+            target/release/prw-agent-command3-agent-status-probe \
+            target/release/prw-agent-configure \
+            target/release/prw-device-identity-provision \
+            target/release/prw-agent-package-reconcile
+          do
+            test -x "$f"
+          done
+
+      - name: Validate create-only installer scripts in disposable roots
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n packaging/systemd/install-prw-agent-configure.sh
+          bash -n packaging/systemd/install-prw-device-identity-provision.sh
+
+          root1=$(mktemp -d)
+          root2=$(mktemp -d)
+          trap 'rm -rf "$root1" "$root2"' EXIT
+
+          packaging/systemd/install-prw-agent-configure.sh \
+            --root "$root1" \
+            --artifact target/release/prw-agent-configure
+          cmp -s \
+            target/release/prw-agent-configure \
+            "$root1/usr/lib/private-remote-workspace/prw-agent-configure"
+
+          if packaging/systemd/install-prw-agent-configure.sh \
+            --root "$root1" \
+            --artifact target/release/prw-agent-configure
+          then
+            echo 'create-only agent-configure installer unexpectedly overwrote destination' >&2
+            exit 1
+          fi
+
+          packaging/systemd/install-prw-device-identity-provision.sh \
+            --root "$root2" \
+            --artifact target/release/prw-device-identity-provision
+          cmp -s \
+            target/release/prw-device-identity-provision \
+            "$root2/usr/lib/private-remote-workspace/prw-device-identity-provision"
+
+          if packaging/systemd/install-prw-device-identity-provision.sh \
+            --root "$root2" \
+            --artifact target/release/prw-device-identity-provision
+          then
+            echo 'create-only identity-provision installer unexpectedly overwrote destination' >&2
+            exit 1
+          fi
+
+      - name: Assemble validation artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          out=ownspace-agent-release-readiness
+          rm -rf "$out"
+          mkdir -p "$out/bin" "$out/packaging"
+          cp target/release/prw-agent "$out/bin/"
+          cp target/release/prw-first-run "$out/bin/"
+          cp target/release/prw-agent-command3-agent-status-probe "$out/bin/"
+          cp target/release/prw-agent-configure "$out/bin/"
+          cp target/release/prw-device-identity-provision "$out/bin/"
+          cp target/release/prw-agent-package-reconcile "$out/bin/"
+          cp packaging/systemd/prw-agent.service "$out/packaging/"
+          cp packaging/systemd/install-prw-agent-configure.sh "$out/packaging/"
+          cp packaging/systemd/install-prw-device-identity-provision.sh "$out/packaging/"
+
+          {
+            echo 'source_main=e76a81acea47dd362e7c383b723de99f93875409'
+            echo 'source_manifest_sha256=1c6a7924c7bf54fd5b231a66fe289919c9c7e775d48c753f965f39990c644976'
+            echo 'source_archive_sha256=c9fed4ca890f9e4dd99b10bd530e9396f85a396e9046f02de19848e839860e1e'
+            rustc --version
+            cargo --version
+            uname -m
+          } > "$out/BUILD_IDENTITY.txt"
+          (cd "$out" && find . -type f -print0 | sort -z | xargs -0 sha256sum) > "$out/SHA256SUMS.txt"
+          tar --sort=name --mtime='UTC 2026-09-28' --owner=0 --group=0 --numeric-owner -czf ownspace-agent-release-readiness.tar.gz "$out"
+          sha256sum ownspace-agent-release-readiness.tar.gz
+
+      - name: Upload Agent validation binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: ownspace-agent-release-readiness
+          path: |
+            ownspace-agent-release-readiness.tar.gz
+            ownspace-agent-release-readiness/BUILD_IDENTITY.txt
+            ownspace-agent-release-readiness/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 7
