@@ -1,0 +1,74 @@
+name: Ownspace Desktop presentation navigation-state ownership validation
+
+on:
+  push:
+    branches:
+      - validation/desktop-presentation-navigation-state-ownership-2026-09-28-r2
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout validation carrier
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Verify exact carrier and candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE_SHA='db6d255446c54f53a85885144331ace3b6f3a4b0'
+          BASE_STATE_SHA256='aa1ee9c4b61912e0a7a3c291269491780d4944c0fa197d17c75e5f135aba6941'
+          BASE_UI_SHA256='db0c523fffd14f6a715271e5a180d64aec4ccdf584cd32121cb672cb6dca41b6'
+          PATCH_SHA256='281dceb031ed1d18bc239a6ef83d00ac555acd071e814ce99abfeac8a29996ef'
+          FINAL_STATE_SHA256='7ebe53ae7ed071c3d088f67532d85e2e177c3073ecbbff599c86632525410637'
+          PATCH='.github/validation/OWNSPACE_DESKTOP_PRESENTATION_NAVIGATION_STATE_OWNERSHIP_CANDIDATE_2026-09-28.patch'
+
+          test "$(git rev-parse HEAD^)" = "$BASE_SHA"
+          test "$(sha256sum apps/desktop/src/state.rs | awk '{print $1}')" = "$BASE_STATE_SHA256"
+          test "$(sha256sum apps/desktop/src/ui.rs | awk '{print $1}')" = "$BASE_UI_SHA256"
+          test "$(sha256sum "$PATCH" | awk '{print $1}')" = "$PATCH_SHA256"
+
+          git apply --check "$PATCH"
+          git apply "$PATCH"
+          git diff --check
+          test "$(git diff --name-only)" = 'apps/desktop/src/state.rs'
+          test "$(sha256sum apps/desktop/src/state.rs | awk '{print $1}')" = "$FINAL_STATE_SHA256"
+          test "$(sha256sum apps/desktop/src/ui.rs | awk '{print $1}')" = "$BASE_UI_SHA256"
+
+          test "$(grep -Fc 'pub(crate) selected:' apps/desktop/src/state.rs)" = '0'
+          test "$(grep -Fc 'state.selected' apps/desktop/src/state.rs)" = '0'
+          test "$(grep -Fc 'selected: NavigationDestination::' apps/desktop/src/state.rs)" = '0'
+          test "$(grep -Fc 'pub enum NavigationDestination' apps/desktop/src/state.rs)" = '1'
+          test "$(grep -Fc 'pub(crate) const ALL: [Self; 7]' apps/desktop/src/state.rs)" = '1'
+          test "$(grep -Fc 'fn navigation_destinations_have_stable_presentation_contract()' apps/desktop/src/state.rs)" = '1'
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config protobuf-compiler libgtk-4-dev libadwaita-1-dev
+
+      - name: Focused default navigation contract test
+        run: cargo test --locked -p prw-desktop overview_is_the_deterministic_default_destination -- --nocapture
+
+      - name: Focused status refresh projection test
+        run: cargo test --locked -p prw-desktop status_refresh_preserves_private_dns_projection -- --nocapture
+
+      - name: Stable navigation presentation contract test
+        run: cargo test --locked -p prw-desktop navigation_destinations_have_stable_presentation_contract -- --nocapture
+
+      - name: Formatting check
+        run: cargo fmt --check
+
+      - name: Desktop tests
+        run: cargo test --locked -p prw-desktop
+
+      - name: Desktop compile check
+        run: cargo check --locked -p prw-desktop
+
+      - name: Desktop Clippy
+        run: cargo clippy --locked -p prw-desktop --all-targets -- -D warnings
