@@ -25,6 +25,7 @@ const FILES_PATH_UNLOADED_LABEL: &str = "Current path: not loaded";
 const WORKER_RESULT_POLL_INTERVAL: Duration = Duration::from_millis(75);
 const PAGE_OUTER_MARGIN: i32 = 32;
 const DIM_LABEL_CSS_CLASS: &str = "dim-label";
+const PAGE_TITLE_CSS_CLASS: &str = "title-1";
 const FILES_SUBTITLE: &str = concat!(
     "Read-only directory listing under the local owner home authority. ",
     "Paths are relative; this surface does not read file contents, mutate files, transfer data, open terminals, or create forwarding."
@@ -169,7 +170,7 @@ fn overview_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label, gtk::Button
 
     let title = gtk::Label::new(Some(NavigationDestination::Overview.title()));
     title.set_xalign(0.0);
-    title.add_css_class("title-1");
+    title.add_css_class(PAGE_TITLE_CSS_CLASS);
     page.append(&title);
 
     let subtitle = gtk::Label::new(Some(
@@ -208,7 +209,7 @@ fn machines_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label, gtk::Button
 
     let title = gtk::Label::new(Some(NavigationDestination::Machines.title()));
     title.set_xalign(0.0);
-    title.add_css_class("title-1");
+    title.add_css_class(PAGE_TITLE_CSS_CLASS);
     page.append(&title);
 
     let subtitle = gtk::Label::new(Some(MACHINES_SUBTITLE));
@@ -425,7 +426,7 @@ fn files_page() -> gtk::Box {
 
     let title = gtk::Label::new(Some(NavigationDestination::Files.title()));
     title.set_xalign(0.0);
-    title.add_css_class("title-1");
+    title.add_css_class(PAGE_TITLE_CSS_CLASS);
     page.append(&title);
 
     let subtitle = gtk::Label::new(Some(FILES_SUBTITLE));
@@ -530,7 +531,7 @@ fn activity_page() -> (
 
     let title = gtk::Label::new(Some(NavigationDestination::Activity.title()));
     title.set_xalign(0.0);
-    title.add_css_class("title-1");
+    title.add_css_class(PAGE_TITLE_CSS_CLASS);
     page.append(&title);
 
     let subtitle = gtk::Label::new(Some(ACTIVITY_SUBTITLE));
@@ -629,7 +630,7 @@ fn settings_page() -> (gtk::Box, gtk::Label) {
 
     let title = gtk::Label::new(Some(NavigationDestination::Settings.title()));
     title.set_xalign(0.0);
-    title.add_css_class("title-1");
+    title.add_css_class(PAGE_TITLE_CSS_CLASS);
     page.append(&title);
 
     let status = gtk::Label::new(Some("Read-only local diagnostics"));
@@ -780,7 +781,7 @@ fn placeholder_page(destination: PlaceholderDestination) -> gtk::Box {
 
     let title = gtk::Label::new(Some(destination.navigation_destination().title()));
     title.set_xalign(0.0);
-    title.add_css_class("title-1");
+    title.add_css_class(PAGE_TITLE_CSS_CLASS);
     page.append(&title);
 
     let status = gtk::Label::new(Some(PLACEHOLDER_STATUS));
