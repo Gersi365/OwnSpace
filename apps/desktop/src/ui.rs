@@ -118,9 +118,8 @@ pub fn build(app: &adw::Application) {
         let page = match destination {
             NavigationDestination::Overview => continue,
             NavigationDestination::Machines => machines.clone(),
-            NavigationDestination::Sessions | NavigationDestination::Transfers => {
-                placeholder_page(destination)
-            }
+            NavigationDestination::Sessions => placeholder_page(PlaceholderDestination::Sessions),
+            NavigationDestination::Transfers => placeholder_page(PlaceholderDestination::Transfers),
             NavigationDestination::Files => files.clone(),
             NavigationDestination::Activity => activity.clone(),
             NavigationDestination::Settings => settings.clone(),
@@ -758,7 +757,22 @@ fn append_agent_reported_protocol_section(page: &gtk::Box) -> gtk::Label {
     protocol
 }
 
-fn placeholder_page(destination: NavigationDestination) -> gtk::Box {
+#[derive(Clone, Copy)]
+enum PlaceholderDestination {
+    Sessions,
+    Transfers,
+}
+
+impl PlaceholderDestination {
+    const fn title(self) -> &'static str {
+        match self {
+            Self::Sessions => "Sessions",
+            Self::Transfers => "Transfers",
+        }
+    }
+}
+
+fn placeholder_page(destination: PlaceholderDestination) -> gtk::Box {
     let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
     page.set_margin_top(32);
     page.set_margin_bottom(32);
@@ -784,20 +798,13 @@ fn placeholder_page(destination: NavigationDestination) -> gtk::Box {
     page
 }
 
-fn placeholder_description(destination: NavigationDestination) -> &'static str {
+const fn placeholder_description(destination: PlaceholderDestination) -> &'static str {
     match destination {
-        NavigationDestination::Sessions => {
+        PlaceholderDestination::Sessions => {
             "Reserved for authorized terminal, Remote Desktop, and forwarding session presentation when runtime state is available."
         }
-        NavigationDestination::Transfers => {
+        PlaceholderDestination::Transfers => {
             "Reserved for verified upload/download progress and completion state."
-        }
-        NavigationDestination::Overview
-        | NavigationDestination::Machines
-        | NavigationDestination::Files
-        | NavigationDestination::Activity
-        | NavigationDestination::Settings => {
-            unreachable!("implemented destinations must not use placeholder descriptions")
         }
     }
 }
@@ -945,11 +952,11 @@ mod tests {
         ACTIVITY_SUBTITLE, COPY_SNAPSHOT_DONE_LABEL, COPY_SNAPSHOT_IDLE_LABEL,
         FILES_LIST_BUSY_LABEL, FILES_LIST_IDLE_LABEL, FILES_PATH_INVALID_STATUS,
         FILES_PATH_UNLOADED_LABEL, FILES_REFRESH_LABEL, FILES_SUBTITLE, MACHINES_SUBTITLE,
-        NavigationDestination, PLACEHOLDER_STATUS, REFRESH_BUTTON_BUSY_LABEL,
-        REFRESH_BUTTON_IDLE_LABEL, activity_snapshot_clipboard_text,
-        desktop_local_ipc_protocol_text, desktop_version_text, file_list_child_path,
-        file_list_manual_path_is_canonical, file_list_parent_path, file_list_path_label,
-        file_list_refresh_enabled, local_endpoint_contract_text, placeholder_description,
+        PLACEHOLDER_STATUS, REFRESH_BUTTON_BUSY_LABEL, REFRESH_BUTTON_IDLE_LABEL,
+        activity_snapshot_clipboard_text, desktop_local_ipc_protocol_text, desktop_version_text,
+        file_list_child_path, file_list_manual_path_is_canonical, file_list_parent_path,
+        file_list_path_label, file_list_refresh_enabled, local_endpoint_contract_text,
+        placeholder_description,
     };
 
     #[test]
@@ -1100,17 +1107,20 @@ mod tests {
     }
 
     #[test]
-    fn placeholder_descriptions_cover_only_session_and_transfer_routes() {
-        for (destination, description) in [
+    fn placeholder_contract_represents_only_session_and_transfer_routes() {
+        for (destination, title, description) in [
             (
-                NavigationDestination::Sessions,
+                super::PlaceholderDestination::Sessions,
+                "Sessions",
                 "Reserved for authorized terminal, Remote Desktop, and forwarding session presentation when runtime state is available.",
             ),
             (
-                NavigationDestination::Transfers,
+                super::PlaceholderDestination::Transfers,
+                "Transfers",
                 "Reserved for verified upload/download progress and completion state.",
             ),
         ] {
+            assert_eq!(destination.title(), title);
             assert_eq!(placeholder_description(destination), description);
         }
     }
