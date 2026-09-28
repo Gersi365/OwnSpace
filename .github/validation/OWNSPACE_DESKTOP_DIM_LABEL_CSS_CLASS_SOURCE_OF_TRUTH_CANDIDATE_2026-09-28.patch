@@ -1,0 +1,120 @@
+diff --git a/apps/desktop/src/ui.rs b/apps/desktop/src/ui.rs
+index 6177067..d12666f 100644
+--- a/apps/desktop/src/ui.rs
++++ b/apps/desktop/src/ui.rs
+@@ -24,6 +24,7 @@ const FILES_PATH_INVALID_STATUS: &str = "Invalid path: use a canonical relative
+ const FILES_PATH_UNLOADED_LABEL: &str = "Current path: not loaded";
+ const WORKER_RESULT_POLL_INTERVAL: Duration = Duration::from_millis(75);
+ const PAGE_OUTER_MARGIN: i32 = 32;
++const DIM_LABEL_CSS_CLASS: &str = "dim-label";
+ const FILES_SUBTITLE: &str = concat!(
+     "Read-only directory listing under the local owner home authority. ",
+     "Paths are relative; this surface does not read file contents, mutate files, transfer data, open terminals, or create forwarding."
+@@ -176,7 +177,7 @@ fn overview_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label, gtk::Button
+     ));
+     subtitle.set_xalign(0.0);
+     subtitle.set_wrap(true);
+-    subtitle.add_css_class("dim-label");
++    subtitle.add_css_class(DIM_LABEL_CSS_CLASS);
+     page.append(&subtitle);
+ 
+     let refresh_button = gtk::Button::with_label(REFRESH_BUTTON_IDLE_LABEL);
+@@ -192,7 +193,7 @@ fn overview_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label, gtk::Button
+     let detail_label = gtk::Label::new(None);
+     detail_label.set_xalign(0.0);
+     detail_label.set_wrap(true);
+-    detail_label.add_css_class("dim-label");
++    detail_label.add_css_class(DIM_LABEL_CSS_CLASS);
+     page.append(&detail_label);
+ 
+     (page, agent_label, dns_label, detail_label, refresh_button)
+@@ -213,7 +214,7 @@ fn machines_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label, gtk::Button
+     let subtitle = gtk::Label::new(Some(MACHINES_SUBTITLE));
+     subtitle.set_xalign(0.0);
+     subtitle.set_wrap(true);
+-    subtitle.add_css_class("dim-label");
++    subtitle.add_css_class(DIM_LABEL_CSS_CLASS);
+     page.append(&subtitle);
+ 
+     let refresh_button = gtk::Button::with_label(REFRESH_BUTTON_IDLE_LABEL);
+@@ -229,7 +230,7 @@ fn machines_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label, gtk::Button
+     let detail_label = gtk::Label::new(None);
+     detail_label.set_xalign(0.0);
+     detail_label.set_wrap(true);
+-    detail_label.add_css_class("dim-label");
++    detail_label.add_css_class(DIM_LABEL_CSS_CLASS);
+     page.append(&detail_label);
+ 
+     (page, agent_label, dns_label, detail_label, refresh_button)
+@@ -430,7 +431,7 @@ fn files_page() -> gtk::Box {
+     let subtitle = gtk::Label::new(Some(FILES_SUBTITLE));
+     subtitle.set_xalign(0.0);
+     subtitle.set_wrap(true);
+-    subtitle.add_css_class("dim-label");
++    subtitle.add_css_class(DIM_LABEL_CSS_CLASS);
+     page.append(&subtitle);
+ 
+     let current_path_label = gtk::Label::new(Some(FILES_PATH_UNLOADED_LABEL));
+@@ -535,7 +536,7 @@ fn activity_page() -> (
+     let subtitle = gtk::Label::new(Some(ACTIVITY_SUBTITLE));
+     subtitle.set_xalign(0.0);
+     subtitle.set_wrap(true);
+-    subtitle.add_css_class("dim-label");
++    subtitle.add_css_class(DIM_LABEL_CSS_CLASS);
+     page.append(&subtitle);
+ 
+     let refresh_button = gtk::Button::with_label(REFRESH_BUTTON_IDLE_LABEL);
+@@ -551,7 +552,7 @@ fn activity_page() -> (
+     let detail_label = gtk::Label::new(None);
+     detail_label.set_xalign(0.0);
+     detail_label.set_wrap(true);
+-    detail_label.add_css_class("dim-label");
++    detail_label.add_css_class(DIM_LABEL_CSS_CLASS);
+     page.append(&detail_label);
+ 
+     let copy_button = gtk::Button::with_label(COPY_SNAPSHOT_IDLE_LABEL);
+@@ -641,7 +642,7 @@ fn settings_page() -> (gtk::Box, gtk::Label) {
+     ));
+     detail.set_xalign(0.0);
+     detail.set_wrap(true);
+-    detail.add_css_class("dim-label");
++    detail.add_css_class(DIM_LABEL_CSS_CLASS);
+     page.append(&detail);
+ 
+     let build_title = gtk::Label::new(Some("Build information"));
+@@ -671,7 +672,7 @@ fn settings_page() -> (gtk::Box, gtk::Label) {
+     ));
+     protocol_detail.set_xalign(0.0);
+     protocol_detail.set_wrap(true);
+-    protocol_detail.add_css_class("dim-label");
++    protocol_detail.add_css_class(DIM_LABEL_CSS_CLASS);
+     page.append(&protocol_detail);
+ 
+     let agent_protocol = append_agent_reported_protocol_section(&page);
+@@ -724,7 +725,7 @@ fn settings_page() -> (gtk::Box, gtk::Label) {
+     ));
+     resolved_detail.set_xalign(0.0);
+     resolved_detail.set_wrap(true);
+-    resolved_detail.add_css_class("dim-label");
++    resolved_detail.add_css_class(DIM_LABEL_CSS_CLASS);
+     page.append(&resolved_detail);
+ 
+     (page, agent_protocol)
+@@ -749,7 +750,7 @@ fn append_agent_reported_protocol_section(page: &gtk::Box) -> gtk::Label {
+     ));
+     detail.set_xalign(0.0);
+     detail.set_wrap(true);
+-    detail.add_css_class("dim-label");
++    detail.add_css_class(DIM_LABEL_CSS_CLASS);
+     page.append(&detail);
+ 
+     protocol
+@@ -790,7 +791,7 @@ fn placeholder_page(destination: PlaceholderDestination) -> gtk::Box {
+     let detail = gtk::Label::new(Some(placeholder_description(destination)));
+     detail.set_xalign(0.0);
+     detail.set_wrap(true);
+-    detail.add_css_class("dim-label");
++    detail.add_css_class(DIM_LABEL_CSS_CLASS);
+     page.append(&detail);
+ 
+     page
