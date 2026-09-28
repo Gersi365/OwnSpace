@@ -1,0 +1,47 @@
+--- a/apps/desktop/src/ui.rs
++++ b/apps/desktop/src/ui.rs
+@@ -168,7 +168,7 @@
+     page.set_margin_start(32);
+     page.set_margin_end(32);
+ 
+-    let title = gtk::Label::new(Some("Overview"));
++    let title = gtk::Label::new(Some(NavigationDestination::Overview.title()));
+     title.set_xalign(0.0);
+     title.add_css_class("title-1");
+     page.append(&title);
+@@ -207,7 +207,7 @@
+     page.set_margin_start(32);
+     page.set_margin_end(32);
+ 
+-    let title = gtk::Label::new(Some("Machines"));
++    let title = gtk::Label::new(Some(NavigationDestination::Machines.title()));
+     title.set_xalign(0.0);
+     title.add_css_class("title-1");
+     page.append(&title);
+@@ -424,7 +424,7 @@
+     page.set_margin_start(32);
+     page.set_margin_end(32);
+ 
+-    let title = gtk::Label::new(Some("Files"));
++    let title = gtk::Label::new(Some(NavigationDestination::Files.title()));
+     title.set_xalign(0.0);
+     title.add_css_class("title-1");
+     page.append(&title);
+@@ -529,7 +529,7 @@
+     page.set_margin_start(32);
+     page.set_margin_end(32);
+ 
+-    let title = gtk::Label::new(Some("Activity"));
++    let title = gtk::Label::new(Some(NavigationDestination::Activity.title()));
+     title.set_xalign(0.0);
+     title.add_css_class("title-1");
+     page.append(&title);
+@@ -628,7 +628,7 @@
+     page.set_margin_start(32);
+     page.set_margin_end(32);
+ 
+-    let title = gtk::Label::new(Some("Settings"));
++    let title = gtk::Label::new(Some(NavigationDestination::Settings.title()));
+     title.set_xalign(0.0);
+     title.add_css_class("title-1");
+     page.append(&title);
