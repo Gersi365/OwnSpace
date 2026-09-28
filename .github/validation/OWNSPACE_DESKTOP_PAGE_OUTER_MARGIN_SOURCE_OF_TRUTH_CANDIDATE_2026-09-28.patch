@@ -1,0 +1,102 @@
+diff --git a/apps/desktop/src/ui.rs b/apps/desktop/src/ui.rs
+index dc3d1f1..6177067 100644
+--- a/apps/desktop/src/ui.rs
++++ b/apps/desktop/src/ui.rs
+@@ -23,6 +23,7 @@ const FILES_REFRESH_LABEL: &str = "Refresh";
+ const FILES_PATH_INVALID_STATUS: &str = "Invalid path: use a canonical relative path under home";
+ const FILES_PATH_UNLOADED_LABEL: &str = "Current path: not loaded";
+ const WORKER_RESULT_POLL_INTERVAL: Duration = Duration::from_millis(75);
++const PAGE_OUTER_MARGIN: i32 = 32;
+ const FILES_SUBTITLE: &str = concat!(
+     "Read-only directory listing under the local owner home authority. ",
+     "Paths are relative; this surface does not read file contents, mutate files, transfer data, open terminals, or create forwarding."
+@@ -160,10 +161,10 @@ pub fn build(app: &adw::Application) {
+ 
+ fn overview_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label, gtk::Button) {
+     let page = gtk::Box::new(gtk::Orientation::Vertical, 18);
+-    page.set_margin_top(32);
+-    page.set_margin_bottom(32);
+-    page.set_margin_start(32);
+-    page.set_margin_end(32);
++    page.set_margin_top(PAGE_OUTER_MARGIN);
++    page.set_margin_bottom(PAGE_OUTER_MARGIN);
++    page.set_margin_start(PAGE_OUTER_MARGIN);
++    page.set_margin_end(PAGE_OUTER_MARGIN);
+ 
+     let title = gtk::Label::new(Some(NavigationDestination::Overview.title()));
+     title.set_xalign(0.0);
+@@ -199,10 +200,10 @@ fn overview_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label, gtk::Button
+ 
+ fn machines_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label, gtk::Button) {
+     let page = gtk::Box::new(gtk::Orientation::Vertical, 18);
+-    page.set_margin_top(32);
+-    page.set_margin_bottom(32);
+-    page.set_margin_start(32);
+-    page.set_margin_end(32);
++    page.set_margin_top(PAGE_OUTER_MARGIN);
++    page.set_margin_bottom(PAGE_OUTER_MARGIN);
++    page.set_margin_start(PAGE_OUTER_MARGIN);
++    page.set_margin_end(PAGE_OUTER_MARGIN);
+ 
+     let title = gtk::Label::new(Some(NavigationDestination::Machines.title()));
+     title.set_xalign(0.0);
+@@ -416,10 +417,10 @@ fn request_file_listing(targets: &FilesPageTargets, path: String) {
+ 
+ fn files_page() -> gtk::Box {
+     let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
+-    page.set_margin_top(32);
+-    page.set_margin_bottom(32);
+-    page.set_margin_start(32);
+-    page.set_margin_end(32);
++    page.set_margin_top(PAGE_OUTER_MARGIN);
++    page.set_margin_bottom(PAGE_OUTER_MARGIN);
++    page.set_margin_start(PAGE_OUTER_MARGIN);
++    page.set_margin_end(PAGE_OUTER_MARGIN);
+ 
+     let title = gtk::Label::new(Some(NavigationDestination::Files.title()));
+     title.set_xalign(0.0);
+@@ -521,10 +522,10 @@ fn activity_page() -> (
+     gtk::Button,
+ ) {
+     let page = gtk::Box::new(gtk::Orientation::Vertical, 18);
+-    page.set_margin_top(32);
+-    page.set_margin_bottom(32);
+-    page.set_margin_start(32);
+-    page.set_margin_end(32);
++    page.set_margin_top(PAGE_OUTER_MARGIN);
++    page.set_margin_bottom(PAGE_OUTER_MARGIN);
++    page.set_margin_start(PAGE_OUTER_MARGIN);
++    page.set_margin_end(PAGE_OUTER_MARGIN);
+ 
+     let title = gtk::Label::new(Some(NavigationDestination::Activity.title()));
+     title.set_xalign(0.0);
+@@ -620,10 +621,10 @@ fn local_endpoint_contract_text() -> String {
+ 
+ fn settings_page() -> (gtk::Box, gtk::Label) {
+     let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
+-    page.set_margin_top(32);
+-    page.set_margin_bottom(32);
+-    page.set_margin_start(32);
+-    page.set_margin_end(32);
++    page.set_margin_top(PAGE_OUTER_MARGIN);
++    page.set_margin_bottom(PAGE_OUTER_MARGIN);
++    page.set_margin_start(PAGE_OUTER_MARGIN);
++    page.set_margin_end(PAGE_OUTER_MARGIN);
+ 
+     let title = gtk::Label::new(Some(NavigationDestination::Settings.title()));
+     title.set_xalign(0.0);
+@@ -771,10 +772,10 @@ impl PlaceholderDestination {
+ 
+ fn placeholder_page(destination: PlaceholderDestination) -> gtk::Box {
+     let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
+-    page.set_margin_top(32);
+-    page.set_margin_bottom(32);
+-    page.set_margin_start(32);
+-    page.set_margin_end(32);
++    page.set_margin_top(PAGE_OUTER_MARGIN);
++    page.set_margin_bottom(PAGE_OUTER_MARGIN);
++    page.set_margin_start(PAGE_OUTER_MARGIN);
++    page.set_margin_end(PAGE_OUTER_MARGIN);
+ 
+     let title = gtk::Label::new(Some(destination.navigation_destination().title()));
+     title.set_xalign(0.0);

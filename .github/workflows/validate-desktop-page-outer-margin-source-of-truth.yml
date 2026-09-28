@@ -1,0 +1,84 @@
+name: Ownspace Desktop page outer-margin source-of-truth validation
+
+on:
+  push:
+    branches:
+      - validation/desktop-page-outer-margin-source-of-truth-2026-09-28
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout carrier
+        uses: actions/checkout@v4
+
+      - name: Verify exact authoritative base
+        shell: python
+        run: |
+          from pathlib import Path
+          import hashlib
+
+          path = Path("apps/desktop/src/ui.rs")
+          data = path.read_bytes()
+          text = data.decode("utf-8")
+          expected_sha = "7c88f72f1e3ad87d2f0a7670e9da8dd013cb5ac8593f9a336027fde1c04c526d"
+          actual_sha = hashlib.sha256(data).hexdigest()
+          assert actual_sha == expected_sha, (actual_sha, expected_sha)
+          assert text.count("const PAGE_OUTER_MARGIN: i32 = 32;") == 0
+          for setter in ("top", "bottom", "start", "end"):
+              assert text.count(f"page.set_margin_{setter}(32);") == 6
+
+      - name: Apply exact candidate patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply --check .github/validation/OWNSPACE_DESKTOP_PAGE_OUTER_MARGIN_SOURCE_OF_TRUTH_CANDIDATE_2026-09-28.patch
+          git apply .github/validation/OWNSPACE_DESKTOP_PAGE_OUTER_MARGIN_SOURCE_OF_TRUTH_CANDIDATE_2026-09-28.patch
+          git diff --check
+          test "$(git diff --name-only)" = "apps/desktop/src/ui.rs"
+
+      - name: Verify bounded source contract
+        shell: python
+        run: |
+          from pathlib import Path
+          import hashlib
+          import re
+
+          path = Path("apps/desktop/src/ui.rs")
+          data = path.read_bytes()
+          text = data.decode("utf-8")
+          expected_sha = "76fbf88af4a4691baee7e84fe7f474d26e2ae3ee38dd0ec2eba001632335316a"
+          actual_sha = hashlib.sha256(data).hexdigest()
+          assert actual_sha == expected_sha, (actual_sha, expected_sha)
+
+          assert text.count("const PAGE_OUTER_MARGIN: i32 = 32;") == 1
+          assert text.count("PAGE_OUTER_MARGIN") == 25
+          for setter in ("top", "bottom", "start", "end"):
+              assert text.count(f"page.set_margin_{setter}(PAGE_OUTER_MARGIN);") == 6
+              assert text.count(f"page.set_margin_{setter}(32);") == 0
+          assert len(re.findall(r"(?<![A-Za-z0-9_])32(?![A-Za-z0-9_])", text)) == 1
+          assert text.count("const WORKER_RESULT_POLL_INTERVAL: Duration = Duration::from_millis(75);") == 1
+          assert text.count("glib::timeout_add_local(WORKER_RESULT_POLL_INTERVAL, move || {") == 2
+          assert text.count("mpsc::sync_channel(1)") == 2
+          assert text.count("ipc::query_file_list(&worker_path)") == 1
+          assert text.count("ipc::query_status_probe()") == 1
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config protobuf-compiler libgtk-4-dev libadwaita-1-dev
+
+      - name: Formatting check
+        run: cargo fmt --all -- --check
+
+      - name: Desktop tests
+        run: cargo test --locked -p prw-desktop
+
+      - name: Desktop compile check
+        run: cargo check --locked -p prw-desktop
+
+      - name: Desktop Clippy
+        run: cargo clippy --locked -p prw-desktop --all-targets -- -D warnings
