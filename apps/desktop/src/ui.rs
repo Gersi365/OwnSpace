@@ -89,11 +89,6 @@ pub fn build(app: &adw::Application) {
     stack.set_transition_type(gtk::StackTransitionType::Crossfade);
 
     let (overview, agent_label, dns_label, detail_label, refresh_button) = overview_page();
-    stack.add_titled(
-        &overview,
-        Some(NavigationDestination::Overview.stack_name()),
-        NavigationDestination::Overview.title(),
-    );
 
     let (
         machines,
@@ -114,9 +109,9 @@ pub fn build(app: &adw::Application) {
     let files = files_page();
     let (settings, settings_agent_protocol_label) = settings_page();
 
-    for destination in NavigationDestination::ALL.into_iter().skip(1) {
+    for destination in NavigationDestination::ALL {
         let page = match destination {
-            NavigationDestination::Overview => continue,
+            NavigationDestination::Overview => overview.clone(),
             NavigationDestination::Machines => machines.clone(),
             NavigationDestination::Sessions => placeholder_page(PlaceholderDestination::Sessions),
             NavigationDestination::Transfers => placeholder_page(PlaceholderDestination::Transfers),
