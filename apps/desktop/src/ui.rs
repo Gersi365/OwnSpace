@@ -764,10 +764,10 @@ enum PlaceholderDestination {
 }
 
 impl PlaceholderDestination {
-    const fn title(self) -> &'static str {
+    const fn navigation_destination(self) -> NavigationDestination {
         match self {
-            Self::Sessions => "Sessions",
-            Self::Transfers => "Transfers",
+            Self::Sessions => NavigationDestination::Sessions,
+            Self::Transfers => NavigationDestination::Transfers,
         }
     }
 }
@@ -779,7 +779,7 @@ fn placeholder_page(destination: PlaceholderDestination) -> gtk::Box {
     page.set_margin_start(32);
     page.set_margin_end(32);
 
-    let title = gtk::Label::new(Some(destination.title()));
+    let title = gtk::Label::new(Some(destination.navigation_destination().title()));
     title.set_xalign(0.0);
     title.add_css_class("title-1");
     page.append(&title);
@@ -1108,19 +1108,19 @@ mod tests {
 
     #[test]
     fn placeholder_contract_represents_only_session_and_transfer_routes() {
-        for (destination, title, description) in [
+        for (destination, navigation_destination, description) in [
             (
                 super::PlaceholderDestination::Sessions,
-                "Sessions",
+                super::NavigationDestination::Sessions,
                 "Reserved for authorized terminal, Remote Desktop, and forwarding session presentation when runtime state is available.",
             ),
             (
                 super::PlaceholderDestination::Transfers,
-                "Transfers",
+                super::NavigationDestination::Transfers,
                 "Reserved for verified upload/download progress and completion state.",
             ),
         ] {
-            assert_eq!(destination.title(), title);
+            assert_eq!(destination.navigation_destination(), navigation_destination);
             assert_eq!(placeholder_description(destination), description);
         }
     }
