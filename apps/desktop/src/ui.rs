@@ -27,6 +27,7 @@ const PAGE_OUTER_MARGIN: i32 = 32;
 const DIM_LABEL_CSS_CLASS: &str = "dim-label";
 const PAGE_TITLE_CSS_CLASS: &str = "title-1";
 const TITLE_3_CSS_CLASS: &str = "title-3";
+const HEADING_CSS_CLASS: &str = "heading";
 const FILES_SUBTITLE: &str = concat!(
     "Read-only directory listing under the local owner home authority. ",
     "Paths are relative; this surface does not read file contents, mutate files, transfer data, open terminals, or create forwarding."
@@ -649,7 +650,7 @@ fn settings_page() -> (gtk::Box, gtk::Label) {
 
     let build_title = gtk::Label::new(Some("Build information"));
     build_title.set_xalign(0.0);
-    build_title.add_css_class("heading");
+    build_title.add_css_class(HEADING_CSS_CLASS);
     page.append(&build_title);
 
     let version = gtk::Label::new(Some(&desktop_version_text()));
@@ -660,7 +661,7 @@ fn settings_page() -> (gtk::Box, gtk::Label) {
 
     let protocol_title = gtk::Label::new(Some("Local IPC compatibility"));
     protocol_title.set_xalign(0.0);
-    protocol_title.add_css_class("heading");
+    protocol_title.add_css_class(HEADING_CSS_CLASS);
     page.append(&protocol_title);
 
     let protocol = gtk::Label::new(Some(&desktop_local_ipc_protocol_text()));
@@ -681,7 +682,7 @@ fn settings_page() -> (gtk::Box, gtk::Label) {
 
     let endpoint_title = gtk::Label::new(Some("Local control endpoint"));
     endpoint_title.set_xalign(0.0);
-    endpoint_title.add_css_class("heading");
+    endpoint_title.add_css_class(HEADING_CSS_CLASS);
     page.append(&endpoint_title);
 
     let endpoint = gtk::Label::new(Some(&local_endpoint_contract_text()));
@@ -693,7 +694,7 @@ fn settings_page() -> (gtk::Box, gtk::Label) {
 
     let resolved_title = gtk::Label::new(Some("Resolved endpoint for this session"));
     resolved_title.set_xalign(0.0);
-    resolved_title.add_css_class("heading");
+    resolved_title.add_css_class(HEADING_CSS_CLASS);
     page.append(&resolved_title);
 
     let resolved_endpoint = ipc::endpoint_candidate_from_environment();
@@ -736,7 +737,7 @@ fn settings_page() -> (gtk::Box, gtk::Label) {
 fn append_agent_reported_protocol_section(page: &gtk::Box) -> gtk::Label {
     let title = gtk::Label::new(Some("Latest Agent-reported protocol"));
     title.set_xalign(0.0);
-    title.add_css_class("heading");
+    title.add_css_class(HEADING_CSS_CLASS);
     page.append(&title);
 
     let protocol = gtk::Label::new(Some(
