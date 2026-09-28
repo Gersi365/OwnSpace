@@ -1,0 +1,73 @@
+name: Ownspace Desktop status-probe naming alignment validation
+
+on:
+  push:
+    branches:
+      - validation/desktop-status-probe-naming-alignment-2026-09-28
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout validation carrier
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Verify exact carrier and candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE_SHA='29765ac1d9af979a3c257fe3666865e47980b279'
+          BASE_IPC_SHA256='4ec37bebda600f75919964fb500b61843f637c4092f9f65a4e6c82ceaae796d4'
+          BASE_UI_SHA256='db0c523fffd14f6a715271e5a180d64aec4ccdf584cd32121cb672cb6dca41b6'
+          PATCH_SHA256='29b7ea1b3f750bf0db87cdd5ad2e0ec053bdb033adf0f0a08cfcedc0333d7317'
+          FINAL_IPC_SHA256='6e1af96bd930f95dac25a63508bbfb759a34bddc54aebec6261d0071fe3f3b6b'
+          FINAL_UI_SHA256='71b004462c6fe0ae8bdef6c5a1059ffc4322eddcd4268ee315cbded841003305'
+          PATCH='.github/validation/OWNSPACE_DESKTOP_STATUS_PROBE_NAMING_ALIGNMENT_CANDIDATE_2026-09-28.patch'
+
+          test "$(git rev-parse HEAD^)" = "$BASE_SHA"
+          test "$(sha256sum apps/desktop/src/ipc.rs | awk '{print $1}')" = "$BASE_IPC_SHA256"
+          test "$(sha256sum apps/desktop/src/ui.rs | awk '{print $1}')" = "$BASE_UI_SHA256"
+          test "$(sha256sum "$PATCH" | awk '{print $1}')" = "$PATCH_SHA256"
+
+          git apply --check "$PATCH"
+          git apply "$PATCH"
+          git diff --check
+          test "$(git diff --name-only | sort)" = $'apps/desktop/src/ipc.rs\napps/desktop/src/ui.rs'
+          test "$(sha256sum apps/desktop/src/ipc.rs | awk '{print $1}')" = "$FINAL_IPC_SHA256"
+          test "$(sha256sum apps/desktop/src/ui.rs | awk '{print $1}')" = "$FINAL_UI_SHA256"
+
+          test "$(grep -R -E -c '\bStartupProbe\b|query_startup|start_startup_probe' apps/desktop/src/ipc.rs apps/desktop/src/ui.rs | awk -F: '{s+=$2} END {print s+0}')" = '0'
+          test "$(grep -w -c 'StatusProbe' apps/desktop/src/ipc.rs)" = '9'
+          test "$(grep -R -F -c 'query_status_probe' apps/desktop/src/ipc.rs apps/desktop/src/ui.rs | awk -F: '{s+=$2} END {print s+0}')" = '2'
+          test "$(grep -F -c 'start_status_probe' apps/desktop/src/ui.rs)" = '5'
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config protobuf-compiler libgtk-4-dev libadwaita-1-dev
+
+      - name: Focused private DNS partial-failure presentation test
+        run: cargo test --locked -p prw-desktop private_dns_failure_is_visible_without_downgrading_agent_status -- --nocapture
+
+      - name: Focused shared-endpoint failure presentation test
+        run: cargo test --locked -p prw-desktop shared_endpoint_failure_is_not_duplicated_in_presentation_detail -- --nocapture
+
+      - name: Focused primary-status failure presentation test
+        run: cargo test --locked -p prw-desktop secondary_private_dns_failure_does_not_mask_primary_status_failure -- --nocapture
+
+      - name: Formatting check
+        run: cargo fmt --check
+
+      - name: Desktop tests
+        run: cargo test --locked -p prw-desktop
+
+      - name: Desktop compile check
+        run: cargo check --locked -p prw-desktop
+
+      - name: Desktop Clippy
+        run: cargo clippy --locked -p prw-desktop --all-targets -- -D warnings

@@ -1,0 +1,126 @@
+diff --git a/apps/desktop/src/ipc.rs b/apps/desktop/src/ipc.rs
+index dd0b2ae..5916acf 100644
+--- a/apps/desktop/src/ipc.rs
++++ b/apps/desktop/src/ipc.rs
+@@ -31,12 +31,12 @@ use crate::state::{AgentAvailability, DesktopPresentationState};
+ const IPC_TIMEOUT: Duration = Duration::from_secs(2);
+ 
+ #[derive(Debug, Clone)]
+-pub struct StartupProbe {
++pub struct StatusProbe {
+     pub(crate) status: Result<LocalAgentStatusSnapshot, DesktopIpcError>,
+     pub(crate) private_dns: Result<LocalPrivateDnsSnapshot, DesktopIpcError>,
+ }
+ 
+-impl StartupProbe {
++impl StatusProbe {
+     pub(crate) fn into_presentation(self) -> DesktopPresentationState {
+         let mut state = DesktopPresentationState::connecting();
+         let status_succeeded = self.status.is_ok();
+@@ -154,12 +154,12 @@ impl fmt::Display for DesktopIpcError {
+     }
+ }
+ 
+-pub fn query_startup() -> StartupProbe {
++pub fn query_status_probe() -> StatusProbe {
+     let endpoint = endpoint_from_environment();
+     let endpoint = match endpoint {
+         Ok(endpoint) => endpoint,
+         Err(error) => {
+-            return StartupProbe {
++            return StatusProbe {
+                 status: Err(error),
+                 private_dns: Err(error),
+             };
+@@ -173,7 +173,7 @@ pub fn query_startup() -> StartupProbe {
+     let status = status_id.and_then(|request_id| query_status(&endpoint, request_id));
+     let private_dns = dns_id.and_then(|request_id| query_private_dns(&endpoint, request_id));
+ 
+-    StartupProbe {
++    StatusProbe {
+         status,
+         private_dns,
+     }
+@@ -361,7 +361,7 @@ mod tests {
+     use std::path::Path;
+ 
+     use super::{
+-        DesktopIpcError, StartupProbe, endpoint_candidate_from_raw, ensure_response_id,
++        DesktopIpcError, StatusProbe, endpoint_candidate_from_raw, ensure_response_id,
+         runtime_root_from_raw,
+     };
+     use crate::state::{AgentAvailability, AgentRuntimePresentation};
+@@ -428,7 +428,7 @@ mod tests {
+ 
+     #[test]
+     fn private_dns_failure_is_visible_without_downgrading_agent_status() {
+-        let state = StartupProbe {
++        let state = StatusProbe {
+             status: Ok(LocalAgentStatusSnapshot::current(
+                 LocalAgentRuntimeState::Ready,
+             )),
+@@ -447,7 +447,7 @@ mod tests {
+ 
+     #[test]
+     fn shared_endpoint_failure_is_not_duplicated_in_presentation_detail() {
+-        let state = StartupProbe {
++        let state = StatusProbe {
+             status: Err(DesktopIpcError::ConnectFailed),
+             private_dns: Err(DesktopIpcError::ConnectFailed),
+         }
+@@ -460,7 +460,7 @@ mod tests {
+ 
+     #[test]
+     fn secondary_private_dns_failure_does_not_mask_primary_status_failure() {
+-        let state = StartupProbe {
++        let state = StatusProbe {
+             status: Err(DesktopIpcError::ConnectFailed),
+             private_dns: Err(DesktopIpcError::ResponseInvalid),
+         }
+diff --git a/apps/desktop/src/ui.rs b/apps/desktop/src/ui.rs
+index 32ae9e2..8ab46b6 100644
+--- a/apps/desktop/src/ui.rs
++++ b/apps/desktop/src/ui.rs
+@@ -154,7 +154,7 @@ pub fn build(app: &adw::Application) {
+     let connecting = DesktopPresentationState::connecting();
+     render_probe_state(&connecting, &probe_targets);
+     connect_refresh_controls(&probe_targets);
+-    start_startup_probe(probe_targets);
++    start_status_probe(probe_targets);
+ }
+ 
+ fn overview_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label, gtk::Button) {
+@@ -809,20 +809,20 @@ fn connect_refresh_controls(targets: &StatusProbeTargets) {
+     let overview_targets = targets.clone();
+     targets
+         .overview_refresh_button
+-        .connect_clicked(move |_| start_startup_probe(overview_targets.clone()));
++        .connect_clicked(move |_| start_status_probe(overview_targets.clone()));
+ 
+     let machines_targets = targets.clone();
+     targets
+         .machines_refresh_button
+-        .connect_clicked(move |_| start_startup_probe(machines_targets.clone()));
++        .connect_clicked(move |_| start_status_probe(machines_targets.clone()));
+ 
+     let activity_targets = targets.clone();
+     targets
+         .activity_refresh_button
+-        .connect_clicked(move |_| start_startup_probe(activity_targets.clone()));
++        .connect_clicked(move |_| start_status_probe(activity_targets.clone()));
+ }
+ 
+-fn start_startup_probe(targets: StatusProbeTargets) {
++fn start_status_probe(targets: StatusProbeTargets) {
+     set_refresh_controls_busy(
+         &targets.overview_refresh_button,
+         &targets.machines_refresh_button,
+@@ -833,7 +833,7 @@ fn start_startup_probe(targets: StatusProbeTargets) {
+     let spawn_result = std::thread::Builder::new()
+         .name("prw-desktop-readonly-agent-probe".to_owned())
+         .spawn(move || {
+-            let _ = sender.send(ipc::query_startup());
++            let _ = sender.send(ipc::query_status_probe());
+         });
+ 
+     if spawn_result.is_err() {
