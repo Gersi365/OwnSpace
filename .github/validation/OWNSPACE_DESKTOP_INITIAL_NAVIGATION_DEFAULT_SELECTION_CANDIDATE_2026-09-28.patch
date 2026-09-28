@@ -1,0 +1,11 @@
+diff --git a/apps/desktop/src/ui.rs b/apps/desktop/src/ui.rs
+--- a/apps/desktop/src/ui.rs
++++ b/apps/desktop/src/ui.rs
+@@ -121,6 +121,7 @@
+         };
+         stack.add_titled(&page, Some(destination.stack_name()), destination.title());
+     }
++    stack.set_visible_child_name(NavigationDestination::Overview.stack_name());
+ 
+     let sidebar = gtk::StackSidebar::new();
+     sidebar.set_stack(&stack);
