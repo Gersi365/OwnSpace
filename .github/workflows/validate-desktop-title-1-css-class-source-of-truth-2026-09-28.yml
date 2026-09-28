@@ -1,0 +1,110 @@
+name: Ownspace Desktop title-1 CSS-class source-of-truth validation
+
+on:
+  push:
+    branches:
+      - validation/desktop-title-1-css-class-source-of-truth-2026-09-28
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout carrier
+        uses: actions/checkout@v4
+
+      - name: Verify exact authoritative base
+        shell: python
+        run: |
+          from pathlib import Path
+          import hashlib
+
+          path = Path("apps/desktop/src/ui.rs")
+          data = path.read_bytes()
+          text = data.decode("utf-8")
+          expected_sha = "653d96164edce72e13a21f2eb73a4ce29d95295e274512bfb12871fd537bb0f2"
+          actual_sha = hashlib.sha256(data).hexdigest()
+          assert actual_sha == expected_sha, (actual_sha, expected_sha)
+          assert text.count('add_css_class("title-1")') == 6
+          assert text.count("PAGE_TITLE_CSS_CLASS") == 0
+          assert text.count("DIM_LABEL_CSS_CLASS") == 13
+          assert text.count('add_css_class("title-3")') == 5
+          assert text.count('add_css_class("heading")') == 5
+          assert text.count('add_css_class("monospace")') == 5
+
+      - name: Verify exact patch identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(sha256sum .github/validation/OWNSPACE_DESKTOP_TITLE_1_CSS_CLASS_SOURCE_OF_TRUTH_CANDIDATE_2026-09-28.patch | awk '{print $1}')" = "752345efc52def53081846c53c40bb4b4e142cb4a9c7ec0fd2cd8797a222c740"
+
+      - name: Apply exact candidate patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply --check .github/validation/OWNSPACE_DESKTOP_TITLE_1_CSS_CLASS_SOURCE_OF_TRUTH_CANDIDATE_2026-09-28.patch
+          git apply .github/validation/OWNSPACE_DESKTOP_TITLE_1_CSS_CLASS_SOURCE_OF_TRUTH_CANDIDATE_2026-09-28.patch
+          git diff --check
+          test "$(git diff --name-only)" = "apps/desktop/src/ui.rs"
+
+      - name: Verify bounded source contract
+        shell: python
+        run: |
+          from pathlib import Path
+          import hashlib
+
+          path = Path("apps/desktop/src/ui.rs")
+          data = path.read_bytes()
+          text = data.decode("utf-8")
+          expected_sha = "c91e52bb85f286b149c231041d49bf91b4d4d48389638f9cf55a0e01c440559d"
+          actual_sha = hashlib.sha256(data).hexdigest()
+          assert actual_sha == expected_sha, (actual_sha, expected_sha)
+
+          assert text.count('const PAGE_TITLE_CSS_CLASS: &str = "title-1";') == 1
+          assert text.count("PAGE_TITLE_CSS_CLASS") == 7
+          assert text.count("add_css_class(PAGE_TITLE_CSS_CLASS)") == 6
+          assert text.count('add_css_class("title-1")') == 0
+          assert text.count("DIM_LABEL_CSS_CLASS") == 13
+          assert text.count('add_css_class("title-3")') == 5
+          assert text.count('add_css_class("heading")') == 5
+          assert text.count('add_css_class("monospace")') == 5
+          assert text.count("const PAGE_OUTER_MARGIN: i32 = 32;") == 1
+          assert text.count("PAGE_OUTER_MARGIN") == 25
+          assert text.count("const WORKER_RESULT_POLL_INTERVAL: Duration = Duration::from_millis(75);") == 1
+          assert text.count("glib::timeout_add_local(WORKER_RESULT_POLL_INTERVAL, move || {") == 2
+          assert text.count("ipc::query_file_list(&worker_path)") == 1
+          assert text.count("ipc::query_status_probe()") == 1
+
+      - name: Verify exact reverse and reapply
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp apps/desktop/src/ui.rs /tmp/title1-candidate-ui.rs
+          git apply --reverse --check .github/validation/OWNSPACE_DESKTOP_TITLE_1_CSS_CLASS_SOURCE_OF_TRUTH_CANDIDATE_2026-09-28.patch
+          git apply --reverse .github/validation/OWNSPACE_DESKTOP_TITLE_1_CSS_CLASS_SOURCE_OF_TRUTH_CANDIDATE_2026-09-28.patch
+          test "$(sha256sum apps/desktop/src/ui.rs | awk '{print $1}')" = "653d96164edce72e13a21f2eb73a4ce29d95295e274512bfb12871fd537bb0f2"
+          git diff --exit-code -- apps/desktop/src/ui.rs
+          git apply --check .github/validation/OWNSPACE_DESKTOP_TITLE_1_CSS_CLASS_SOURCE_OF_TRUTH_CANDIDATE_2026-09-28.patch
+          git apply .github/validation/OWNSPACE_DESKTOP_TITLE_1_CSS_CLASS_SOURCE_OF_TRUTH_CANDIDATE_2026-09-28.patch
+          test "$(sha256sum apps/desktop/src/ui.rs | awk '{print $1}')" = "c91e52bb85f286b149c231041d49bf91b4d4d48389638f9cf55a0e01c440559d"
+          cmp -s apps/desktop/src/ui.rs /tmp/title1-candidate-ui.rs
+          git diff --check
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config protobuf-compiler libgtk-4-dev libadwaita-1-dev
+
+      - name: Formatting check
+        run: cargo fmt --all -- --check
+
+      - name: Desktop tests
+        run: cargo test --locked -p prw-desktop
+
+      - name: Desktop compile check
+        run: cargo check --locked -p prw-desktop
+
+      - name: Desktop Clippy
+        run: cargo clippy --locked -p prw-desktop --all-targets -- -D warnings
