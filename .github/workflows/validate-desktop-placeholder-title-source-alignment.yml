@@ -1,0 +1,80 @@
+name: Ownspace Desktop placeholder title source alignment validation
+
+on:
+  push:
+    branches:
+      - validation/desktop-placeholder-title-source-alignment-2026-09-28
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout validation carrier
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 3
+
+      - name: Verify exact carrier and candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE_SHA='241f3866fa14873616849ff248d900ccd776d032'
+          BASE_UI_SHA256='21f08e020cec1c410c416f8e4be0f802294697a1ec2f88da281553d7d4f90097'
+          BASE_STATE_SHA256='aa1ee9c4b61912e0a7a3c291269491780d4944c0fa197d17c75e5f135aba6941'
+          PATCH_SHA256='c09822f061efaaa7144276e778b1d7eae615b3441ebfa520eaab1459292fb17d'
+          FINAL_UI_SHA256='3a324518d6ece7181f12d840fb2d785d74ed5bfca3ffda6df58f096829e51c06'
+          PATCH='.github/validation/OWNSPACE_DESKTOP_PLACEHOLDER_TITLE_SOURCE_ALIGNMENT_CANDIDATE_2026-09-28.patch'
+
+          test "$(git rev-parse HEAD~2)" = "$BASE_SHA"
+          test "$(git diff --name-only "$BASE_SHA"...HEAD | sort)" = $'.github/validation/OWNSPACE_DESKTOP_PLACEHOLDER_TITLE_SOURCE_ALIGNMENT_CANDIDATE_2026-09-28.patch\n.github/workflows/validate-desktop-placeholder-title-source-alignment.yml'
+          test "$(sha256sum apps/desktop/src/ui.rs | awk '{print $1}')" = "$BASE_UI_SHA256"
+          test "$(sha256sum apps/desktop/src/state.rs | awk '{print $1}')" = "$BASE_STATE_SHA256"
+          test "$(sha256sum "$PATCH" | awk '{print $1}')" = "$PATCH_SHA256"
+
+          git apply --check "$PATCH"
+          git apply "$PATCH"
+          git diff --check
+          test "$(git diff --name-only)" = 'apps/desktop/src/ui.rs'
+          test "$(sha256sum apps/desktop/src/ui.rs | awk '{print $1}')" = "$FINAL_UI_SHA256"
+          test "$(sha256sum apps/desktop/src/state.rs | awk '{print $1}')" = "$BASE_STATE_SHA256"
+
+          grep -Fq 'enum PlaceholderDestination {' apps/desktop/src/ui.rs
+          grep -Fq 'const fn navigation_destination(self) -> NavigationDestination {' apps/desktop/src/ui.rs
+          grep -Fq 'Self::Sessions => NavigationDestination::Sessions,' apps/desktop/src/ui.rs
+          grep -Fq 'Self::Transfers => NavigationDestination::Transfers,' apps/desktop/src/ui.rs
+          grep -Fq 'let title = gtk::Label::new(Some(destination.navigation_destination().title()));' apps/desktop/src/ui.rs
+          grep -Fq 'fn placeholder_contract_represents_only_session_and_transfer_routes()' apps/desktop/src/ui.rs
+          grep -Fq 'super::NavigationDestination::Sessions,' apps/desktop/src/ui.rs
+          grep -Fq 'super::NavigationDestination::Transfers,' apps/desktop/src/ui.rs
+          grep -Fq 'No live state source available' apps/desktop/src/ui.rs
+          grep -Fq 'Reserved for authorized terminal, Remote Desktop, and forwarding session presentation when runtime state is available.' apps/desktop/src/ui.rs
+          grep -Fq 'Reserved for verified upload/download progress and completion state.' apps/desktop/src/ui.rs
+          grep -Fq 'NavigationDestination::Sessions => placeholder_page(PlaceholderDestination::Sessions),' apps/desktop/src/ui.rs
+          grep -Fq 'NavigationDestination::Transfers => placeholder_page(PlaceholderDestination::Transfers),' apps/desktop/src/ui.rs
+          if grep -Fq 'const fn title(self)' apps/desktop/src/ui.rs; then
+            echo 'placeholder-local title authority unexpectedly remains' >&2
+            exit 1
+          fi
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config protobuf-compiler libgtk-4-dev libadwaita-1-dev
+
+      - name: Focused placeholder title contract test
+        run: cargo test --locked -p prw-desktop placeholder_contract_represents_only_session_and_transfer_routes -- --nocapture
+
+      - name: Formatting check
+        run: cargo fmt --check
+
+      - name: Desktop tests
+        run: cargo test --locked -p prw-desktop
+
+      - name: Desktop compile check
+        run: cargo check --locked -p prw-desktop
+
+      - name: Desktop Clippy
+        run: cargo clippy --locked -p prw-desktop --all-targets -- -D warnings
