@@ -15,7 +15,7 @@ jobs:
       - name: Checkout validation carrier
         uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 3
 
       - name: Verify exact carrier and candidate
         shell: bash
@@ -28,7 +28,8 @@ jobs:
           FINAL_UI_SHA256='3de6d9b3c3f2352390be99ebeb7cf7961a7b81f489790407cb71d08ca0b14fba'
           PATCH='.github/validation/OWNSPACE_DESKTOP_PLACEHOLDER_DESTINATION_TYPE_CONTRACT_CANDIDATE_2026-09-28.patch'
 
-          test "$(git rev-parse HEAD^)" = "$BASE_SHA"
+          test "$(git rev-parse HEAD^)" = "93ee587dd68246e67747f9255bca8f3843ebc2dd"
+          test "$(git rev-parse HEAD~2)" = "$BASE_SHA"
           test "$(sha256sum apps/desktop/src/ui.rs | awk '{print $1}')" = "$BASE_UI_SHA256"
           test "$(sha256sum apps/desktop/src/state.rs | awk '{print $1}')" = "$BASE_STATE_SHA256"
           test "$(sha256sum "$PATCH" | awk '{print $1}')" = "$PATCH_SHA256"
@@ -67,8 +68,11 @@ jobs:
       - name: Focused placeholder type contract test
         run: cargo test --locked -p prw-desktop placeholder_contract_represents_only_session_and_transfer_routes -- --nocapture
 
-      - name: Formatting check
-        run: cargo fmt --check
+      - name: Formatting correction verification
+        run: |
+          cargo fmt
+          test "$(sha256sum apps/desktop/src/ui.rs | awk '{print $1}')" = '21f08e020cec1c410c416f8e4be0f802294697a1ec2f88da281553d7d4f90097'
+          cargo fmt --check
 
       - name: Desktop tests
         run: cargo test --locked -p prw-desktop
