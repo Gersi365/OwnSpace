@@ -1,0 +1,77 @@
+name: Ownspace Desktop implemented-page title source alignment validation
+
+on:
+  push:
+    branches:
+      - validation/desktop-implemented-page-title-source-alignment-2026-09-28
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout validation carrier
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 4
+
+      - name: Verify exact carrier and candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE_SHA='aaf52f5b19fd7e486eec5eb9e414d515e8c2c4cf'
+          BASE_UI_SHA256='3a324518d6ece7181f12d840fb2d785d74ed5bfca3ffda6df58f096829e51c06'
+          BASE_STATE_SHA256='aa1ee9c4b61912e0a7a3c291269491780d4944c0fa197d17c75e5f135aba6941'
+          PATCH_SHA256='5d8c8731a9a5f8af92f1fecc5efb6251e11f53a3b136a7c1632226748838d755'
+          FINAL_UI_SHA256='94b0cd49c43de5e2c1a6b1c1240dd2795d53035b0d6576860c2ce7883366bff1'
+          PATCH='.github/validation/OWNSPACE_DESKTOP_IMPLEMENTED_PAGE_TITLE_SOURCE_ALIGNMENT_CANDIDATE_2026-09-28.patch'
+
+          test "$(git rev-parse HEAD~3)" = "$BASE_SHA"
+          test "$(git diff --name-only "$BASE_SHA"...HEAD | sort)" = $'.github/validation/OWNSPACE_DESKTOP_IMPLEMENTED_PAGE_TITLE_SOURCE_ALIGNMENT_CANDIDATE_2026-09-28.patch\n.github/workflows/validate-desktop-implemented-page-title-source-alignment.yml'
+          test "$(sha256sum apps/desktop/src/ui.rs | awk '{print $1}')" = "$BASE_UI_SHA256"
+          test "$(sha256sum apps/desktop/src/state.rs | awk '{print $1}')" = "$BASE_STATE_SHA256"
+          test "$(sha256sum "$PATCH" | awk '{print $1}')" = "$PATCH_SHA256"
+
+          git apply --check "$PATCH"
+          git apply "$PATCH"
+          git diff --check
+          test "$(git diff --name-only)" = 'apps/desktop/src/ui.rs'
+          test "$(sha256sum apps/desktop/src/ui.rs | awk '{print $1}')" = "$FINAL_UI_SHA256"
+          test "$(sha256sum apps/desktop/src/state.rs | awk '{print $1}')" = "$BASE_STATE_SHA256"
+
+          grep -Fq 'gtk::Label::new(Some(NavigationDestination::Overview.title()))' apps/desktop/src/ui.rs
+          grep -Fq 'gtk::Label::new(Some(NavigationDestination::Machines.title()))' apps/desktop/src/ui.rs
+          grep -Fq 'gtk::Label::new(Some(NavigationDestination::Files.title()))' apps/desktop/src/ui.rs
+          grep -Fq 'gtk::Label::new(Some(NavigationDestination::Activity.title()))' apps/desktop/src/ui.rs
+          grep -Fq 'gtk::Label::new(Some(NavigationDestination::Settings.title()))' apps/desktop/src/ui.rs
+          for literal in Overview Machines Files Activity Settings; do
+            if grep -Fq "gtk::Label::new(Some(\"${literal}\"))" apps/desktop/src/ui.rs; then
+              echo "direct implemented-page title literal unexpectedly remains: ${literal}" >&2
+              exit 1
+            fi
+          done
+          grep -Fq 'NavigationDestination::Sessions => placeholder_page(PlaceholderDestination::Sessions),' apps/desktop/src/ui.rs
+          grep -Fq 'NavigationDestination::Transfers => placeholder_page(PlaceholderDestination::Transfers),' apps/desktop/src/ui.rs
+          grep -Fq 'fn navigation_destinations_have_stable_presentation_contract()' apps/desktop/src/state.rs
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config protobuf-compiler libgtk-4-dev libadwaita-1-dev
+
+      - name: Focused navigation presentation contract test
+        run: cargo test --locked -p prw-desktop navigation_destinations_have_stable_presentation_contract -- --nocapture
+
+      - name: Formatting check
+        run: cargo fmt --check
+
+      - name: Desktop tests
+        run: cargo test --locked -p prw-desktop
+
+      - name: Desktop compile check
+        run: cargo check --locked -p prw-desktop
+
+      - name: Desktop Clippy
+        run: cargo clippy --locked -p prw-desktop --all-targets -- -D warnings
