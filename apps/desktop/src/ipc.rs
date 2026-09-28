@@ -31,12 +31,12 @@ use crate::state::{AgentAvailability, DesktopPresentationState};
 const IPC_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone)]
-pub struct StartupProbe {
+pub struct StatusProbe {
     pub(crate) status: Result<LocalAgentStatusSnapshot, DesktopIpcError>,
     pub(crate) private_dns: Result<LocalPrivateDnsSnapshot, DesktopIpcError>,
 }
 
-impl StartupProbe {
+impl StatusProbe {
     pub(crate) fn into_presentation(self) -> DesktopPresentationState {
         let mut state = DesktopPresentationState::connecting();
         let status_succeeded = self.status.is_ok();
@@ -154,12 +154,12 @@ impl fmt::Display for DesktopIpcError {
     }
 }
 
-pub fn query_startup() -> StartupProbe {
+pub fn query_status_probe() -> StatusProbe {
     let endpoint = endpoint_from_environment();
     let endpoint = match endpoint {
         Ok(endpoint) => endpoint,
         Err(error) => {
-            return StartupProbe {
+            return StatusProbe {
                 status: Err(error),
                 private_dns: Err(error),
             };
@@ -173,7 +173,7 @@ pub fn query_startup() -> StartupProbe {
     let status = status_id.and_then(|request_id| query_status(&endpoint, request_id));
     let private_dns = dns_id.and_then(|request_id| query_private_dns(&endpoint, request_id));
 
-    StartupProbe {
+    StatusProbe {
         status,
         private_dns,
     }
@@ -361,7 +361,7 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        DesktopIpcError, StartupProbe, endpoint_candidate_from_raw, ensure_response_id,
+        DesktopIpcError, StatusProbe, endpoint_candidate_from_raw, ensure_response_id,
         runtime_root_from_raw,
     };
     use crate::state::{AgentAvailability, AgentRuntimePresentation};
@@ -428,7 +428,7 @@ mod tests {
 
     #[test]
     fn private_dns_failure_is_visible_without_downgrading_agent_status() {
-        let state = StartupProbe {
+        let state = StatusProbe {
             status: Ok(LocalAgentStatusSnapshot::current(
                 LocalAgentRuntimeState::Ready,
             )),
@@ -447,7 +447,7 @@ mod tests {
 
     #[test]
     fn shared_endpoint_failure_is_not_duplicated_in_presentation_detail() {
-        let state = StartupProbe {
+        let state = StatusProbe {
             status: Err(DesktopIpcError::ConnectFailed),
             private_dns: Err(DesktopIpcError::ConnectFailed),
         }
@@ -460,7 +460,7 @@ mod tests {
 
     #[test]
     fn secondary_private_dns_failure_does_not_mask_primary_status_failure() {
-        let state = StartupProbe {
+        let state = StatusProbe {
             status: Err(DesktopIpcError::ConnectFailed),
             private_dns: Err(DesktopIpcError::ResponseInvalid),
         }

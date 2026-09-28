@@ -154,7 +154,7 @@ pub fn build(app: &adw::Application) {
     let connecting = DesktopPresentationState::connecting();
     render_probe_state(&connecting, &probe_targets);
     connect_refresh_controls(&probe_targets);
-    start_startup_probe(probe_targets);
+    start_status_probe(probe_targets);
 }
 
 fn overview_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label, gtk::Button) {
@@ -809,20 +809,20 @@ fn connect_refresh_controls(targets: &StatusProbeTargets) {
     let overview_targets = targets.clone();
     targets
         .overview_refresh_button
-        .connect_clicked(move |_| start_startup_probe(overview_targets.clone()));
+        .connect_clicked(move |_| start_status_probe(overview_targets.clone()));
 
     let machines_targets = targets.clone();
     targets
         .machines_refresh_button
-        .connect_clicked(move |_| start_startup_probe(machines_targets.clone()));
+        .connect_clicked(move |_| start_status_probe(machines_targets.clone()));
 
     let activity_targets = targets.clone();
     targets
         .activity_refresh_button
-        .connect_clicked(move |_| start_startup_probe(activity_targets.clone()));
+        .connect_clicked(move |_| start_status_probe(activity_targets.clone()));
 }
 
-fn start_startup_probe(targets: StatusProbeTargets) {
+fn start_status_probe(targets: StatusProbeTargets) {
     set_refresh_controls_busy(
         &targets.overview_refresh_button,
         &targets.machines_refresh_button,
@@ -833,7 +833,7 @@ fn start_startup_probe(targets: StatusProbeTargets) {
     let spawn_result = std::thread::Builder::new()
         .name("prw-desktop-readonly-agent-probe".to_owned())
         .spawn(move || {
-            let _ = sender.send(ipc::query_startup());
+            let _ = sender.send(ipc::query_status_probe());
         });
 
     if spawn_result.is_err() {
