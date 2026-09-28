@@ -1,0 +1,28 @@
+--- a/apps/desktop/src/ui.rs
++++ b/apps/desktop/src/ui.rs
+@@ -22,6 +22,7 @@
+ const FILES_REFRESH_LABEL: &str = "Refresh";
+ const FILES_PATH_INVALID_STATUS: &str = "Invalid path: use a canonical relative path under home";
+ const FILES_PATH_UNLOADED_LABEL: &str = "Current path: not loaded";
++const WORKER_RESULT_POLL_INTERVAL: Duration = Duration::from_millis(75);
+ const FILES_SUBTITLE: &str = concat!(
+     "Read-only directory listing under the local owner home authority. ",
+     "Paths are relative; this surface does not read file contents, mutate files, transfer data, open terminals, or create forwarding."
+@@ -366,7 +367,7 @@
+     }
+ 
+     let poll_targets = targets.clone();
+-    let _source_id = glib::timeout_add_local(Duration::from_millis(75), move || {
++    let _source_id = glib::timeout_add_local(WORKER_RESULT_POLL_INTERVAL, move || {
+         match receiver.try_recv() {
+             Ok(Ok(listing)) => {
+                 poll_targets.has_successful_listing.set(true);
+@@ -851,7 +852,7 @@
+         return;
+     }
+ 
+-    let _source_id = glib::timeout_add_local(Duration::from_millis(75), move || {
++    let _source_id = glib::timeout_add_local(WORKER_RESULT_POLL_INTERVAL, move || {
+         match receiver.try_recv() {
+             Ok(probe) => {
+                 let state = probe.into_presentation();
