@@ -1,0 +1,57 @@
+diff --git a/apps/desktop/src/ui.rs b/apps/desktop/src/ui.rs
+index 8baefc0..6afac7d 100644
+--- a/apps/desktop/src/ui.rs
++++ b/apps/desktop/src/ui.rs
+@@ -26,6 +26,7 @@ const WORKER_RESULT_POLL_INTERVAL: Duration = Duration::from_millis(75);
+ const PAGE_OUTER_MARGIN: i32 = 32;
+ const DIM_LABEL_CSS_CLASS: &str = "dim-label";
+ const PAGE_TITLE_CSS_CLASS: &str = "title-1";
++const TITLE_3_CSS_CLASS: &str = "title-3";
+ const FILES_SUBTITLE: &str = concat!(
+     "Read-only directory listing under the local owner home authority. ",
+     "Paths are relative; this surface does not read file contents, mutate files, transfer data, open terminals, or create forwarding."
+@@ -437,7 +438,7 @@ fn files_page() -> gtk::Box {
+ 
+     let current_path_label = gtk::Label::new(Some(FILES_PATH_UNLOADED_LABEL));
+     current_path_label.set_xalign(0.0);
+-    current_path_label.add_css_class("title-3");
++    current_path_label.add_css_class(TITLE_3_CSS_CLASS);
+     page.append(&current_path_label);
+ 
+     let path_entry = gtk::Entry::new();
+@@ -459,7 +460,7 @@ fn files_page() -> gtk::Box {
+ 
+     let status = gtk::Label::new(Some("No directory listing requested yet"));
+     status.set_xalign(0.0);
+-    status.add_css_class("title-3");
++    status.add_css_class(TITLE_3_CSS_CLASS);
+     page.append(&status);
+ 
+     let entries = gtk::Box::new(gtk::Orientation::Vertical, 6);
+@@ -600,7 +601,7 @@ fn section_label(title: &str) -> gtk::Label {
+     let label = gtk::Label::new(Some(title));
+     label.set_xalign(0.0);
+     label.set_wrap(true);
+-    label.add_css_class("title-3");
++    label.add_css_class(TITLE_3_CSS_CLASS);
+     label
+ }
+ 
+@@ -635,7 +636,7 @@ fn settings_page() -> (gtk::Box, gtk::Label) {
+ 
+     let status = gtk::Label::new(Some("Read-only local diagnostics"));
+     status.set_xalign(0.0);
+-    status.add_css_class("title-3");
++    status.add_css_class(TITLE_3_CSS_CLASS);
+     page.append(&status);
+ 
+     let detail = gtk::Label::new(Some(
+@@ -786,7 +787,7 @@ fn placeholder_page(destination: PlaceholderDestination) -> gtk::Box {
+ 
+     let status = gtk::Label::new(Some(PLACEHOLDER_STATUS));
+     status.set_xalign(0.0);
+-    status.add_css_class("title-3");
++    status.add_css_class(TITLE_3_CSS_CLASS);
+     page.append(&status);
+ 
+     let detail = gtk::Label::new(Some(placeholder_description(destination)));
