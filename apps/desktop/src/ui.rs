@@ -121,6 +121,7 @@ pub fn build(app: &adw::Application) {
         };
         stack.add_titled(&page, Some(destination.stack_name()), destination.title());
     }
+    stack.set_visible_child_name(NavigationDestination::Overview.stack_name());
 
     let sidebar = gtk::StackSidebar::new();
     sidebar.set_stack(&stack);
