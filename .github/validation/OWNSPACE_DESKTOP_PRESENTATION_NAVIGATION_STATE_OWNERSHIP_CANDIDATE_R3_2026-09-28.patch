@@ -1,0 +1,74 @@
+diff --git a/apps/desktop/src/state.rs b/apps/desktop/src/state.rs
+index 5d8e7d5..ccb2971 100644
+--- a/apps/desktop/src/state.rs
++++ b/apps/desktop/src/state.rs
+@@ -132,7 +132,6 @@ pub struct DesktopPresentationState {
+     pub(crate) runtime: Option<AgentRuntimePresentation>,
+     pub(crate) local_ipc_protocol: Option<LocalIpcProtocolVersion>,
+     pub(crate) private_dns: Option<PrivateDnsPresentation>,
+-    pub(crate) selected: NavigationDestination,
+     pub(crate) detail: String,
+ }
+ 
+@@ -143,7 +142,6 @@ impl Default for DesktopPresentationState {
+             runtime: None,
+             local_ipc_protocol: None,
+             private_dns: None,
+-            selected: NavigationDestination::Overview,
+             detail: String::new(),
+         }
+     }
+@@ -257,8 +255,10 @@ mod tests {
+ 
+     #[test]
+     fn overview_is_the_deterministic_default_destination() {
+-        let state = DesktopPresentationState::default();
+-        assert_eq!(state.selected, NavigationDestination::Overview);
++        assert_eq!(
++            NavigationDestination::default(),
++            NavigationDestination::Overview
++        );
+         assert_eq!(NavigationDestination::ALL.len(), 7);
+         assert_eq!(NavigationDestination::Overview.stack_name(), "overview");
+     }
+@@ -271,7 +271,6 @@ mod tests {
+         assert_eq!(state.runtime, None);
+         assert_eq!(state.local_ipc_protocol, None);
+         assert_eq!(state.private_dns, None);
+-        assert_eq!(state.selected, NavigationDestination::Overview);
+         assert_eq!(state.detail, "Reading local Agent state…");
+         assert_eq!(
+             state.agent_reported_protocol_text(),
+@@ -327,7 +326,7 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn status_refresh_preserves_navigation_and_private_dns_projection() {
++    fn status_refresh_preserves_private_dns_projection() {
+         let expected_dns = PrivateDnsPresentation {
+             enabled: true,
+             device_naming: true,
+@@ -335,7 +334,6 @@ mod tests {
+             split_domain_count: 3,
+         };
+         let state = DesktopPresentationState {
+-            selected: NavigationDestination::Files,
+             private_dns: Some(expected_dns.clone()),
+             ..DesktopPresentationState::default()
+         };
+@@ -346,7 +344,6 @@ mod tests {
+ 
+         assert_eq!(state.availability, AgentAvailability::Online);
+         assert_eq!(state.runtime, Some(AgentRuntimePresentation::Ready));
+-        assert_eq!(state.selected, NavigationDestination::Files);
+         assert_eq!(state.private_dns, Some(expected_dns));
+         assert_eq!(
+             state.detail,
+@@ -397,7 +394,6 @@ mod tests {
+         assert_eq!(state.runtime, None);
+         assert_eq!(state.local_ipc_protocol, None);
+         assert_eq!(state.private_dns, None);
+-        assert_eq!(state.selected, NavigationDestination::Overview);
+         assert_eq!(
+             state.detail,
+             "Local Agent probe worker ended without a result"
