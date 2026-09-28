@@ -1,0 +1,58 @@
+name: Ownspace Desktop worker-result poll cadence validation
+
+on:
+  push:
+    branches:
+      - validation/desktop-worker-result-poll-cadence-2026-09-28
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout carrier
+        uses: actions/checkout@v4
+
+      - name: Apply exact candidate patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply --check .github/validation/OWNSPACE_DESKTOP_WORKER_RESULT_POLL_CADENCE_CANDIDATE_2026-09-28.patch
+          git apply .github/validation/OWNSPACE_DESKTOP_WORKER_RESULT_POLL_CADENCE_CANDIDATE_2026-09-28.patch
+
+      - name: Verify bounded source contract
+        shell: python
+        run: |
+          from pathlib import Path
+          import hashlib
+
+          path = Path("apps/desktop/src/ui.rs")
+          data = path.read_bytes()
+          text = data.decode("utf-8")
+          expected_sha = "7c88f72f1e3ad87d2f0a7670e9da8dd013cb5ac8593f9a336027fde1c04c526d"
+          actual_sha = hashlib.sha256(data).hexdigest()
+          assert actual_sha == expected_sha, (actual_sha, expected_sha)
+
+          source = "const WORKER_RESULT_POLL_INTERVAL: Duration = Duration::from_millis(75);"
+          assert text.count(source) == 1
+          assert text.count("glib::timeout_add_local(WORKER_RESULT_POLL_INTERVAL, move || {") == 2
+          assert text.count("glib::timeout_add_local(Duration::from_millis(75), move || {") == 0
+          assert text.count("glib::timeout_add_local(") == 2
+          assert text.count("mpsc::sync_channel(1)") == 2
+          assert text.count("receiver.try_recv()") == 2
+          assert text.count("ipc::query_file_list(&worker_path)") == 1
+          assert text.count("ipc::query_status_probe()") == 1
+
+      - name: Formatting check
+        run: cargo fmt --all -- --check
+
+      - name: Desktop tests
+        run: cargo test --locked -p prw-desktop
+
+      - name: Desktop compile check
+        run: cargo check --locked -p prw-desktop
+
+      - name: Desktop Clippy
+        run: cargo clippy --locked -p prw-desktop --all-targets -- -D warnings
