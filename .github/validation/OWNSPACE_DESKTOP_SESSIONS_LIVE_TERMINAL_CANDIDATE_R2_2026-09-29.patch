@@ -1,0 +1,588 @@
+diff --git a/apps/desktop/README.md b/apps/desktop/README.md
+index e2e6f80..c794b56 100644
+--- a/apps/desktop/README.md
++++ b/apps/desktop/README.md
+@@ -6,7 +6,7 @@ The desktop application is a separate native Rust/GTK 4/libadwaita UI/client pro
+ 
+ It is not required for the Ubuntu host to remain remotely reachable. The headless Ownspace Agent remains authoritative for host runtime state, policy enforcement, remote capability execution, private-key boundaries, and production lifecycle ownership.
+ 
+-## Current read-only scope
++## Current management scope
+ 
+ The desktop shell provides:
+ 
+@@ -17,11 +17,12 @@ The desktop shell provides:
+ - manual bounded local status refresh that preserves the last rendered status while the read-only probe is active and gives explicit `Refreshing…` progress feedback;
+ - a read-only Settings diagnostics page that shows the local Ownspace Desktop package version, the desktop client’s compiled-in supported local IPC protocol version, and the latest Agent-reported local IPC protocol version from the same bounded `GetAgentStatus` snapshot used by Overview and Activity; it also exposes both the compatibility-sensitive endpoint contract and the session-resolved candidate endpoint derived through the existing `LocalIpcContract`, with a local-only copy action for the resolved path and no Agent configuration mutation;
+ - a read-only Activity page that mirrors the latest local Agent/Private DNS probe snapshot, can trigger the same bounded local refresh as Overview, and can copy the currently rendered snapshot plus the session-resolved local IPC endpoint candidate to the local desktop clipboard without persisting history or emitting external telemetry;
++- an implemented Sessions page for one local terminal session through existing command-3 terminal authority: it opens a provider-selected POSIX shell at fixed bounded geometry, sends bounded input lines, and closes the session through the trusted local Agent socket; Agent-owned terminal principal/capability checks remain authoritative, and terminal output presentation is not enabled in this checkpoint;
+ - an implemented Files page for authenticated read-only directory listing under the local owner-home authority through command-3 `FileList`, with canonical relative-path entry, Home/Up navigation, Refresh after a successful listing, explicit current-path presentation, and no file-content read/open or mutation;
+ - explicit offline/error handling, including partial Private DNS query failure visibility;
+ - a bounded worker thread so local Unix-socket reads do not block the GTK main thread.
+ 
+-The implemented status/diagnostics surfaces use only the existing local `GetAgentStatus` and `GetPrivateDnsConfig` commands. The Files page separately uses the already-authorized read-only command-3 `FileList` path over the same trusted local Agent socket.
++The implemented status/diagnostics surfaces use only the existing local `GetAgentStatus` and `GetPrivateDnsConfig` commands. The Files page separately uses the already-authorized read-only command-3 `FileList` path over the same trusted local Agent socket. The Sessions page uses existing command-3 terminal open/input/close operations over that same trusted socket and does not weaken Agent-owned terminal authority checks.
+ 
+ The local control endpoint remains:
+ 
+@@ -35,9 +36,9 @@ The desktop client performs no TCP, D-Bus, abstract-socket, `/tmp`, shell-comman
+ 
+ ## Deliberately not activated by this surface
+ 
+-Sessions and Transfers remain structural placeholders unless backed by separately validated capability work. Their shared status text is `No live state source available`, and a deterministic presentation-contract test locks that authority boundary without activating live session or transfer state. Activity is limited to the latest in-memory local diagnostics snapshot; its refresh action reuses the same bounded local status probe as Overview, and its copy action exports only the currently rendered text plus the session-resolved local IPC endpoint candidate to the local desktop clipboard. The endpoint value is path derivation from `XDG_RUNTIME_DIR` through the existing `LocalIpcContract`; it does not perform an Agent read or assert endpoint trust, availability, or connectivity. Activity does not provide persisted history, external telemetry, or Remote Desktop clipboard integration. The current desktop management surface does not implement or activate:
++Transfers remains a structural placeholder unless backed by separately validated capability work. Its status text is `No live state source available`, and a deterministic presentation-contract test locks that remaining authority boundary. Sessions now activates only terminal open/input/close over the existing trusted local management path; it does not yet read or render terminal output, resize terminals, activate Remote Desktop, or activate forwarding. Activity is limited to the latest in-memory local diagnostics snapshot; its refresh action reuses the same bounded local status probe as Overview, and its copy action exports only the currently rendered text plus the session-resolved local IPC endpoint candidate to the local desktop clipboard. The endpoint value is path derivation from `XDG_RUNTIME_DIR` through the existing `LocalIpcContract`; it does not perform an Agent read or assert endpoint trust, availability, or connectivity. Activity does not provide persisted history, external telemetry, or Remote Desktop clipboard integration. The current desktop management surface does not implement or activate:
+ 
+-- terminal actions;
++- terminal output reads/presentation, resize operations, arbitrary run-command shortcuts, or alternate terminal transports;
+ - `FileStat`, `DownloadChunk`, file-content read/open, file mutation, or upload/download transfer execution;
+ - forwarding actions;
+ - enrollment/device mutations;
+diff --git a/apps/desktop/src/ipc.rs b/apps/desktop/src/ipc.rs
+index 5916acf..fb57987 100644
+--- a/apps/desktop/src/ipc.rs
++++ b/apps/desktop/src/ipc.rs
+@@ -11,6 +11,7 @@ use std::time::Duration;
+ use prw_agent::frame_object::LocalIpcFrame;
+ use prw_agent::frame_object::reader::read_frame;
+ use prw_agent::frame_object::writer::write_frame;
++use prw_agent::local_commands::management_request::build_local_management_request_frame;
+ use prw_agent::local_commands::private_dns_response::decode_success_private_dns_frame;
+ use prw_agent::local_commands::private_dns_snapshot::LocalPrivateDnsSnapshot;
+ use prw_agent::local_commands::request_frame::stream::write_local_command_request;
+@@ -29,6 +30,11 @@ use crate::local_management_ipc::{
+ use crate::state::{AgentAvailability, DesktopPresentationState};
+ 
+ const IPC_TIMEOUT: Duration = Duration::from_secs(2);
++const TERMINAL_OPEN_REQUEST_ID: u64 = 4;
++const TERMINAL_INPUT_REQUEST_ID: u64 = 5;
++const TERMINAL_CLOSE_REQUEST_ID: u64 = 6;
++const MANAGEMENT_STATUS_PREFIX_LENGTH: usize = 2;
++const MANAGEMENT_EMPTY_RESULT: u8 = 4;
+ 
+ #[derive(Debug, Clone)]
+ pub struct StatusProbe {
+@@ -148,7 +154,7 @@ impl fmt::Display for DesktopIpcError {
+                 "Ownspace Agent returned an unexpected success-status error"
+             }
+             Self::AgentStatus(_) => "Ownspace Agent returned an unknown response status",
+-            Self::ManagementRequestInvalid => "Ownspace file-list request is invalid",
++            Self::ManagementRequestInvalid => "Ownspace management request is invalid",
+         };
+         formatter.write_str(message)
+     }
+@@ -195,6 +201,45 @@ pub fn query_file_list(path: &str) -> Result<Vec<LocalFileListEntry>, DesktopIpc
+         .map_err(|_| DesktopIpcError::ResponseInvalid)
+ }
+ 
++/// Executes one already-encoded terminal-open management intent through the trusted local Agent socket.
++pub fn query_terminal_open(bridge_payload: &[u8]) -> Result<(), DesktopIpcError> {
++    query_terminal_management(TERMINAL_OPEN_REQUEST_ID, bridge_payload)
++}
++
++/// Executes one already-encoded terminal-input management intent through the trusted local Agent socket.
++pub fn query_terminal_input(bridge_payload: &[u8]) -> Result<(), DesktopIpcError> {
++    query_terminal_management(TERMINAL_INPUT_REQUEST_ID, bridge_payload)
++}
++
++/// Executes one already-encoded terminal-close management intent through the trusted local Agent socket.
++pub fn query_terminal_close(bridge_payload: &[u8]) -> Result<(), DesktopIpcError> {
++    query_terminal_management(TERMINAL_CLOSE_REQUEST_ID, bridge_payload)
++}
++
++fn query_terminal_management(
++    request_id_value: u64,
++    bridge_payload: &[u8],
++) -> Result<(), DesktopIpcError> {
++    let endpoint = endpoint_from_environment()?;
++    let request_id = LocalIpcRequestId::new(request_id_value)
++        .map_err(|_| DesktopIpcError::RequestIdGenerationFailed)?;
++    let request = build_local_management_request_frame(request_id, bridge_payload)
++        .map_err(|_| DesktopIpcError::ManagementRequestInvalid)?;
++    let frame = query_prebuilt_success_frame(&endpoint, request_id, &request)?;
++    validate_empty_management_ack(frame.payload().as_bytes())
++}
++
++fn validate_empty_management_ack(payload: &[u8]) -> Result<(), DesktopIpcError> {
++    let body = payload
++        .get(MANAGEMENT_STATUS_PREFIX_LENGTH..)
++        .ok_or(DesktopIpcError::ResponseInvalid)?;
++    if body == [MANAGEMENT_EMPTY_RESULT].as_slice() {
++        Ok(())
++    } else {
++        Err(DesktopIpcError::ResponseInvalid)
++    }
++}
++
+ fn query_prebuilt_success_frame(
+     endpoint: &Path,
+     request_id: LocalIpcRequestId,
+@@ -362,7 +407,7 @@ mod tests {
+ 
+     use super::{
+         DesktopIpcError, StatusProbe, endpoint_candidate_from_raw, ensure_response_id,
+-        runtime_root_from_raw,
++        runtime_root_from_raw, validate_empty_management_ack,
+     };
+     use crate::state::{AgentAvailability, AgentRuntimePresentation};
+     use prw_agent::local_commands::{
+@@ -593,11 +638,28 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn invalid_file_list_request_has_stable_error_contract() {
++    fn invalid_management_request_has_stable_error_contract() {
+         assert_error_contract(
+             DesktopIpcError::ManagementRequestInvalid,
+             AgentAvailability::Error,
+-            "Ownspace file-list request is invalid",
++            "Ownspace management request is invalid",
++        );
++    }
++
++    #[test]
++    fn terminal_management_ack_accepts_only_exact_empty_result() {
++        assert_eq!(validate_empty_management_ack(&[0, 0, 4]), Ok(()));
++        assert_eq!(
++            validate_empty_management_ack(&[0, 0]),
++            Err(DesktopIpcError::ResponseInvalid)
++        );
++        assert_eq!(
++            validate_empty_management_ack(&[0, 0, 6]),
++            Err(DesktopIpcError::ResponseInvalid)
++        );
++        assert_eq!(
++            validate_empty_management_ack(&[0, 0, 4, 0]),
++            Err(DesktopIpcError::ResponseInvalid)
+         );
+     }
+ }
+diff --git a/apps/desktop/src/ui.rs b/apps/desktop/src/ui.rs
+index d971b93..a5fd158 100644
+--- a/apps/desktop/src/ui.rs
++++ b/apps/desktop/src/ui.rs
+@@ -1,5 +1,6 @@
+ use std::cell::{Cell, RefCell};
+ use std::rc::Rc;
++use std::sync::atomic::{AtomicU64, Ordering};
+ use std::sync::mpsc::{self, TryRecvError};
+ use std::time::Duration;
+ 
+@@ -7,9 +8,11 @@ use adw::prelude::*;
+ use gtk::glib;
+ use prw_agent::{AGENT_RUNTIME_SUBDIRECTORY, AGENT_SOCKET_FILENAME, LocalIpcProtocolVersion};
+ use prw_file_service::RemotePath;
++use prw_terminal::TerminalProfile;
+ 
+ use crate::ipc;
+ use crate::local_management_ipc::LocalFileListEntry;
++use crate::management::{TerminalPresentation, TerminalPresentationState};
+ use crate::state::{DesktopPresentationState, NavigationDestination};
+ 
+ const REFRESH_BUTTON_IDLE_LABEL: &str = "Refresh status";
+@@ -17,6 +20,12 @@ const REFRESH_BUTTON_BUSY_LABEL: &str = "Refreshing…";
+ const COPY_SNAPSHOT_IDLE_LABEL: &str = "Copy current snapshot";
+ const COPY_SNAPSHOT_DONE_LABEL: &str = "Copied";
+ const PLACEHOLDER_STATUS: &str = "No live state source available";
++const TERMINAL_OPEN_LABEL: &str = "Open POSIX shell session";
++const TERMINAL_SEND_LABEL: &str = "Send line";
++const TERMINAL_CLOSE_LABEL: &str = "Close session";
++const TERMINAL_COLUMNS: u16 = 80;
++const TERMINAL_ROWS: u16 = 24;
++static NEXT_TERMINAL_SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
+ const FILES_LIST_IDLE_LABEL: &str = "List files";
+ const FILES_LIST_BUSY_LABEL: &str = "Listing…";
+ const FILES_REFRESH_LABEL: &str = "Refresh";
+@@ -74,6 +83,24 @@ struct FilesPageTargets {
+     has_successful_listing: Rc<Cell<bool>>,
+ }
+ 
++#[derive(Clone)]
++struct SessionsPageTargets {
++    status: gtk::Label,
++    input: gtk::Entry,
++    open_button: gtk::Button,
++    send_button: gtk::Button,
++    close_button: gtk::Button,
++    terminal: Rc<RefCell<TerminalPresentation>>,
++    operation_pending: Rc<Cell<bool>>,
++}
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++enum TerminalOperation {
++    Open,
++    Input,
++    Close,
++}
++
+ pub fn build(app: &adw::Application) {
+     let window = adw::ApplicationWindow::builder()
+         .application(app)
+@@ -112,6 +139,7 @@ pub fn build(app: &adw::Application) {
+         activity_refresh_button,
+         activity_copy_button,
+     ) = activity_page();
++    let sessions = sessions_page();
+     let files = files_page();
+     let (settings, settings_agent_protocol_label) = settings_page();
+ 
+@@ -119,7 +147,7 @@ pub fn build(app: &adw::Application) {
+         let page = match destination {
+             NavigationDestination::Overview => overview.clone(),
+             NavigationDestination::Machines => machines.clone(),
+-            NavigationDestination::Sessions => placeholder_page(PlaceholderDestination::Sessions),
++            NavigationDestination::Sessions => sessions.clone(),
+             NavigationDestination::Transfers => placeholder_page(PlaceholderDestination::Transfers),
+             NavigationDestination::Files => files.clone(),
+             NavigationDestination::Activity => activity.clone(),
+@@ -239,6 +267,262 @@ fn machines_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label, gtk::Button
+     (page, agent_label, dns_label, detail_label, refresh_button)
+ }
+ 
++fn next_terminal_session_id() -> u64 {
++    let process = u64::from(std::process::id());
++    let counter = NEXT_TERMINAL_SESSION_COUNTER.fetch_add(1, Ordering::Relaxed);
++    (process << 32) | counter
++}
++
++const fn terminal_controls_for_state(
++    state: TerminalPresentationState,
++    operation_pending: bool,
++) -> (bool, bool, bool, bool) {
++    if operation_pending {
++        return (false, false, false, false);
++    }
++
++    match state {
++        TerminalPresentationState::Closed => (true, false, false, false),
++        TerminalPresentationState::Open => (false, true, true, true),
++        TerminalPresentationState::Opening
++        | TerminalPresentationState::Closing
++        | TerminalPresentationState::Failed => (false, false, false, false),
++    }
++}
++
++fn render_terminal_controls(targets: &SessionsPageTargets) {
++    let state = targets.terminal.borrow().state();
++    let (open, input, send, close) =
++        terminal_controls_for_state(state, targets.operation_pending.get());
++    targets.open_button.set_sensitive(open);
++    targets.input.set_sensitive(input);
++    targets.send_button.set_sensitive(send);
++    targets.close_button.set_sensitive(close);
++}
++
++fn terminal_operation_status(operation: TerminalOperation) -> &'static str {
++    match operation {
++        TerminalOperation::Open => "Opening authorized terminal session…",
++        TerminalOperation::Input => "Sending bounded terminal input…",
++        TerminalOperation::Close => "Closing terminal session…",
++    }
++}
++
++fn execute_terminal_operation(
++    operation: TerminalOperation,
++    payload: &[u8],
++) -> Result<(), ipc::DesktopIpcError> {
++    match operation {
++        TerminalOperation::Open => ipc::query_terminal_open(payload),
++        TerminalOperation::Input => ipc::query_terminal_input(payload),
++        TerminalOperation::Close => ipc::query_terminal_close(payload),
++    }
++}
++
++fn start_terminal_operation(
++    targets: &SessionsPageTargets,
++    operation: TerminalOperation,
++    payload: Vec<u8>,
++) {
++    targets.operation_pending.set(true);
++    targets
++        .status
++        .set_text(terminal_operation_status(operation));
++    render_terminal_controls(targets);
++
++    let (sender, receiver) = mpsc::sync_channel(1);
++    let spawn_result = std::thread::Builder::new()
++        .name("prw-desktop-terminal-management".to_owned())
++        .spawn(move || {
++            let _ = sender.send(execute_terminal_operation(operation, &payload));
++        });
++
++    if spawn_result.is_err() {
++        targets.operation_pending.set(false);
++        targets.terminal.borrow_mut().apply_failure();
++        targets
++            .status
++            .set_text("Unable to start terminal management worker");
++        render_terminal_controls(targets);
++        return;
++    }
++
++    let poll_targets = targets.clone();
++    let _source_id = glib::timeout_add_local(WORKER_RESULT_POLL_INTERVAL, move || {
++        match receiver.try_recv() {
++            Ok(Ok(())) => {
++                let acknowledgement = match operation {
++                    TerminalOperation::Open => poll_targets
++                        .terminal
++                        .borrow_mut()
++                        .apply_open_acknowledgement(),
++                    TerminalOperation::Input => Ok(()),
++                    TerminalOperation::Close => poll_targets
++                        .terminal
++                        .borrow_mut()
++                        .apply_close_acknowledgement(),
++                };
++
++                poll_targets.operation_pending.set(false);
++                if acknowledgement.is_err() {
++                    poll_targets.terminal.borrow_mut().apply_failure();
++                    poll_targets
++                        .status
++                        .set_text("Terminal acknowledgement did not match local session state");
++                } else {
++                    match operation {
++                        TerminalOperation::Open => poll_targets.status.set_text(
++                            "Session open. Input is authorized by the Agent; output presentation is not enabled in this checkpoint.",
++                        ),
++                        TerminalOperation::Input => {
++                            poll_targets.input.set_text("");
++                            poll_targets.status.set_text("Terminal input acknowledged");
++                        }
++                        TerminalOperation::Close => {
++                            poll_targets.status.set_text("Terminal session closed");
++                        }
++                    }
++                }
++                render_terminal_controls(&poll_targets);
++                glib::ControlFlow::Break
++            }
++            Ok(Err(error)) => {
++                poll_targets.operation_pending.set(false);
++                poll_targets.terminal.borrow_mut().apply_failure();
++                poll_targets
++                    .status
++                    .set_text(&format!("Unavailable: {error}"));
++                render_terminal_controls(&poll_targets);
++                glib::ControlFlow::Break
++            }
++            Err(TryRecvError::Empty) => glib::ControlFlow::Continue,
++            Err(TryRecvError::Disconnected) => {
++                poll_targets.operation_pending.set(false);
++                poll_targets.terminal.borrow_mut().apply_failure();
++                poll_targets
++                    .status
++                    .set_text("Terminal management worker ended without a result");
++                render_terminal_controls(&poll_targets);
++                glib::ControlFlow::Break
++            }
++        }
++    });
++}
++
++fn request_terminal_open(targets: &SessionsPageTargets) {
++    let payload = targets.terminal.borrow_mut().request_open(
++        TerminalProfile::PosixShell,
++        TERMINAL_COLUMNS,
++        TERMINAL_ROWS,
++    );
++    match payload {
++        Ok(payload) => start_terminal_operation(targets, TerminalOperation::Open, payload),
++        Err(_) => targets
++            .status
++            .set_text("Terminal session cannot be opened from the current local state"),
++    }
++}
++
++fn request_terminal_input(targets: &SessionsPageTargets) {
++    let mut bytes = targets.input.text().as_bytes().to_vec();
++    bytes.push(b'\n');
++    let payload = targets.terminal.borrow().request_input(&bytes);
++    match payload {
++        Ok(payload) => start_terminal_operation(targets, TerminalOperation::Input, payload),
++        Err(_) => targets
++            .status
++            .set_text("Terminal input is unavailable from the current local state"),
++    }
++}
++
++fn request_terminal_close(targets: &SessionsPageTargets) {
++    let payload = targets.terminal.borrow_mut().request_close();
++    match payload {
++        Ok(payload) => start_terminal_operation(targets, TerminalOperation::Close, payload),
++        Err(_) => targets
++            .status
++            .set_text("Terminal session cannot be closed from the current local state"),
++    }
++}
++
++fn sessions_page() -> gtk::Box {
++    let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
++    page.set_margin_top(PAGE_OUTER_MARGIN);
++    page.set_margin_bottom(PAGE_OUTER_MARGIN);
++    page.set_margin_start(PAGE_OUTER_MARGIN);
++    page.set_margin_end(PAGE_OUTER_MARGIN);
++
++    let title = gtk::Label::new(Some(NavigationDestination::Sessions.title()));
++    title.set_xalign(0.0);
++    title.add_css_class(PAGE_TITLE_CSS_CLASS);
++    page.append(&title);
++
++    let subtitle = gtk::Label::new(Some(
++        "Authorized local terminal-session control through the existing trusted Agent socket and Agent-owned terminal capability checks. This checkpoint opens a POSIX shell, sends bounded input lines, and closes the session; terminal output presentation is not enabled yet.",
++    ));
++    subtitle.set_xalign(0.0);
++    subtitle.set_wrap(true);
++    subtitle.add_css_class(DIM_LABEL_CSS_CLASS);
++    page.append(&subtitle);
++
++    let session_id = next_terminal_session_id();
++    let session_label = gtk::Label::new(Some(&format!("Local terminal session: {session_id}")));
++    session_label.set_xalign(0.0);
++    session_label.add_css_class(TITLE_3_CSS_CLASS);
++    page.append(&session_label);
++
++    let status = gtk::Label::new(Some("Session closed"));
++    status.set_xalign(0.0);
++    status.set_wrap(true);
++    page.append(&status);
++
++    let input = gtk::Entry::new();
++    input.set_placeholder_text(Some("Terminal input line"));
++    page.append(&input);
++
++    let controls = gtk::Box::new(gtk::Orientation::Horizontal, 8);
++    let open_button = gtk::Button::with_label(TERMINAL_OPEN_LABEL);
++    let send_button = gtk::Button::with_label(TERMINAL_SEND_LABEL);
++    let close_button = gtk::Button::with_label(TERMINAL_CLOSE_LABEL);
++    controls.append(&open_button);
++    controls.append(&send_button);
++    controls.append(&close_button);
++    page.append(&controls);
++
++    let targets = SessionsPageTargets {
++        status,
++        input,
++        open_button,
++        send_button,
++        close_button,
++        terminal: Rc::new(RefCell::new(TerminalPresentation::new(session_id))),
++        operation_pending: Rc::new(Cell::new(false)),
++    };
++    render_terminal_controls(&targets);
++
++    let open_targets = targets.clone();
++    targets
++        .open_button
++        .connect_clicked(move |_| request_terminal_open(&open_targets));
++
++    let send_targets = targets.clone();
++    targets
++        .send_button
++        .connect_clicked(move |_| request_terminal_input(&send_targets));
++
++    let activate_targets = targets.clone();
++    targets
++        .input
++        .connect_activate(move |_| request_terminal_input(&activate_targets));
++
++    let close_targets = targets.clone();
++    targets
++        .close_button
++        .connect_clicked(move |_| request_terminal_close(&close_targets));
++
++    page
++}
++
+ fn file_list_child_path(parent: &str, child_name: &str) -> Option<String> {
+     if child_name.is_empty() || child_name.contains('/') {
+         return None;
+@@ -761,14 +1045,12 @@ fn append_agent_reported_protocol_section(page: &gtk::Box) -> gtk::Label {
+ 
+ #[derive(Clone, Copy)]
+ enum PlaceholderDestination {
+-    Sessions,
+     Transfers,
+ }
+ 
+ impl PlaceholderDestination {
+     const fn navigation_destination(self) -> NavigationDestination {
+         match self {
+-            Self::Sessions => NavigationDestination::Sessions,
+             Self::Transfers => NavigationDestination::Transfers,
+         }
+     }
+@@ -802,9 +1084,6 @@ fn placeholder_page(destination: PlaceholderDestination) -> gtk::Box {
+ 
+ const fn placeholder_description(destination: PlaceholderDestination) -> &'static str {
+     match destination {
+-        PlaceholderDestination::Sessions => {
+-            "Reserved for authorized terminal, Remote Desktop, and forwarding session presentation when runtime state is available."
+-        }
+         PlaceholderDestination::Transfers => {
+             "Reserved for verified upload/download progress and completion state."
+         }
+@@ -1109,21 +1388,48 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn placeholder_contract_represents_only_session_and_transfer_routes() {
+-        for (destination, navigation_destination, description) in [
+-            (
+-                super::PlaceholderDestination::Sessions,
+-                super::NavigationDestination::Sessions,
+-                "Reserved for authorized terminal, Remote Desktop, and forwarding session presentation when runtime state is available.",
+-            ),
+-            (
+-                super::PlaceholderDestination::Transfers,
+-                super::NavigationDestination::Transfers,
+-                "Reserved for verified upload/download progress and completion state.",
+-            ),
+-        ] {
+-            assert_eq!(destination.navigation_destination(), navigation_destination);
+-            assert_eq!(placeholder_description(destination), description);
++    fn placeholder_contract_represents_only_transfer_route() {
++        let destination = super::PlaceholderDestination::Transfers;
++        assert_eq!(
++            destination.navigation_destination(),
++            super::NavigationDestination::Transfers
++        );
++        assert_eq!(
++            placeholder_description(destination),
++            "Reserved for verified upload/download progress and completion state."
++        );
++    }
++
++    #[test]
++    fn terminal_controls_fail_closed_outside_open_state() {
++        use super::TerminalPresentationState::{Closed, Closing, Failed, Open, Opening};
++
++        assert_eq!(
++            super::terminal_controls_for_state(Closed, false),
++            (true, false, false, false)
++        );
++        assert_eq!(
++            super::terminal_controls_for_state(Open, false),
++            (false, true, true, true)
++        );
++        for state in [Opening, Closing, Failed] {
++            assert_eq!(
++                super::terminal_controls_for_state(state, false),
++                (false, false, false, false)
++            );
+         }
++        assert_eq!(
++            super::terminal_controls_for_state(Open, true),
++            (false, false, false, false)
++        );
++    }
++
++    #[test]
++    fn generated_terminal_session_ids_are_nonzero_and_distinct() {
++        let first = super::next_terminal_session_id();
++        let second = super::next_terminal_session_id();
++        assert_ne!(first, 0);
++        assert_ne!(second, 0);
++        assert_ne!(first, second);
+     }
+ }
