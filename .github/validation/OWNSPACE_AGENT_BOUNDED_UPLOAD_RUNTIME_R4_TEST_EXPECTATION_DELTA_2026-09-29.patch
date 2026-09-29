@@ -1,0 +1,26 @@
+﻿diff --git a/crates/prw-agent/src/linux_runtime_orchestration.rs b/crates/prw-agent/src/linux_runtime_orchestration.rs
+index 5850c21..3504d70 100644
+--- a/crates/prw-agent/src/linux_runtime_orchestration.rs
++++ b/crates/prw-agent/src/linux_runtime_orchestration.rs
+@@ -828,7 +828,7 @@ mod tests {
+             let terminal =
+                 validate_terminal_response_frame(&response).expect("denial response validates");
+             assert_eq!(terminal.request_id(), id(712));
+-            assert_eq!(terminal.status(), LocalAgentResponseStatus::Unauthorized);
++            assert_eq!(terminal.status(), LocalAgentResponseStatus::UnsupportedCommand);
+ 
+             let completion = wait_once_for_linux_runtime_readiness(
+                 &listener,
+diff --git a/crates/prw-agent/src/linux_signal_aware_runtime.rs b/crates/prw-agent/src/linux_signal_aware_runtime.rs
+index cdf4c73..065203d 100644
+--- a/crates/prw-agent/src/linux_signal_aware_runtime.rs
++++ b/crates/prw-agent/src/linux_signal_aware_runtime.rs
+@@ -778,7 +778,7 @@ mod tests {
+                         let terminal = validate_terminal_response_frame(&response)
+                             .expect("denial response validates");
+                         assert_eq!(terminal.request_id(), id(982));
+-                        assert_eq!(terminal.status(), LocalAgentResponseStatus::Unauthorized);
++                        assert_eq!(terminal.status(), LocalAgentResponseStatus::UnsupportedCommand);
+ 
+                         shutdown
+                             .request_shutdown_and_wake()
