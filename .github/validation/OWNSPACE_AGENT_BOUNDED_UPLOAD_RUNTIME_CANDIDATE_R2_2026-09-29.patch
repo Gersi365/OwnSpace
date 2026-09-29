@@ -697,8 +697,7 @@ index b89ec0c..9f31f16 100644
 +//! Agent user-service `$HOME`, never to `/` or a request-supplied host path.
  
  #![cfg(target_os = "linux")]
- 
-@@ -13,6 +14,7 @@ use std::ffi::OsStr;
+ @@ -13,6 +14,7 @@ use std::ffi::OsStr;
  use std::path::PathBuf;
  
  use prw_file_service::FileServiceError;
