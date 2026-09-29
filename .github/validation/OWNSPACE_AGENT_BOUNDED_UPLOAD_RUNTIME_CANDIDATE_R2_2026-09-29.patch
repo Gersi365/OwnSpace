@@ -1,0 +1,1000 @@
+diff --git a/crates/prw-agent/src/linux_authenticated_session/management_agent_status.rs b/crates/prw-agent/src/linux_authenticated_session/management_agent_status.rs
+index c61bfc1..9896c03 100644
+--- a/crates/prw-agent/src/linux_authenticated_session/management_agent_status.rs
++++ b/crates/prw-agent/src/linux_authenticated_session/management_agent_status.rs
+@@ -1,8 +1,8 @@
+-//! Deadline composition for the fixed command-3 AgentStatus-only local slice.
++//! Deadline composition for the fixed command-3 bounded local management slices.
+ //!
+ //! This child module keeps the existing public legacy deadline path unchanged.
+-//! It adds only a crate-private sibling method that reuses the same read and deferred
+-//! write deadline primitives while delegating to the narrow aggregate server-state path.
++//! It reuses the same read and deferred write deadline primitives for the existing
++//! `AgentStatus`/`FileList` compatibility path and the connection-scoped upload extension.
+ 
+ use std::os::unix::net::UnixStream;
+ 
+@@ -14,6 +14,7 @@ use crate::linux_identity::deadline_io::{
+     LocalLinuxIoBudget,
+ };
+ use crate::local_commands::boundary_request_response_transaction::LocalBoundaryRequestResponseOutcome;
++use crate::local_commands::management_agent_status_runtime::LocalBoundedUploadRuntime;
+ use crate::local_commands::private_dns_snapshot::LocalPrivateDnsSnapshot;
+ use crate::local_commands::server_connection_state::LocalAgentStatusManagementServerConnectionError;
+ use crate::local_commands::status_snapshot::LocalAgentStatusSnapshot;
+@@ -60,9 +61,48 @@ impl AuthenticatedLocalLinuxSession<UnixStream> {
+             )
+             .map_err(LocalLinuxAgentStatusManagementDeadlineSessionProcessError::Processing)
+     }
++
++    /// Processes exactly one request through the bounded fresh-upload extension.
++    ///
++    /// The same authenticated connection, aggregate framing state, and per-request deadlines
++    /// are retained while the caller-supplied connection-scoped upload runtime owns transfer
++    /// state. No terminal or forwarding provider is introduced by this method.
++    pub(crate) fn process_one_agent_status_file_list_upload_management_with_deadlines<
++        RE: PolicyEvaluator + ?Sized,
++    >(
++        &mut self,
++        read_evaluator: &RE,
++        status_snapshot: LocalAgentStatusSnapshot,
++        private_dns_snapshot: &LocalPrivateDnsSnapshot,
++        runtime: &mut LocalBoundedUploadRuntime<'_>,
++        read_budget: LocalLinuxIoBudget,
++        write_budget: LocalLinuxIoBudget,
++    ) -> Result<
++        LocalBoundaryRequestResponseOutcome,
++        LocalLinuxAgentStatusManagementDeadlineSessionProcessError,
++    > {
++        let Self { connection, state } = self;
++        let stream = connection.stream();
++        let mut reader = LocalLinuxDeadlineReader::start(stream, read_budget).map_err(
++            LocalLinuxAgentStatusManagementDeadlineSessionProcessError::ReadDeadlineStart,
++        )?;
++        let mut writer = LocalLinuxDeferredDeadlineWriter::new(stream, write_budget);
++
++        state
++            .process_one_agent_status_file_list_upload_management_at_boundary(
++                &mut reader,
++                &mut writer,
++                connection,
++                read_evaluator,
++                status_snapshot,
++                private_dns_snapshot,
++                runtime,
++            )
++            .map_err(LocalLinuxAgentStatusManagementDeadlineSessionProcessError::Processing)
++    }
+ }
+ 
+-/// Crate-internal failure for the narrow `AgentStatus` management deadline path.
++/// Crate-internal failure for the narrow bounded-management deadline path.
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+ pub enum LocalLinuxAgentStatusManagementDeadlineSessionProcessError {
+     /// The absolute request-read deadline could not be constructed.
+diff --git a/crates/prw-agent/src/linux_session_worker.rs b/crates/prw-agent/src/linux_session_worker.rs
+index 8acebcb..0a93e4e 100644
+--- a/crates/prw-agent/src/linux_session_worker.rs
++++ b/crates/prw-agent/src/linux_session_worker.rs
+@@ -71,9 +71,13 @@ pub enum LocalLinuxSessionWorkerStop {
+         /// Number of terminal responses written before EOF.
+         responses_written: usize,
+     },
+-    /// The caller-supplied maximum Request count was consumed exactly.
++    /// The worker reached its applicable bounded Request limit.
++    ///
++    /// For the legacy worker this is exactly the configured request budget. The bounded-upload
++    /// management worker may exceed that base budget only while one upload transaction is active,
++    /// under its separate transfer-derived hard limit.
+     RequestBudgetExhausted {
+-        /// Number of terminal responses written; equal to the configured budget.
++        /// Number of terminal responses written before the applicable bounded limit closed the worker.
+         responses_written: usize,
+     },
+ }
+@@ -144,11 +148,11 @@ pub fn run_authenticated_session_worker<E: PolicyEvaluator + ?Sized>(
+     })
+ }
+ 
+-/// Runs one authenticated session through the fixed AgentStatus-management worker.
++/// Runs one authenticated session through the fixed bounded-management worker.
+ ///
+ /// This crate-internal adapter preserves the shared worker result envelope used by
+ /// scoped spawning, registry ownership, completion classification and runtime teardown.
+-/// The underlying VU child worker remains private and owns the fixed management policy.
++/// The underlying child worker owns the fixed narrow management policy and upload cleanup.
+ ///
+ /// # Errors
+ ///
+@@ -176,6 +180,9 @@ pub(super) fn run_authenticated_session_worker_with_agent_status_management<
+         match error {
+             management_agent_status::LocalLinuxAgentStatusManagementSessionWorkerError::Processing {
+                 responses_written,
++            }
++            | management_agent_status::LocalLinuxAgentStatusManagementSessionWorkerError::Cleanup {
++                responses_written,
+             } => LocalLinuxSessionWorkerError::AgentStatusManagementProcessing {
+                 responses_written,
+             },
+diff --git a/crates/prw-agent/src/linux_session_worker/management_agent_status.rs b/crates/prw-agent/src/linux_session_worker/management_agent_status.rs
+index f5ff8c2..73fa114 100644
+--- a/crates/prw-agent/src/linux_session_worker/management_agent_status.rs
++++ b/crates/prw-agent/src/linux_session_worker/management_agent_status.rs
+@@ -1,21 +1,36 @@
+-//! Finite worker for legacy commands plus fixed command-3 `AgentStatus`.
++//! Finite worker for legacy commands plus the fixed bounded command-3 local slice.
+ //!
+-//! The existing public legacy worker is unchanged. This child function consumes the same
+-//! permit, request budget and per-request I/O budgets while delegating to the narrow
+-//! AgentStatus-only authenticated-session method.
++//! Normal `AgentStatus`/`FileList` requests preserve the existing configured request budget.
++//! A successful fresh `UploadBegin` may extend only that authenticated connection while one
++//! upload remains active, under a hard bound derived from the global transfer/chunk limits.
++//! Teardown explicitly aborts any unfinished staging transaction before provider state drops.
+ 
+ use std::os::unix::net::UnixStream;
+ 
++use prw_file_service::MAX_TRANSFER_CHUNK_BYTES;
++use prw_file_transfer::MAX_TRANSFER_BYTES;
+ use prw_policy::PolicyEvaluator;
+ 
+ use super::{LocalLinuxSessionWorkerConfig, LocalLinuxSessionWorkerStop};
+ use crate::linux_identity::authenticated_session::AuthenticatedLocalLinuxSession;
+ use crate::linux_identity::worker_capacity::LocalLinuxWorkerPermit;
+ use crate::local_commands::boundary_request_response_transaction::LocalBoundaryRequestResponseOutcome;
++use crate::local_commands::management_agent_status_runtime::{
++    LocalBoundedUploadRuntime, home_filesystem_authority,
++};
++use crate::local_commands::management_authority::LocalManagementFilesystemAuthority;
+ use crate::local_commands::private_dns_snapshot::LocalPrivateDnsSnapshot;
+ use crate::local_commands::status_snapshot::LocalAgentStatusSnapshot;
+ 
+-/// Coarse crate-internal failure for one AgentStatus-management finite worker.
++const MAX_UPLOAD_CHUNKS: usize = ((MAX_TRANSFER_BYTES
++    + MAX_TRANSFER_CHUNK_BYTES as u64
++    - 1)
++    / MAX_TRANSFER_CHUNK_BYTES as u64) as usize;
++/// After `UploadBegin` has consumed one normal request slot, at most every full transfer
++/// chunk plus one `UploadFinalize` or `UploadAbort` request may extend the connection.
++const MAX_UPLOAD_CONTINUATION_REQUESTS: usize = MAX_UPLOAD_CHUNKS + 1;
++
++/// Coarse crate-internal failure for one bounded-management finite worker.
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+ pub(super) enum LocalLinuxAgentStatusManagementSessionWorkerError {
+     /// One request failed after the stated number of prior responses.
+@@ -23,23 +38,56 @@ pub(super) enum LocalLinuxAgentStatusManagementSessionWorkerError {
+         /// Number of terminal responses completed before the failing request.
+         responses_written: usize,
+     },
++    /// Explicit unfinished-upload cleanup failed before provider state could be dropped cleanly.
++    Cleanup {
++        /// Number of terminal responses completed before cleanup failed.
++        responses_written: usize,
++    },
+ }
+ 
+-/// Runs one authenticated local session through the fixed `AgentStatus` command-3 slice.
++/// Runs one authenticated local session through the bounded production command-3 slice.
+ ///
+-/// Permit RAII, request-budget exhaustion, fresh read deadlines and deferred write deadlines
+-/// are identical to the existing finite worker. No caller can supply management policy,
+-/// filesystem authority or mutable provider lifecycle to this function.
++/// The existing `$HOME` descriptor authority is opened before mutable upload state is created.
++/// If that authority cannot be opened, the exact compatibility worker remains available so
++/// AgentStatus keeps working and FileList retains its existing per-request failure behavior.
++/// No caller can supply management policy, host root, terminal backend, or forwarding backend.
+ ///
+ /// # Errors
+ ///
+-/// Returns on the first narrow request-processing failure and preserves the number of prior
+-/// completed terminal responses.
++/// Returns on the first request-processing or explicit upload-cleanup failure and preserves
++/// the number of prior completed terminal responses.
+ pub(super) fn run_authenticated_session_worker_with_agent_status_management<
+     RE: PolicyEvaluator + ?Sized,
+ >(
++    session: AuthenticatedLocalLinuxSession<UnixStream>,
++    permit: LocalLinuxWorkerPermit,
++    read_evaluator: &RE,
++    status_snapshot: LocalAgentStatusSnapshot,
++    private_dns_snapshot: &LocalPrivateDnsSnapshot,
++    config: LocalLinuxSessionWorkerConfig,
++) -> Result<LocalLinuxSessionWorkerStop, LocalLinuxAgentStatusManagementSessionWorkerError> {
++    let _permit = permit;
++    match home_filesystem_authority() {
++        Ok(filesystem) => run_authenticated_session_worker_with_bounded_upload(
++            session,
++            read_evaluator,
++            status_snapshot,
++            private_dns_snapshot,
++            config,
++            &filesystem,
++        ),
++        Err(_) => run_authenticated_session_worker_compatibility(
++            session,
++            read_evaluator,
++            status_snapshot,
++            private_dns_snapshot,
++            config,
++        ),
++    }
++}
++
++fn run_authenticated_session_worker_compatibility<RE: PolicyEvaluator + ?Sized>(
+     mut session: AuthenticatedLocalLinuxSession<UnixStream>,
+-    _permit: LocalLinuxWorkerPermit,
+     read_evaluator: &RE,
+     status_snapshot: LocalAgentStatusSnapshot,
+     private_dns_snapshot: &LocalPrivateDnsSnapshot,
+@@ -72,13 +120,73 @@ pub(super) fn run_authenticated_session_worker_with_agent_status_management<
+     })
+ }
+ 
++fn run_authenticated_session_worker_with_bounded_upload<RE: PolicyEvaluator + ?Sized>(
++    mut session: AuthenticatedLocalLinuxSession<UnixStream>,
++    read_evaluator: &RE,
++    status_snapshot: LocalAgentStatusSnapshot,
++    private_dns_snapshot: &LocalPrivateDnsSnapshot,
++    config: LocalLinuxSessionWorkerConfig,
++    filesystem: &LocalManagementFilesystemAuthority,
++) -> Result<LocalLinuxSessionWorkerStop, LocalLinuxAgentStatusManagementSessionWorkerError> {
++    let mut runtime = LocalBoundedUploadRuntime::new(filesystem);
++    let base_request_budget = config.request_budget().get();
++    let hard_request_limit = base_request_budget.saturating_add(MAX_UPLOAD_CONTINUATION_REQUESTS);
++    let mut responses_written = 0_usize;
++
++    let result = loop {
++        if responses_written >= base_request_budget && !runtime.is_upload_active() {
++            break Ok(LocalLinuxSessionWorkerStop::RequestBudgetExhausted { responses_written });
++        }
++        if responses_written >= hard_request_limit {
++            break Ok(LocalLinuxSessionWorkerStop::RequestBudgetExhausted { responses_written });
++        }
++
++        match session.process_one_agent_status_file_list_upload_management_with_deadlines(
++            read_evaluator,
++            status_snapshot,
++            private_dns_snapshot,
++            &mut runtime,
++            config.read_budget(),
++            config.write_budget(),
++        ) {
++            Ok(LocalBoundaryRequestResponseOutcome::ResponseWritten) => {
++                responses_written += 1;
++            }
++            Ok(LocalBoundaryRequestResponseOutcome::CleanEof) => {
++                break Ok(LocalLinuxSessionWorkerStop::CleanEof { responses_written });
++            }
++            Err(_) => {
++                break Err(
++                    LocalLinuxAgentStatusManagementSessionWorkerError::Processing {
++                        responses_written,
++                    },
++                );
++            }
++        }
++    };
++
++    if runtime.finish().is_err() {
++        return Err(LocalLinuxAgentStatusManagementSessionWorkerError::Cleanup {
++            responses_written,
++        });
++    }
++    result
++}
++
+ #[cfg(test)]
+ mod tests {
++    use std::fs;
+     use std::io::Read;
++    use std::net::Shutdown;
+     use std::num::NonZeroUsize;
+     use std::os::unix::net::UnixStream;
+-    use std::time::Duration;
++    use std::path::PathBuf;
++    use std::sync::atomic::{AtomicU64, Ordering};
++    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+ 
++    use aws_lc_rs::digest::{SHA256, digest};
++    use prw_file_service::{RemotePath, transfer_staging_name};
++    use prw_file_transfer::{TransferId, UploadPlan};
+     use prw_network::PrivateDnsConfig;
+     use prw_policy::BoundedLocalReadPolicy;
+     use prw_remote_bridge::BridgeCommand;
+@@ -86,6 +194,7 @@ mod tests {
+     use super::{
+         LocalLinuxSessionWorkerConfig, LocalLinuxSessionWorkerStop,
+         run_authenticated_session_worker_with_agent_status_management,
++        run_authenticated_session_worker_with_bounded_upload,
+     };
+     use crate::LocalIpcRequestId;
+     use crate::frame_object::reader::read_frame;
+@@ -96,6 +205,7 @@ mod tests {
+     use crate::linux_identity::worker_capacity::LocalLinuxWorkerCapacity;
+     use crate::local_commands::LocalAgentCommand;
+     use crate::local_commands::LocalAgentResponseStatus;
++    use crate::local_commands::management_authority::LocalManagementFilesystemAuthority;
+     use crate::local_commands::management_request::build_local_management_request_frame;
+     use crate::local_commands::private_dns_snapshot::LocalPrivateDnsSnapshot;
+     use crate::local_commands::request_frame::build_local_command_request_frame;
+@@ -105,6 +215,8 @@ mod tests {
+     };
+     use crate::local_commands::terminal_response::validate_terminal_response_frame;
+ 
++    static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(1);
++
+     fn id(value: u64) -> LocalIpcRequestId {
+         LocalIpcRequestId::new(value).expect("request id is non-zero")
+     }
+@@ -132,6 +244,33 @@ mod tests {
+         )
+     }
+ 
++    fn test_root(label: &str) -> PathBuf {
++        let nonce = SystemTime::now()
++            .duration_since(UNIX_EPOCH)
++            .expect("system time")
++            .as_nanos();
++        let sequence = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
++        let path = std::env::temp_dir().join(format!(
++            "ownspace-bounded-upload-worker-{}-{sequence}-{nonce}-{label}",
++            std::process::id()
++        ));
++        fs::create_dir(&path).expect("test root creates");
++        path
++    }
++
++    fn sha(bytes: &[u8]) -> [u8; 32] {
++        let value = digest(&SHA256, bytes);
++        let mut output = [0_u8; 32];
++        output.copy_from_slice(value.as_ref());
++        output
++    }
++
++    fn management_frame(request_id: u64, command: BridgeCommand) -> crate::frame_object::LocalIpcFrame {
++        let bridge = command.encode().expect("management command encodes");
++        build_local_management_request_frame(id(request_id), &bridge)
++            .expect("management frame builds")
++    }
++
+     #[test]
+     fn command_three_agent_status_runs_through_narrow_worker() {
+         let (server, mut client) = UnixStream::pair().expect("local pair creates");
+@@ -191,7 +330,7 @@ mod tests {
+         .expect("legacy request succeeds");
+ 
+         assert_eq!(capacity.active_workers(), 0);
+-        let response = read_frame(&mut client).expect("legacy response reads");
++        let response = read_frame(&mut client).expect("response reads");
+         let decoded =
+             decode_success_status_frame(&response).expect("legacy status response decodes");
+         assert_eq!(decoded.request_id(), id(952));
+@@ -204,4 +343,109 @@ mod tests {
+             0
+         );
+     }
++
++    #[test]
++    fn active_upload_extends_only_its_connection_beyond_base_request_budget() {
++        let root = test_root("complete");
++        let filesystem = LocalManagementFilesystemAuthority::open_trusted_root(&root)
++            .expect("test filesystem authority opens");
++        let payload = b"bounded live upload";
++        let transfer_id = TransferId::new([0x41; 16]);
++        let plan = UploadPlan::new(
++            transfer_id,
++            RemotePath::parse("uploaded.bin").expect("destination path"),
++            payload.len() as u64,
++            sha(payload),
++        )
++        .expect("upload plan");
++        let (server, mut client) = UnixStream::pair().expect("local pair creates");
++
++        for frame in [
++            management_frame(960, BridgeCommand::UploadBegin(plan)),
++            management_frame(
++                961,
++                BridgeCommand::UploadChunk {
++                    transfer_id,
++                    offset: 0,
++                    chunk: payload.to_vec(),
++                },
++            ),
++            management_frame(962, BridgeCommand::UploadFinalize(transfer_id)),
++        ] {
++            write_frame(&mut client, &frame).expect("upload request writes");
++        }
++
++        let stop = run_authenticated_session_worker_with_bounded_upload(
++            session(server),
++            &BoundedLocalReadPolicy::allow_local_reads(),
++            status(),
++            &dns(),
++            config(),
++            &filesystem,
++        )
++        .expect("bounded upload worker succeeds");
++
++        assert_eq!(
++            stop,
++            LocalLinuxSessionWorkerStop::RequestBudgetExhausted {
++                responses_written: 3
++            }
++        );
++        for request_id in [960, 961, 962] {
++            let frame = read_frame(&mut client).expect("upload response reads");
++            let terminal = validate_terminal_response_frame(&frame).expect("response validates");
++            assert_eq!(terminal.request_id(), id(request_id));
++            assert_eq!(terminal.status(), LocalAgentResponseStatus::Ok);
++        }
++        assert_eq!(fs::read(root.join("uploaded.bin")).expect("final file"), payload);
++        fs::remove_dir_all(root).expect("test root removes");
++    }
++
++    #[test]
++    fn clean_eof_aborts_unfinished_upload_before_worker_returns() {
++        let root = test_root("abort-on-eof");
++        let filesystem = LocalManagementFilesystemAuthority::open_trusted_root(&root)
++            .expect("test filesystem authority opens");
++        let transfer_id = TransferId::new([0x42; 16]);
++        let plan = UploadPlan::new(
++            transfer_id,
++            RemotePath::parse("never-published.bin").expect("destination path"),
++            4,
++            sha(b"data"),
++        )
++        .expect("upload plan");
++        let (server, mut client) = UnixStream::pair().expect("local pair creates");
++        let begin = management_frame(970, BridgeCommand::UploadBegin(plan));
++        write_frame(&mut client, &begin).expect("begin writes");
++        client
++            .shutdown(Shutdown::Write)
++            .expect("client write direction closes");
++
++        let stop = run_authenticated_session_worker_with_bounded_upload(
++            session(server),
++            &BoundedLocalReadPolicy::allow_local_reads(),
++            status(),
++            &dns(),
++            config(),
++            &filesystem,
++        )
++        .expect("clean EOF performs bounded cleanup");
++
++        assert_eq!(
++            stop,
++            LocalLinuxSessionWorkerStop::CleanEof {
++                responses_written: 1
++            }
++        );
++        let response = read_frame(&mut client).expect("begin response reads");
++        let terminal = validate_terminal_response_frame(&response).expect("response validates");
++        assert_eq!(terminal.status(), LocalAgentResponseStatus::Ok);
++        assert!(!root.join("never-published.bin").exists());
++        assert!(
++            !root
++                .join(transfer_staging_name(*transfer_id.as_bytes()))
++                .exists()
++        );
++        fs::remove_dir_all(root).expect("test root removes");
++    }
+ }
+diff --git a/crates/prw-agent/src/local_commands/management_agent_status_boundary.rs b/crates/prw-agent/src/local_commands/management_agent_status_boundary.rs
+index 9f16497..cb1e5c6 100644
+--- a/crates/prw-agent/src/local_commands/management_agent_status_boundary.rs
++++ b/crates/prw-agent/src/local_commands/management_agent_status_boundary.rs
+@@ -1,8 +1,9 @@
+-//! Shared local boundary for legacy commands 1/2 plus fixed command-3 `AgentStatus`/`FileList`.
++//! Shared local boundary for legacy commands 1/2 plus fixed command-3 management slices.
+ //!
+ //! Generic framing is acquired before command classification. Legacy commands retain
+-//! their existing decoder/policy/responder path. Code 3 is delegated only to the
+-//! fixed AgentStatus/FileList runtime adapter, which owns no mutable provider lifecycle.
++//! their existing decoder/policy/responder path. Code 3 is delegated either to the
++//! existing `AgentStatus`/`FileList` compatibility adapter or to the explicitly bounded
++//! upload extension supplied by the connection-scoped worker.
+ 
+ #![cfg(target_os = "linux")]
+ 
+@@ -12,7 +13,10 @@ use prw_policy::PolicyEvaluator;
+ 
+ use super::boundary_request_response_transaction::LocalBoundaryRequestResponseOutcome;
+ use super::inbound_state::LocalInboundRequestState;
+-use super::management_agent_status_runtime::process_authenticated_linux_agent_status_file_list_management;
++use super::management_agent_status_runtime::{
++    LocalBoundedUploadRuntime, process_authenticated_linux_agent_status_file_list_management,
++    process_authenticated_linux_agent_status_file_list_upload_management,
++};
+ use super::management_request::LOCAL_MANAGEMENT_BRIDGE_COMMAND_CODE;
+ use super::policy_response::{
+     LocalPolicyResponseBuildError, build_policy_gated_read_only_response,
+@@ -30,7 +34,7 @@ use crate::frame_object::boundary_reader::{LocalIpcFrameBoundaryRead, read_frame
+ use crate::frame_object::reader::LocalIpcFrameReadError;
+ use crate::linux_identity::authenticated_connection::AuthenticatedLocalLinuxConnection;
+ 
+-/// One narrow `AgentStatus` management boundary failure after authoritative state transitions.
++/// One narrow local-management boundary failure after authoritative state transitions.
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+ pub enum LocalAgentStatusManagementBoundaryError {
+     /// Generic frame acquisition failed and poisoned the inbound direction.
+@@ -39,22 +43,22 @@ pub enum LocalAgentStatusManagementBoundaryError {
+     ReadOnlyDecode(LocalAgentRequestFrameDecodeError),
+     /// Legacy policy-response construction failed before response write.
+     ReadOnlyResponse(LocalPolicyResponseBuildError),
+-    /// Fixed `AgentStatus`/`FileList` management response construction failed before response write.
++    /// Fixed command-3 management response construction failed before response write.
+     ManagementResponse(LocalTerminalResponseBuildError),
+     /// Guarded response writing failed.
+     ResponseWrite(LocalTerminalResponseWriteError),
+ }
+ 
+-/// Processes one clean-EOF-aware local request with an AgentStatus/FileList-only command-3 slice.
++/// Processes one clean-EOF-aware local request with the existing `AgentStatus`/`FileList` slice.
+ ///
+-/// Command 3 receives no caller-supplied management policy or provider context. Commands
++/// Command 3 receives no caller-supplied management policy or mutable provider context. Commands
+ /// 1/2 retain the existing read-only evaluator and exact response path.
+ ///
+ /// # Errors
+ ///
+ /// Preserves generic frame/read poisoning, legacy decode failures and guarded response
+ /// write failures. Canonical command-3 admission failures are encoded as correlated
+-/// terminal responses by the fixed AgentStatus/FileList runtime adapter.
++/// terminal responses by the fixed runtime adapter.
+ #[allow(
+     clippy::too_many_arguments,
+     reason = "authenticated connection, legacy policy and protocol snapshots remain explicit"
+@@ -73,6 +77,105 @@ where
+     R: Read,
+     W: Write,
+     RE: PolicyEvaluator + ?Sized,
++{
++    process_one_agent_status_management_at_boundary_with_processor(
++        reader,
++        writer,
++        inbound_state,
++        response_write_state,
++        connection,
++        read_evaluator,
++        status_snapshot,
++        private_dns_snapshot,
++        |frame, connection, status_snapshot| {
++            process_authenticated_linux_agent_status_file_list_management(
++                frame,
++                connection,
++                status_snapshot,
++            )
++        },
++    )
++}
++
++/// Processes one clean-EOF-aware local request with the bounded fresh-upload extension.
++///
++/// The supplied runtime is connection-scoped and owns at most one active upload. The
++/// command gate inside that runtime keeps resume/download/file mutation/terminal/forwarding
++/// outside this production slice while legacy commands 1/2 retain their existing path.
++///
++/// # Errors
++///
++/// Preserves the same aggregate framing and guarded-write failure semantics as the
++/// compatibility path above.
++#[allow(
++    clippy::too_many_arguments,
++    reason = "authenticated connection, bounded upload state and protocol snapshots remain explicit"
++)]
++pub(crate) fn process_one_agent_status_file_list_upload_management_at_boundary<
++    R,
++    W,
++    RE,
++    S,
++>(
++    reader: &mut R,
++    writer: &mut W,
++    inbound_state: &mut LocalInboundRequestState,
++    response_write_state: &mut LocalTerminalResponseWriteState,
++    connection: &AuthenticatedLocalLinuxConnection<S>,
++    read_evaluator: &RE,
++    status_snapshot: LocalAgentStatusSnapshot,
++    private_dns_snapshot: &LocalPrivateDnsSnapshot,
++    runtime: &mut LocalBoundedUploadRuntime<'_>,
++) -> Result<LocalBoundaryRequestResponseOutcome, LocalAgentStatusManagementBoundaryError>
++where
++    R: Read,
++    W: Write,
++    RE: PolicyEvaluator + ?Sized,
++{
++    process_one_agent_status_management_at_boundary_with_processor(
++        reader,
++        writer,
++        inbound_state,
++        response_write_state,
++        connection,
++        read_evaluator,
++        status_snapshot,
++        private_dns_snapshot,
++        |frame, connection, status_snapshot| {
++            process_authenticated_linux_agent_status_file_list_upload_management(
++                frame,
++                connection,
++                status_snapshot,
++                runtime,
++            )
++        },
++    )
++}
++
++#[allow(
++    clippy::too_many_arguments,
++    reason = "shared boundary mechanics keep authority-bearing inputs explicit"
++)]
++fn process_one_agent_status_management_at_boundary_with_processor<R, W, RE, S, M>(
++    reader: &mut R,
++    writer: &mut W,
++    inbound_state: &mut LocalInboundRequestState,
++    response_write_state: &mut LocalTerminalResponseWriteState,
++    connection: &AuthenticatedLocalLinuxConnection<S>,
++    read_evaluator: &RE,
++    status_snapshot: LocalAgentStatusSnapshot,
++    private_dns_snapshot: &LocalPrivateDnsSnapshot,
++    mut process_management: M,
++) -> Result<LocalBoundaryRequestResponseOutcome, LocalAgentStatusManagementBoundaryError>
++where
++    R: Read,
++    W: Write,
++    RE: PolicyEvaluator + ?Sized,
++    M: FnMut(
++        &LocalIpcFrame,
++        &AuthenticatedLocalLinuxConnection<S>,
++        LocalAgentStatusSnapshot,
++    ) -> Result<LocalIpcFrame, LocalTerminalResponseBuildError>,
+ {
+     if inbound_state.is_read_poisoned() {
+         return Err(LocalAgentStatusManagementBoundaryError::FrameRead(
+@@ -97,20 +200,14 @@ where
+     };
+ 
+     let response = if payload_command_code(&frame) == Some(LOCAL_MANAGEMENT_BRIDGE_COMMAND_CODE) {
+-        process_authenticated_linux_agent_status_file_list_management(
+-            &frame,
+-            connection,
+-            status_snapshot,
+-        )
+-        .map_err(LocalAgentStatusManagementBoundaryError::ManagementResponse)?
++        process_management(&frame, connection, status_snapshot)
++            .map_err(LocalAgentStatusManagementBoundaryError::ManagementResponse)?
+     } else {
+         let request = match decode_local_command_request_frame(&frame) {
+             Ok(request) => request,
+             Err(error) => {
+                 *inbound_state = LocalInboundRequestState::ReadPoisoned;
+-                return Err(LocalAgentStatusManagementBoundaryError::ReadOnlyDecode(
+-                    error,
+-                ));
++                return Err(LocalAgentStatusManagementBoundaryError::ReadOnlyDecode(error));
+             }
+         };
+         build_policy_gated_read_only_response(
+diff --git a/crates/prw-agent/src/local_commands/management_agent_status_runtime.rs b/crates/prw-agent/src/local_commands/management_agent_status_runtime.rs
+index b89ec0c..9f31f16 100644
+--- a/crates/prw-agent/src/local_commands/management_agent_status_runtime.rs
++++ b/crates/prw-agent/src/local_commands/management_agent_status_runtime.rs
+@@ -1,11 +1,12 @@
+-//! Narrow command-3 `AgentStatus` + read-only `FileList` runtime adapter.
++//! Narrow command-3 `AgentStatus` + `FileList` + bounded upload runtime adapter.
+ //!
+-//! This module intentionally omits mutable provider lifecycle and terminal/forwarding
+-//! backends. The management policy is fixed inside the adapter: `AgentStatusRead` and
+-//! `FilesRead` are admitted, then an explicit command gate permits only `AgentStatus`
+-//! and `FileList`. `FileStat` and `DownloadChunk` therefore remain unsupported even
+-//! though they share `FilesRead`. The `FileList` authority is anchored to the Agent
+-//! user-service `$HOME`, never to `/` or a request-supplied host path.
++//! The production slice remains explicitly narrower than the generic typed-management
++//! surface. `AgentStatus` and `FileList` preserve their existing behavior. A connection
++//! may additionally own at most one fresh create-only upload using `UploadBegin`,
++//! `UploadChunk`, `UploadFinalize`, and internal/client-requested `UploadAbort`.
++//! `UploadResume`, `DownloadChunk`, file mutation commands outside upload, terminal, and
++//! forwarding remain unsupported or denied. Filesystem authority is anchored to the
++//! Agent user-service `$HOME`, never to `/` or a request-supplied host path.
+ 
+ #![cfg(target_os = "linux")]
+ 
+@@ -13,6 +14,7 @@ use std::ffi::OsStr;
+ use std::path::PathBuf;
+ 
+ use prw_file_service::FileServiceError;
++use prw_file_transfer::{FileTransferError, TransferId, UploadTransferManager};
+ use prw_policy::{BoundedLocalManagementDecisions, BoundedLocalManagementPolicy, Decision};
+ use prw_remote_bridge::BridgeCommand;
+ 
+@@ -44,12 +46,127 @@ const fn agent_status_file_list_policy() -> BoundedLocalManagementPolicy {
+     })
+ }
+ 
+-/// Processes one canonical command-3 request through the fixed `AgentStatus` + `FileList` slice.
++const fn agent_status_file_list_upload_policy() -> BoundedLocalManagementPolicy {
++    BoundedLocalManagementPolicy::new(BoundedLocalManagementDecisions {
++        agent_status: Decision::Allow,
++        private_dns: Decision::Deny,
++        terminal_open: Decision::Deny,
++        terminal_exec: Decision::Deny,
++        files_read: Decision::Allow,
++        files_write: Decision::Allow,
++        forwarding_create: Decision::Deny,
++    })
++}
++
++/// Connection-scoped mutable state for the bounded fresh-upload production slice.
++///
++/// The runtime borrows one already-opened Agent-selected filesystem authority and owns
++/// exactly one transfer manager for the authenticated local connection lifetime. The
++/// explicit `active_transfer` field deliberately narrows the generic transfer manager's
++/// capacity to at most one upload in this production slice so teardown can deterministically
++/// abort the exact retained transaction.
++#[derive(Debug)]
++pub(crate) struct LocalBoundedUploadRuntime<'authority> {
++    filesystem: &'authority LocalManagementFilesystemAuthority,
++    transfers: UploadTransferManager<'authority>,
++    active_transfer: Option<TransferId>,
++}
++
++/// Explicit bounded-upload teardown failure.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub(crate) enum LocalBoundedUploadCleanupError {
++    /// The active staging transaction could not be explicitly aborted.
++    Abort(FileTransferError),
++    /// Provider state remained active after deterministic cleanup.
++    StateNotDrained,
++}
++
++impl<'authority> LocalBoundedUploadRuntime<'authority> {
++    /// Creates one inert upload runtime over an already-opened trusted root.
++    #[must_use]
++    pub(crate) fn new(filesystem: &'authority LocalManagementFilesystemAuthority) -> Self {
++        Self {
++            filesystem,
++            transfers: UploadTransferManager::new(filesystem.root()),
++            active_transfer: None,
++        }
++    }
++
++    /// Returns whether this authenticated connection currently owns an upload transaction.
++    #[must_use]
++    pub(crate) const fn is_upload_active(&self) -> bool {
++        self.active_transfer.is_some()
++    }
++
++    fn begin(
++        &mut self,
++        plan: &prw_file_transfer::UploadPlan,
++    ) -> Result<u64, FileTransferError> {
++        if self.active_transfer.is_some() {
++            return Err(FileTransferError::TransferAlreadyActive);
++        }
++        let offset = self.transfers.begin(plan.clone())?;
++        self.active_transfer = Some(plan.transfer_id());
++        Ok(offset)
++    }
++
++    fn upload_chunk(
++        &mut self,
++        transfer_id: TransferId,
++        offset: u64,
++        chunk: &[u8],
++    ) -> Result<u64, FileTransferError> {
++        self.require_active(transfer_id)?;
++        self.transfers.upload_chunk(transfer_id, offset, chunk)
++    }
++
++    fn finalize(&mut self, transfer_id: TransferId) -> Result<(), FileTransferError> {
++        self.require_active(transfer_id)?;
++        self.transfers.finalize(transfer_id)?;
++        self.active_transfer = None;
++        Ok(())
++    }
++
++    fn abort(&mut self, transfer_id: TransferId) -> Result<(), FileTransferError> {
++        self.require_active(transfer_id)?;
++        self.transfers.abort(transfer_id)?;
++        self.active_transfer = None;
++        Ok(())
++    }
++
++    fn require_active(&self, transfer_id: TransferId) -> Result<(), FileTransferError> {
++        if self.active_transfer == Some(transfer_id) {
++            Ok(())
++        } else {
++            Err(FileTransferError::TransferUnknown)
++        }
++    }
++
++    /// Explicitly drains any active upload before the connection-scoped runtime is dropped.
++    ///
++    /// This is the fail-closed cleanup path for clean EOF, request-processing failure,
++    /// hard request-bound exhaustion, or caller cancellation. It never publishes a final
++    /// destination; only the active staging transaction is removed.
++    pub(crate) fn finish(mut self) -> Result<(), LocalBoundedUploadCleanupError> {
++        if let Some(transfer_id) = self.active_transfer {
++            self.transfers
++                .abort(transfer_id)
++                .map_err(LocalBoundedUploadCleanupError::Abort)?;
++            self.active_transfer = None;
++        }
++        if self.transfers.active_count() == 0 {
++            Ok(())
++        } else {
++            Err(LocalBoundedUploadCleanupError::StateNotDrained)
++        }
++    }
++}
++
++/// Processes one canonical command-3 request through the existing read-only slice.
+ ///
+-/// The caller supplies no management policy or mutable provider lifecycle. Canonical
+-/// admission still binds the request to the authenticated same-UID Linux peer.
+-/// `FileList` is descriptor-anchored to the Agent user-service `$HOME`; the requested
+-/// path remains a canonical relative `RemotePath`. Every other command fails closed.
++/// This compatibility path owns no mutable transfer state. Canonical admission still
++/// binds the request to the authenticated same-UID Linux peer. `FileList` remains
++/// descriptor-anchored to `$HOME`. Every other command fails closed.
+ ///
+ /// # Errors
+ ///
+@@ -115,7 +232,104 @@ where
+     }
+ }
+ 
+-fn home_filesystem_authority() -> Result<LocalManagementFilesystemAuthority, FileServiceError> {
++/// Processes one command-3 request through the production bounded-upload extension.
++///
++/// Only `AgentStatus`, `FileList`, fresh upload begin/chunk/finalize, and upload abort
++/// are reachable after capability admission. `UploadResume`, `DownloadChunk`, `FileStat`,
++/// other file mutation, terminal, and forwarding commands remain closed. Once an upload
++/// begins, command-3 requests on that connection are restricted to the matching upload's
++/// chunk/finalize/abort operations until it is finalized or aborted.
++///
++/// # Errors
++///
++/// Returns only failures from the existing terminal-response frame builder.
++pub(super) fn process_authenticated_linux_agent_status_file_list_upload_management<S>(
++    frame: &LocalIpcFrame,
++    connection: &AuthenticatedLocalLinuxConnection<S>,
++    agent_status: LocalAgentStatusSnapshot,
++    runtime: &mut LocalBoundedUploadRuntime<'_>,
++) -> Result<LocalIpcFrame, LocalTerminalResponseBuildError> {
++    let request_id = frame.header().request_id();
++    let policy = agent_status_file_list_upload_policy();
++    let admission = match admit_authenticated_linux_management_request(frame, connection, &policy) {
++        Ok(admission) => admission,
++        Err(error) => {
++            return build_terminal_response_frame(request_id, admission_error_status(error), &[]);
++        }
++    };
++
++    if runtime.is_upload_active()
++        && !matches!(
++            admission.command(),
++            BridgeCommand::UploadChunk { .. }
++                | BridgeCommand::UploadFinalize(_)
++                | BridgeCommand::UploadAbort(_)
++        )
++    {
++        return build_terminal_response_frame(request_id, LocalAgentResponseStatus::Conflict, &[]);
++    }
++
++    let result = match admission.command() {
++        BridgeCommand::AgentStatus => Ok(LocalManagementTypedProviderResult::AgentStatus(
++            agent_status,
++        )),
++        BridgeCommand::FileList(path) => runtime
++            .filesystem
++            .root()
++            .list_directory(path)
++            .map(LocalManagementTypedProviderResult::DirectoryEntries)
++            .map_err(LocalManagementTypedProviderDispatchError::File),
++        BridgeCommand::UploadBegin(plan) => runtime
++            .begin(plan)
++            .map(LocalManagementTypedProviderResult::Offset)
++            .map_err(LocalManagementTypedProviderDispatchError::Transfer),
++        BridgeCommand::UploadChunk {
++            transfer_id,
++            offset,
++            chunk,
++        } => runtime
++            .upload_chunk(*transfer_id, *offset, chunk)
++            .map(LocalManagementTypedProviderResult::Offset)
++            .map_err(LocalManagementTypedProviderDispatchError::Transfer),
++        BridgeCommand::UploadFinalize(transfer_id) => runtime
++            .finalize(*transfer_id)
++            .map(|()| LocalManagementTypedProviderResult::Empty)
++            .map_err(LocalManagementTypedProviderDispatchError::Transfer),
++        BridgeCommand::UploadAbort(transfer_id) => runtime
++            .abort(*transfer_id)
++            .map(|()| LocalManagementTypedProviderResult::Empty)
++            .map_err(LocalManagementTypedProviderDispatchError::Transfer),
++        BridgeCommand::FileStat(_)
++        | BridgeCommand::FileCreate { .. }
++        | BridgeCommand::DirectoryCreate(_)
++        | BridgeCommand::UploadResume(_)
++        | BridgeCommand::DownloadChunk { .. } => {
++            return build_terminal_response_frame(
++                request_id,
++                LocalAgentResponseStatus::UnsupportedCommand,
++                &[],
++            );
++        }
++        BridgeCommand::TerminalOpen { .. }
++        | BridgeCommand::TerminalInput { .. }
++        | BridgeCommand::TerminalResize { .. }
++        | BridgeCommand::TerminalRead { .. }
++        | BridgeCommand::TerminalClose(_)
++        | BridgeCommand::ForwardOpen { .. }
++        | BridgeCommand::ForwardClose(_) => {
++            return build_terminal_response_frame(
++                request_id,
++                LocalAgentResponseStatus::UnsupportedCommand,
++                &[],
++            );
++        }
++    };
++
++    build_management_provider_response(request_id, result)
++}
++
++pub(crate) fn home_filesystem_authority(
++) -> Result<LocalManagementFilesystemAuthority, FileServiceError> {
+     open_home_filesystem_authority_from_raw(std::env::var_os("HOME").as_deref())
+ }
+ 
+@@ -151,14 +365,18 @@ mod tests {
+     use std::path::PathBuf;
+     use std::sync::atomic::{AtomicU64, Ordering};
+ 
++    use aws_lc_rs::digest::{SHA256, digest};
+     use prw_file_service::RemotePath;
++    use prw_file_transfer::{TransferId, UploadPlan};
+     use prw_policy::{Capability, Decision, PolicyEvaluator};
+     use prw_remote_bridge::BridgeCommand;
+ 
+     use super::{
+-        agent_status_file_list_policy, open_home_filesystem_authority_from_raw,
++        LocalBoundedUploadRuntime, agent_status_file_list_policy,
++        agent_status_file_list_upload_policy, open_home_filesystem_authority_from_raw,
+         process_authenticated_linux_agent_status_file_list_management,
+         process_authenticated_linux_agent_status_file_list_management_with_filesystem_factory,
++        process_authenticated_linux_agent_status_file_list_upload_management,
+     };
+     use crate::LocalIpcRequestId;
+     use crate::linux_identity::authenticated_connection::AuthenticatedLocalLinuxConnection;
+@@ -190,6 +408,19 @@ mod tests {
+         path
+     }
+ 
++    fn sha256(bytes: &[u8]) -> [u8; 32] {
++        let digest = digest(&SHA256, bytes);
++        let mut value = [0_u8; 32];
++        value.copy_from_slice(digest.as_ref());
++        value
++    }
++
++    fn response_offset(frame: &crate::frame_object::LocalIpcFrame) -> u64 {
++        let bytes = frame.payload().as_bytes();
++        assert_eq!(bytes.get(2), Some(&5));
++        u64::from_be_bytes(bytes[3..11].try_into().expect("offset body is exact"))
++    }
++
+     #[test]
+     fn fixed_policy_allows_agent_status_and_files_read_only() {
+         let policy = agent_status_file_list_policy();
+@@ -213,6 +444,30 @@ mod tests {
+         }
+     }
+ 
++    #[test]
++    fn bounded_upload_policy_adds_only_files_write() {
++        let policy = agent_status_file_list_upload_policy();
++        for capability in [
++            Capability::AgentStatusRead,
++            Capability::FilesRead,
++            Capability::FilesWrite,
++        ] {
++            assert_eq!(policy.evaluate(capability), Decision::Allow);
