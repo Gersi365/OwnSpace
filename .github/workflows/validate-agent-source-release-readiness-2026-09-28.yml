@@ -16,14 +16,14 @@ jobs:
       - name: Checkout carrier
         uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 3
 
       - name: Verify exact authoritative base and carrier scope
         shell: bash
         run: |
           set -euo pipefail
           expected_base='e76a81acea47dd362e7c383b723de99f93875409'
-          actual_base=$(git rev-parse HEAD^)
+          actual_base=$(git rev-parse HEAD~2)
           test "$actual_base" = "$expected_base"
           mapfile -t changed < <(git diff --name-only "$expected_base"..HEAD)
           test "${#changed[@]}" -eq 1
@@ -118,14 +118,14 @@ jobs:
             exit 1
           fi
 
-          packaging/systemd/install-prw-device-identity-provision.sh \
+          bash packaging/systemd/install-prw-device-identity-provision.sh \
             --root "$root2" \
             --artifact target/release/prw-device-identity-provision
           cmp -s \
             target/release/prw-device-identity-provision \
             "$root2/usr/lib/private-remote-workspace/prw-device-identity-provision"
 
-          if packaging/systemd/install-prw-device-identity-provision.sh \
+          if bash packaging/systemd/install-prw-device-identity-provision.sh \
             --root "$root2" \
             --artifact target/release/prw-device-identity-provision
           then
