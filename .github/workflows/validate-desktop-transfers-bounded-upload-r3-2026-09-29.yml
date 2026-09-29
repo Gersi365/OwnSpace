@@ -1,0 +1,89 @@
+name: Ownspace bounded upload Agent runtime validation R3
+
+on:
+  push:
+    branches:
+      - validation/desktop-transfers-bounded-upload-2026-09-29-r3
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout carrier
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify carrier and recover exact R2 patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=42ca051422d6f21fc499db2b392f12bfed736733
+          r2=7a36773800f58c37f31ec81995d30d039eb5f079
+          test "$(git merge-base HEAD "$base")" = "$base"
+          mapfile -t changed < <(git diff --name-only "$base"..HEAD)
+          test "${#changed[@]}" -eq 1
+          test "${changed[0]}" = ".github/workflows/validate-desktop-transfers-bounded-upload-r3-2026-09-29.yml"
+          git cat-file -e "$r2^{commit}"
+          git show "$r2:.github/validation/OWNSPACE_AGENT_BOUNDED_UPLOAD_RUNTIME_CANDIDATE_R2_2026-09-29.patch" > /tmp/r2.patch
+          test "$(sha256sum /tmp/r2.patch | awk '{print $1}')" = "7d334b99b0dbaf7e8b50134f6780d0191fe4bf7afa88a427fc6021047687b172"
+          test "$(wc -c < /tmp/r2.patch)" = "56134"
+          git apply --check /tmp/r2.patch
+          git apply /tmp/r2.patch
+          git diff --check
+
+      - name: Install validation toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config protobuf-compiler
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
+          rustup default 1.97.1
+          rustc --version
+          cargo --version
+
+      - name: Derive exact formatted R3 candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          cargo fmt --all -- --check
+          git diff --check
+          files=(
+            crates/prw-agent/src/linux_authenticated_session/management_agent_status.rs
+            crates/prw-agent/src/linux_session_worker.rs
+            crates/prw-agent/src/linux_session_worker/management_agent_status.rs
+            crates/prw-agent/src/local_commands/management_agent_status_boundary.rs
+            crates/prw-agent/src/local_commands/management_agent_status_runtime.rs
+            crates/prw-agent/src/local_commands/management_authority.rs
+            crates/prw-agent/src/local_commands/server_connection_state.rs
+          )
+          mapfile -t changed < <(git diff --name-only)
+          test "${#changed[@]}" -eq "${#files[@]}"
+          for i in "${!files[@]}"; do test "${changed[$i]}" = "${files[$i]}"; done
+          git diff --binary -- "${files[@]}" > /tmp/r3.patch
+          test "$(sha256sum /tmp/r3.patch | awk '{print $1}')" = "20b1f6897cbf32eaed9696d96af8f3cdc9c70f8f69eef1645ef3e5e959f5ee98"
+          test "$(wc -c < /tmp/r3.patch)" = "55738"
+
+      - name: Focused bounded upload tests
+        run: cargo test --locked -p prw-agent bounded_upload
+
+      - name: Focused management runtime tests
+        run: cargo test --locked -p prw-agent management_agent_status
+
+      - name: Agent library tests
+        run: cargo test --locked -p prw-agent --lib
+
+      - name: Agent compile check
+        run: cargo check --locked -p prw-agent --all-targets
+
+      - name: Agent Clippy
+        run: cargo clippy --locked -p prw-agent --all-targets -- -D warnings
+
+      - name: Agent release binary build
+        run: cargo build --locked --release -p prw-agent --bin prw-agent
