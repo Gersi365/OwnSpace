@@ -1,0 +1,57 @@
+diff --git a/apps/desktop/src/ui.rs b/apps/desktop/src/ui.rs
+index 013418a..4c87de0 100644
+--- a/apps/desktop/src/ui.rs
++++ b/apps/desktop/src/ui.rs
+@@ -37,6 +37,7 @@ const DIM_LABEL_CSS_CLASS: &str = "dim-label";
+ const PAGE_TITLE_CSS_CLASS: &str = "title-1";
+ const TITLE_3_CSS_CLASS: &str = "title-3";
+ const HEADING_CSS_CLASS: &str = "heading";
++const MONOSPACE_CSS_CLASS: &str = "monospace";
+ const FILES_SUBTITLE: &str = concat!(
+     "Read-only directory listing under the local owner home authority. ",
+     "Paths are relative; this surface does not read file contents, mutate files, transfer data, open terminals, or create forwarding."
+@@ -940,7 +941,7 @@ fn settings_page() -> (gtk::Box, gtk::Label) {
+     let version = gtk::Label::new(Some(&desktop_version_text()));
+     version.set_xalign(0.0);
+     version.set_selectable(true);
+-    version.add_css_class("monospace");
++    version.add_css_class(MONOSPACE_CSS_CLASS);
+     page.append(&version);
+ 
+     let protocol_title = gtk::Label::new(Some("Local IPC compatibility"));
+@@ -951,7 +952,7 @@ fn settings_page() -> (gtk::Box, gtk::Label) {
+     let protocol = gtk::Label::new(Some(&desktop_local_ipc_protocol_text()));
+     protocol.set_xalign(0.0);
+     protocol.set_selectable(true);
+-    protocol.add_css_class("monospace");
++    protocol.add_css_class(MONOSPACE_CSS_CLASS);
+     page.append(&protocol);
+ 
+     let protocol_detail = gtk::Label::new(Some(
+@@ -973,7 +974,7 @@ fn settings_page() -> (gtk::Box, gtk::Label) {
+     endpoint.set_xalign(0.0);
+     endpoint.set_selectable(true);
+     endpoint.set_wrap(true);
+-    endpoint.add_css_class("monospace");
++    endpoint.add_css_class(MONOSPACE_CSS_CLASS);
+     page.append(&endpoint);
+ 
+     let resolved_title = gtk::Label::new(Some("Resolved endpoint for this session"));
+@@ -990,7 +991,7 @@ fn settings_page() -> (gtk::Box, gtk::Label) {
+     resolved.set_xalign(0.0);
+     resolved.set_selectable(true);
+     resolved.set_wrap(true);
+-    resolved.add_css_class("monospace");
++    resolved.add_css_class(MONOSPACE_CSS_CLASS);
+     page.append(&resolved);
+ 
+     let copy_button = gtk::Button::with_label("Copy resolved endpoint");
+@@ -1029,7 +1030,7 @@ fn append_agent_reported_protocol_section(page: &gtk::Box) -> gtk::Label {
+     ));
+     protocol.set_xalign(0.0);
+     protocol.set_selectable(true);
+-    protocol.add_css_class("monospace");
++    protocol.add_css_class(MONOSPACE_CSS_CLASS);
+     page.append(&protocol);
+ 
+     let detail = gtk::Label::new(Some(
