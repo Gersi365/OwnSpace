@@ -33,8 +33,13 @@ const IPC_TIMEOUT: Duration = Duration::from_secs(2);
 const TERMINAL_OPEN_REQUEST_ID: u64 = 4;
 const TERMINAL_INPUT_REQUEST_ID: u64 = 5;
 const TERMINAL_CLOSE_REQUEST_ID: u64 = 6;
+const UPLOAD_BEGIN_REQUEST_ID: u64 = 7;
+const UPLOAD_CHUNK_REQUEST_ID: u64 = 8;
+const UPLOAD_FINALIZE_REQUEST_ID: u64 = 9;
+const UPLOAD_ABORT_REQUEST_ID: u64 = 10;
 const MANAGEMENT_STATUS_PREFIX_LENGTH: usize = 2;
 const MANAGEMENT_EMPTY_RESULT: u8 = 4;
+const MANAGEMENT_OFFSET_RESULT: u8 = 5;
 
 #[derive(Debug, Clone)]
 pub struct StatusProbe {
@@ -203,30 +208,65 @@ pub fn query_file_list(path: &str) -> Result<Vec<LocalFileListEntry>, DesktopIpc
 
 /// Executes one already-encoded terminal-open management intent through the trusted local Agent socket.
 pub fn query_terminal_open(bridge_payload: &[u8]) -> Result<(), DesktopIpcError> {
-    query_terminal_management(TERMINAL_OPEN_REQUEST_ID, bridge_payload)
+    query_empty_management(TERMINAL_OPEN_REQUEST_ID, bridge_payload)
 }
 
 /// Executes one already-encoded terminal-input management intent through the trusted local Agent socket.
 pub fn query_terminal_input(bridge_payload: &[u8]) -> Result<(), DesktopIpcError> {
-    query_terminal_management(TERMINAL_INPUT_REQUEST_ID, bridge_payload)
+    query_empty_management(TERMINAL_INPUT_REQUEST_ID, bridge_payload)
 }
 
 /// Executes one already-encoded terminal-close management intent through the trusted local Agent socket.
 pub fn query_terminal_close(bridge_payload: &[u8]) -> Result<(), DesktopIpcError> {
-    query_terminal_management(TERMINAL_CLOSE_REQUEST_ID, bridge_payload)
+    query_empty_management(TERMINAL_CLOSE_REQUEST_ID, bridge_payload)
 }
 
-fn query_terminal_management(
+/// Begins one already-encoded bounded upload and returns the Agent-committed offset.
+pub fn query_upload_begin(bridge_payload: &[u8]) -> Result<u64, DesktopIpcError> {
+    query_offset_management(UPLOAD_BEGIN_REQUEST_ID, bridge_payload)
+}
+
+/// Sends one already-encoded bounded upload chunk and returns the Agent-committed offset.
+pub fn query_upload_chunk(bridge_payload: &[u8]) -> Result<u64, DesktopIpcError> {
+    query_offset_management(UPLOAD_CHUNK_REQUEST_ID, bridge_payload)
+}
+
+/// Finalizes one already-encoded bounded upload.
+pub fn query_upload_finalize(bridge_payload: &[u8]) -> Result<(), DesktopIpcError> {
+    query_empty_management(UPLOAD_FINALIZE_REQUEST_ID, bridge_payload)
+}
+
+/// Best-effort cleanup for one already-encoded failed upload.
+pub fn query_upload_abort(bridge_payload: &[u8]) -> Result<(), DesktopIpcError> {
+    query_empty_management(UPLOAD_ABORT_REQUEST_ID, bridge_payload)
+}
+
+fn query_empty_management(
     request_id_value: u64,
     bridge_payload: &[u8],
 ) -> Result<(), DesktopIpcError> {
+    let frame = query_management_success_frame(request_id_value, bridge_payload)?;
+    validate_empty_management_ack(frame.payload().as_bytes())
+}
+
+fn query_offset_management(
+    request_id_value: u64,
+    bridge_payload: &[u8],
+) -> Result<u64, DesktopIpcError> {
+    let frame = query_management_success_frame(request_id_value, bridge_payload)?;
+    validate_offset_management_ack(frame.payload().as_bytes())
+}
+
+fn query_management_success_frame(
+    request_id_value: u64,
+    bridge_payload: &[u8],
+) -> Result<LocalIpcFrame, DesktopIpcError> {
     let endpoint = endpoint_from_environment()?;
     let request_id = LocalIpcRequestId::new(request_id_value)
         .map_err(|_| DesktopIpcError::RequestIdGenerationFailed)?;
     let request = build_local_management_request_frame(request_id, bridge_payload)
         .map_err(|_| DesktopIpcError::ManagementRequestInvalid)?;
-    let frame = query_prebuilt_success_frame(&endpoint, request_id, &request)?;
-    validate_empty_management_ack(frame.payload().as_bytes())
+    query_prebuilt_success_frame(&endpoint, request_id, &request)
 }
 
 fn validate_empty_management_ack(payload: &[u8]) -> Result<(), DesktopIpcError> {
@@ -238,6 +278,18 @@ fn validate_empty_management_ack(payload: &[u8]) -> Result<(), DesktopIpcError> 
     } else {
         Err(DesktopIpcError::ResponseInvalid)
     }
+}
+
+fn validate_offset_management_ack(payload: &[u8]) -> Result<u64, DesktopIpcError> {
+    let body = payload
+        .get(MANAGEMENT_STATUS_PREFIX_LENGTH..)
+        .ok_or(DesktopIpcError::ResponseInvalid)?;
+    if body.len() != 9 || body.first().copied() != Some(MANAGEMENT_OFFSET_RESULT) {
+        return Err(DesktopIpcError::ResponseInvalid);
+    }
+    let mut offset = [0_u8; 8];
+    offset.copy_from_slice(&body[1..]);
+    Ok(u64::from_be_bytes(offset))
 }
 
 fn query_prebuilt_success_frame(
@@ -407,7 +459,7 @@ mod tests {
 
     use super::{
         DesktopIpcError, StatusProbe, endpoint_candidate_from_raw, ensure_response_id,
-        runtime_root_from_raw, validate_empty_management_ack,
+        runtime_root_from_raw, validate_empty_management_ack, validate_offset_management_ack,
     };
     use crate::state::{AgentAvailability, AgentRuntimePresentation};
     use prw_agent::local_commands::{
@@ -469,6 +521,25 @@ mod tests {
             ensure_response_id(id(7), id(8)),
             Err(DesktopIpcError::RequestIdMismatch)
         );
+    }
+
+    #[test]
+    fn management_offset_ack_requires_exact_tag_and_width() {
+        assert_eq!(
+            validate_offset_management_ack(&[0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 3]),
+            Ok(3)
+        );
+        for invalid in [
+            &[0, 0, 4][..],
+            &[0, 0, 5, 0, 0, 0, 0, 0, 0, 0][..],
+            &[0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 3, 0][..],
+            &[0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 3][..],
+        ] {
+            assert_eq!(
+                validate_offset_management_ack(invalid),
+                Err(DesktopIpcError::ResponseInvalid)
+            );
+        }
     }
 
     #[test]

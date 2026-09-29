@@ -1,0 +1,187 @@
+name: Ownspace Desktop bounded upload capability validation
+
+on:
+  push:
+    branches:
+      - validation/desktop-transfers-bounded-upload-2026-09-29
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      BASE_SHA: 42ca051422d6f21fc499db2b392f12bfed736733
+      EXPECTED_BRANCH: validation/desktop-transfers-bounded-upload-2026-09-29
+      EXPECTED_WORKFLOW: .github/workflows/validate-desktop-transfers-bounded-upload-2026-09-29.yml
+      BASE_CARGO_LOCK_SHA256: 2c5243dcd24d6caef85778f6588fddf57ea1eaa8514c6a8000ad024c834d0bb2
+      BASE_DESKTOP_CARGO_SHA256: e04ef02a5ccbb7cafc48e7b3ae211fd692f804d2ab1343c86e7ce00fe60e2033
+      BASE_README_SHA256: bae2a469f117f7c12e86831f58f2137caa4d91669aafcd54a1787ab15bdf886a
+      BASE_MANAGEMENT_SHA256: e49734c6fd33844020f904054c57dbbe3b7a15c098131834b3020a129c16b75f
+      BASE_IPC_SHA256: 9a1da6eff0aa85a60c7382cbdacd68d857b50f93e3be71a75cef5f52a01ac9df
+      BASE_UI_SHA256: 9b24b3e93b8887f37adb3700ca14887b857a3daa1dbb4e860127512a44698e8d
+      CANDIDATE_CARGO_LOCK_SHA256: 3fbd3cb723facd41389055a3d7e64caa27882265ed1f6aa2246c78fed6f59210
+      CANDIDATE_DESKTOP_CARGO_SHA256: ef212ff7d1f09f805f7ba8d6f826dbf6667d55d41622a45e86deace71d3217f5
+      CANDIDATE_README_SHA256: 64eb5fd2e82302674bdc0534c9b1df889bedbf49355cd87e7a4756f1b5f4acea
+      CANDIDATE_MANAGEMENT_SHA256: d2a3d162769d826e91156c1e26ca067c5a1b2bff9297e87b8e1c123fc4875455
+      CANDIDATE_IPC_SHA256: 5313e83574a4592ce5f931e27cbd444f7a1896d77148e5b4084d689574d4632d
+      CANDIDATE_UI_SHA256: 722b1359362da6e149a1fe18855f516137934a73cf72f2779e0273bc3a29c2d7
+
+    steps:
+      - name: Checkout candidate carrier
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify exact authoritative base and candidate scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = "$EXPECTED_BRANCH"
+          test "$(git rev-parse HEAD^)" = "$BASE_SHA"
+          test "$(git merge-base "$BASE_SHA" HEAD)" = "$BASE_SHA"
+          mapfile -t changed < <(git diff --name-only "$BASE_SHA"...HEAD | sort)
+          expected=(
+            "$EXPECTED_WORKFLOW"
+            "Cargo.lock"
+            "apps/desktop/Cargo.toml"
+            "apps/desktop/README.md"
+            "apps/desktop/src/ipc.rs"
+            "apps/desktop/src/management.rs"
+            "apps/desktop/src/ui.rs"
+          )
+          mapfile -t expected_sorted < <(printf '%s\n' "${expected[@]}" | sort)
+          test "${#changed[@]}" -eq 7
+          diff -u <(printf '%s\n' "${expected_sorted[@]}") <(printf '%s\n' "${changed[@]}")
+
+      - name: Verify exact authoritative baseline identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          verify_base() {
+            local path="$1" expected="$2"
+            test "$(git show "$BASE_SHA:$path" | sha256sum | awk '{print $1}')" = "$expected"
+          }
+          verify_base Cargo.lock "$BASE_CARGO_LOCK_SHA256"
+          verify_base apps/desktop/Cargo.toml "$BASE_DESKTOP_CARGO_SHA256"
+          verify_base apps/desktop/README.md "$BASE_README_SHA256"
+          verify_base apps/desktop/src/management.rs "$BASE_MANAGEMENT_SHA256"
+          verify_base apps/desktop/src/ipc.rs "$BASE_IPC_SHA256"
+          verify_base apps/desktop/src/ui.rs "$BASE_UI_SHA256"
+
+      - name: Verify exact candidate identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          verify_candidate() {
+            local path="$1" expected="$2"
+            test "$(sha256sum "$path" | awk '{print $1}')" = "$expected"
+          }
+          verify_candidate Cargo.lock "$CANDIDATE_CARGO_LOCK_SHA256"
+          verify_candidate apps/desktop/Cargo.toml "$CANDIDATE_DESKTOP_CARGO_SHA256"
+          verify_candidate apps/desktop/README.md "$CANDIDATE_README_SHA256"
+          verify_candidate apps/desktop/src/management.rs "$CANDIDATE_MANAGEMENT_SHA256"
+          verify_candidate apps/desktop/src/ipc.rs "$CANDIDATE_IPC_SHA256"
+          verify_candidate apps/desktop/src/ui.rs "$CANDIDATE_UI_SHA256"
+          git diff --check "$BASE_SHA"...HEAD
+
+      - name: Verify bounded upload capability contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          cargo = Path("apps/desktop/Cargo.toml").read_text()
+          lock = Path("Cargo.lock").read_text()
+          readme = Path("apps/desktop/README.md").read_text()
+          management = Path("apps/desktop/src/management.rs").read_text()
+          ipc = Path("apps/desktop/src/ipc.rs").read_text()
+          ui = Path("apps/desktop/src/ui.rs").read_text()
+
+          assert cargo.count('sha2 = "=0.10.9"') == 1
+          desktop_lock = lock.split('name = "prw-desktop"', 1)[1].split('[[package]]', 1)[0]
+          assert desktop_lock.count('"sha2 0.10.9",') == 1
+
+          for value, name in [(7, "BEGIN"), (8, "CHUNK"), (9, "FINALIZE"), (10, "ABORT")]:
+              assert ipc.count(f"const UPLOAD_{name}_REQUEST_ID: u64 = {value};") == 1
+          assert ipc.count("const MANAGEMENT_OFFSET_RESULT: u8 = 5;") == 1
+          assert "fn validate_offset_management_ack" in ipc
+          assert "u64::from_be_bytes" in ipc
+          for fn_name in ["query_upload_begin", "query_upload_chunk", "query_upload_finalize", "query_upload_abort"]:
+              assert ipc.count(f"pub fn {fn_name}") == 1
+
+          assert management.count("pub(crate) fn encode_upload_abort") == 1
+          assert management.count("pub(crate) fn request_abort") == 1
+          assert "committed_bytes != 0" in management
+          assert "BridgeCommand::UploadAbort" in management
+
+          assert "NavigationDestination::Transfers => transfers.clone()" in ui
+          assert ui.count("fn transfers_page()") == 1
+          assert "placeholder_page" not in ui
+          assert "PlaceholderDestination" not in ui
+          assert "PLACEHOLDER_STATUS" not in ui
+          for fn_name in ["query_upload_begin", "query_upload_chunk", "query_upload_finalize", "query_upload_abort"]:
+              assert ui.count(fn_name) >= 1
+          assert "UploadResume" not in ui
+          assert "DownloadChunk" not in ui
+          assert "query_upload_resume" not in ipc
+          assert "query_download" not in ipc
+          assert "MAX_BRIDGE_INLINE_BYTES" in ui
+          assert "MAX_TRANSFER_BYTES" in ui
+          assert "cleanup_failed_upload" in ui
+          assert "Staged upload cleanup confirmed." in ui
+          assert "Staged upload cleanup could not be confirmed." in ui
+
+          assert "Transfers remains a structural placeholder" not in readme
+          assert "an implemented Transfers page" in readme
+          assert "download, resume, and user-triggered abort are not enabled" in readme
+          assert "internal abort request is cleanup-only" in readme
+          PY
+
+      - name: Verify Agent protocol and transfer authority source is unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(git diff --name-only "$BASE_SHA"...HEAD -- crates/prw-agent crates/prw-file-transfer crates/prw-file-service crates/prw-remote-bridge crates/prw-core)"
+
+      - name: Install native build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y pkg-config protobuf-compiler libgtk-4-dev libadwaita-1-dev
+
+      - name: Verify locked metadata
+        run: cargo metadata --locked --format-version 1 >/dev/null
+
+      - name: Formatting check
+        run: cargo fmt --all -- --check
+
+      - name: Focused upload management test
+        run: cargo test --locked -p prw-desktop upload_progress_advances_only_from_exact_acknowledgements
+
+      - name: Focused upload IPC acknowledgement test
+        run: cargo test --locked -p prw-desktop management_offset_ack_requires_exact_tag_and_width
+
+      - name: Focused Transfers presentation tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked -p prw-desktop transfers_surface_locks_bounded_upload_only_contract
+          cargo test --locked -p prw-desktop transfer_paths_fail_closed_before_worker_start
+          cargo test --locked -p prw-desktop transfer_progress_and_cleanup_status_are_explicit
+
+      - name: Desktop tests
+        run: cargo test --locked -p prw-desktop
+
+      - name: Agent authority regression tests
+        run: cargo test --locked -p prw-agent
+
+      - name: Desktop compile check
+        run: cargo check --locked -p prw-desktop --all-targets
+
+      - name: Desktop Clippy
+        run: cargo clippy --locked -p prw-desktop --all-targets -- -D warnings

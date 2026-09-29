@@ -133,6 +133,12 @@ pub(crate) fn encode_upload_finalize(transfer_id: &str) -> Result<Vec<u8>, Manag
     bridge_payload(&BridgeCommand::UploadFinalize(transfer_id))
 }
 
+pub(crate) fn encode_upload_abort(transfer_id: &str) -> Result<Vec<u8>, ManagementError> {
+    let transfer_id =
+        TransferId::from_hex(transfer_id).map_err(|_| ManagementError::InvalidTransfer)?;
+    bridge_payload(&BridgeCommand::UploadAbort(transfer_id))
+}
+
 pub(crate) fn encode_forward_open(
     forward_id: u64,
     family: LoopbackFamily,
@@ -417,12 +423,10 @@ impl UploadPresentation {
         &mut self,
         committed_bytes: u64,
     ) -> Result<(), ManagementError> {
-        if self.state != UploadPresentationState::WaitingForBegin
-            || committed_bytes > self.total_bytes
-        {
+        if self.state != UploadPresentationState::WaitingForBegin || committed_bytes != 0 {
             return Err(ManagementError::InvalidAcknowledgement);
         }
-        self.committed_bytes = committed_bytes;
+        self.committed_bytes = 0;
         self.state = UploadPresentationState::Ready;
         Ok(())
     }
@@ -480,6 +484,21 @@ impl UploadPresentation {
         }
         self.state = UploadPresentationState::Completed;
         Ok(())
+    }
+
+    pub(crate) fn request_abort(&mut self) -> Result<Vec<u8>, ManagementError> {
+        if matches!(
+            self.state,
+            UploadPresentationState::Idle
+                | UploadPresentationState::Completed
+                | UploadPresentationState::Failed
+        ) {
+            return Err(ManagementError::InvalidState);
+        }
+        let payload = encode_upload_abort(&self.transfer_id)?;
+        self.pending_chunk_end = None;
+        self.state = UploadPresentationState::Failed;
+        Ok(payload)
     }
 
     pub(crate) fn apply_failure(&mut self) {
@@ -670,6 +689,16 @@ mod tests {
             .apply_finalize_acknowledgement()
             .expect("finalize acknowledgement");
         assert_eq!(upload.state(), UploadPresentationState::Completed);
+
+        let mut failed = UploadPresentation::new(TRANSFER_ID, "uploads/demo.bin", 3, [7; 32]);
+        failed.request_begin().expect("second begin intent");
+        assert!(failed.apply_begin_acknowledgement(1).is_err());
+        let abort = failed.request_abort().expect("abort cleanup intent");
+        assert!(matches!(
+            BridgeCommand::decode(&abort).expect("decode abort"),
+            BridgeCommand::UploadAbort(_)
+        ));
+        assert_eq!(failed.state(), UploadPresentationState::Failed);
     }
 
     #[test]

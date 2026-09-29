@@ -1,31 +1,46 @@
 use std::cell::{Cell, RefCell};
+use std::fs::File;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, TryRecvError};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use adw::prelude::*;
 use gtk::glib;
 use prw_agent::{AGENT_RUNTIME_SUBDIRECTORY, AGENT_SOCKET_FILENAME, LocalIpcProtocolVersion};
 use prw_file_service::RemotePath;
+use prw_file_transfer::{MAX_TRANSFER_BYTES, TransferId};
+use prw_remote_bridge::MAX_BRIDGE_INLINE_BYTES;
 use prw_terminal::TerminalProfile;
+use sha2::{Digest, Sha256};
 
 use crate::ipc;
 use crate::local_management_ipc::LocalFileListEntry;
-use crate::management::{TerminalPresentation, TerminalPresentationState};
+use crate::management::{
+    TerminalPresentation, TerminalPresentationState, UploadPresentation,
+};
 use crate::state::{DesktopPresentationState, NavigationDestination};
 
 const REFRESH_BUTTON_IDLE_LABEL: &str = "Refresh status";
 const REFRESH_BUTTON_BUSY_LABEL: &str = "Refreshing…";
 const COPY_SNAPSHOT_IDLE_LABEL: &str = "Copy current snapshot";
 const COPY_SNAPSHOT_DONE_LABEL: &str = "Copied";
-const PLACEHOLDER_STATUS: &str = "No live state source available";
 const TERMINAL_OPEN_LABEL: &str = "Open POSIX shell session";
 const TERMINAL_SEND_LABEL: &str = "Send line";
 const TERMINAL_CLOSE_LABEL: &str = "Close session";
 const TERMINAL_COLUMNS: u16 = 80;
 const TERMINAL_ROWS: u16 = 24;
 static NEXT_TERMINAL_SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
+static NEXT_UPLOAD_TRANSFER_COUNTER: AtomicU64 = AtomicU64::new(1);
+const UPLOAD_BUTTON_IDLE_LABEL: &str = "Upload file";
+const UPLOAD_BUTTON_BUSY_LABEL: &str = "Uploading…";
+const UPLOAD_SUBTITLE: &str = concat!(
+    "Bounded one-way upload under the existing Agent owner-home transfer authority. ",
+    "Choose an absolute local source path and a canonical relative destination. ",
+    "Download, resume, and user-triggered abort are not enabled in this checkpoint."
+);
 const FILES_LIST_IDLE_LABEL: &str = "List files";
 const FILES_LIST_BUSY_LABEL: &str = "Listing…";
 const FILES_REFRESH_LABEL: &str = "Refresh";
@@ -102,6 +117,33 @@ enum TerminalOperation {
     Close,
 }
 
+#[derive(Clone)]
+struct TransfersPageTargets {
+    source_entry: gtk::Entry,
+    destination_entry: gtk::Entry,
+    upload_button: gtk::Button,
+    progress: gtk::ProgressBar,
+    status: gtk::Label,
+    operation_pending: Rc<Cell<bool>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UploadCleanupStatus {
+    NotRequired,
+    Confirmed,
+    Unconfirmed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UploadWorkerEvent {
+    Progress { committed: u64, total: u64 },
+    Completed,
+    Failed {
+        reason: &'static str,
+        cleanup: UploadCleanupStatus,
+    },
+}
+
 pub fn build(app: &adw::Application) {
     let window = adw::ApplicationWindow::builder()
         .application(app)
@@ -141,6 +183,7 @@ pub fn build(app: &adw::Application) {
         activity_copy_button,
     ) = activity_page();
     let sessions = sessions_page();
+    let transfers = transfers_page();
     let files = files_page();
     let (settings, settings_agent_protocol_label) = settings_page();
 
@@ -149,7 +192,7 @@ pub fn build(app: &adw::Application) {
             NavigationDestination::Overview => overview.clone(),
             NavigationDestination::Machines => machines.clone(),
             NavigationDestination::Sessions => sessions.clone(),
-            NavigationDestination::Transfers => placeholder_page(PlaceholderDestination::Transfers),
+            NavigationDestination::Transfers => transfers.clone(),
             NavigationDestination::Files => files.clone(),
             NavigationDestination::Activity => activity.clone(),
             NavigationDestination::Settings => settings.clone(),
@@ -520,6 +563,453 @@ fn sessions_page() -> gtk::Box {
     targets
         .close_button
         .connect_clicked(move |_| request_terminal_close(&close_targets));
+
+    page
+}
+
+fn upload_source_path_is_valid(source: &str) -> bool {
+    !source.is_empty() && Path::new(source).is_absolute()
+}
+
+fn upload_destination_is_valid(destination: &str) -> bool {
+    RemotePath::parse(destination).is_ok_and(|path| !path.is_root())
+}
+
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "bounded byte counters are projected only into a GTK presentation fraction"
+)]
+fn upload_progress_fraction(committed: u64, total: u64) -> f64 {
+    if total == 0 {
+        0.0
+    } else {
+        committed.min(total) as f64 / total as f64
+    }
+}
+
+fn upload_failure_status(reason: &str, cleanup: UploadCleanupStatus) -> String {
+    match cleanup {
+        UploadCleanupStatus::NotRequired => reason.to_owned(),
+        UploadCleanupStatus::Confirmed => {
+            format!("{reason}. Staged upload cleanup confirmed.")
+        }
+        UploadCleanupStatus::Unconfirmed => {
+            format!("{reason}. Staged upload cleanup could not be confirmed.")
+        }
+    }
+}
+
+fn hash_upload_source(path: &Path) -> Result<([u8; 32], u64), &'static str> {
+    let mut file = File::open(path).map_err(|_| "Local source file is unavailable")?;
+    let metadata = file
+        .metadata()
+        .map_err(|_| "Local source metadata is unavailable")?;
+    if !metadata.is_file() {
+        return Err("Local source path is not a regular file");
+    }
+    if metadata.len() > MAX_TRANSFER_BYTES {
+        return Err("Local source file exceeds the bounded upload size");
+    }
+
+    let mut hasher = Sha256::new();
+    let mut total = 0_u64;
+    let mut buffer = vec![0_u8; MAX_BRIDGE_INLINE_BYTES];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|_| "Local source file could not be read")?;
+        if read == 0 {
+            break;
+        }
+        let read = u64::try_from(read).map_err(|_| "Local source length is invalid")?;
+        total = total
+            .checked_add(read)
+            .ok_or("Local source length is invalid")?;
+        if total > MAX_TRANSFER_BYTES {
+            return Err("Local source file exceeds the bounded upload size");
+        }
+        hasher.update(&buffer[..usize::try_from(read).map_err(|_| "Local source length is invalid")?]);
+    }
+
+    let digest = hasher.finalize();
+    let mut sha256 = [0_u8; 32];
+    sha256.copy_from_slice(&digest);
+    Ok((sha256, total))
+}
+
+fn next_upload_transfer_id(
+    source: &str,
+    destination: &str,
+    total_bytes: u64,
+    sha256: &[u8; 32],
+) -> String {
+    let counter = NEXT_UPLOAD_TRANSFER_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+
+    let mut hasher = Sha256::new();
+    hasher.update(b"Ownspace Desktop bounded upload transfer id v1");
+    hasher.update(counter.to_be_bytes());
+    hasher.update(std::process::id().to_be_bytes());
+    hasher.update(timestamp.to_be_bytes());
+    hasher.update(total_bytes.to_be_bytes());
+    hasher.update(sha256);
+    hasher.update(source.as_bytes());
+    hasher.update(destination.as_bytes());
+
+    let digest = hasher.finalize();
+    let mut identifier = [0_u8; 16];
+    identifier.copy_from_slice(&digest[..16]);
+    TransferId::new(identifier).to_hex()
+}
+
+fn cleanup_failed_upload(upload: &mut UploadPresentation) -> UploadCleanupStatus {
+    let payload = match upload.request_abort() {
+        Ok(payload) => payload,
+        Err(_) => return UploadCleanupStatus::Unconfirmed,
+    };
+    if ipc::query_upload_abort(&payload).is_ok() {
+        UploadCleanupStatus::Confirmed
+    } else {
+        UploadCleanupStatus::Unconfirmed
+    }
+}
+
+fn send_upload_failure(
+    sender: &mpsc::Sender<UploadWorkerEvent>,
+    reason: &'static str,
+    cleanup: UploadCleanupStatus,
+) {
+    let _ = sender.send(UploadWorkerEvent::Failed { reason, cleanup });
+}
+
+fn run_upload_worker(
+    source: String,
+    destination: String,
+    sender: mpsc::Sender<UploadWorkerEvent>,
+) {
+    let source_path = PathBuf::from(&source);
+    let (sha256, total_bytes) = match hash_upload_source(&source_path) {
+        Ok(result) => result,
+        Err(reason) => {
+            send_upload_failure(&sender, reason, UploadCleanupStatus::NotRequired);
+            return;
+        }
+    };
+
+    let transfer_id = next_upload_transfer_id(&source, &destination, total_bytes, &sha256);
+    let mut upload = UploadPresentation::new(transfer_id, destination, total_bytes, sha256);
+    let begin_payload = match upload.request_begin() {
+        Ok(payload) => payload,
+        Err(_) => {
+            send_upload_failure(
+                &sender,
+                "Upload plan failed local validation",
+                UploadCleanupStatus::NotRequired,
+            );
+            return;
+        }
+    };
+
+    let begin_offset = match ipc::query_upload_begin(&begin_payload) {
+        Ok(offset) => offset,
+        Err(_) => {
+            let cleanup = cleanup_failed_upload(&mut upload);
+            send_upload_failure(&sender, "Agent rejected or lost the upload begin acknowledgement", cleanup);
+            return;
+        }
+    };
+    if upload
+        .apply_begin_acknowledgement(begin_offset)
+        .is_err()
+    {
+        let cleanup = cleanup_failed_upload(&mut upload);
+        send_upload_failure(&sender, "Upload begin acknowledgement was not the exact zero offset", cleanup);
+        return;
+    }
+    if sender
+        .send(UploadWorkerEvent::Progress {
+            committed: 0,
+            total: total_bytes,
+        })
+        .is_err()
+    {
+        let _ = cleanup_failed_upload(&mut upload);
+        return;
+    }
+
+    let mut file = match File::open(&source_path) {
+        Ok(file) => file,
+        Err(_) => {
+            let cleanup = cleanup_failed_upload(&mut upload);
+            send_upload_failure(&sender, "Local source file became unavailable", cleanup);
+            return;
+        }
+    };
+    let mut buffer = vec![0_u8; MAX_BRIDGE_INLINE_BYTES];
+
+    while upload.committed_bytes() < total_bytes {
+        let remaining = total_bytes - upload.committed_bytes();
+        let requested = usize::try_from(remaining)
+            .unwrap_or(MAX_BRIDGE_INLINE_BYTES)
+            .min(MAX_BRIDGE_INLINE_BYTES);
+        let read = match file.read(&mut buffer[..requested]) {
+            Ok(0) => {
+                let cleanup = cleanup_failed_upload(&mut upload);
+                send_upload_failure(&sender, "Local source file ended before its hashed length", cleanup);
+                return;
+            }
+            Ok(read) => read,
+            Err(_) => {
+                let cleanup = cleanup_failed_upload(&mut upload);
+                send_upload_failure(&sender, "Local source file could not be read during upload", cleanup);
+                return;
+            }
+        };
+
+        let payload = match upload.request_chunk(&buffer[..read]) {
+            Ok(payload) => payload,
+            Err(_) => {
+                let cleanup = cleanup_failed_upload(&mut upload);
+                send_upload_failure(&sender, "Upload chunk failed local bounds validation", cleanup);
+                return;
+            }
+        };
+        let committed = match ipc::query_upload_chunk(&payload) {
+            Ok(offset) => offset,
+            Err(_) => {
+                let cleanup = cleanup_failed_upload(&mut upload);
+                send_upload_failure(&sender, "Agent rejected or lost an upload chunk acknowledgement", cleanup);
+                return;
+            }
+        };
+        if upload.apply_chunk_acknowledgement(committed).is_err() {
+            let cleanup = cleanup_failed_upload(&mut upload);
+            send_upload_failure(&sender, "Upload chunk acknowledgement offset did not match", cleanup);
+            return;
+        }
+        if sender
+            .send(UploadWorkerEvent::Progress {
+                committed,
+                total: total_bytes,
+            })
+            .is_err()
+        {
+            let _ = cleanup_failed_upload(&mut upload);
+            return;
+        }
+    }
+
+    let mut trailing = [0_u8; 1];
+    match file.read(&mut trailing) {
+        Ok(0) => {}
+        Ok(_) => {
+            let cleanup = cleanup_failed_upload(&mut upload);
+            send_upload_failure(&sender, "Local source file changed length during upload", cleanup);
+            return;
+        }
+        Err(_) => {
+            let cleanup = cleanup_failed_upload(&mut upload);
+            send_upload_failure(&sender, "Local source file could not be revalidated", cleanup);
+            return;
+        }
+    }
+
+    let finalize_payload = match upload.request_finalize() {
+        Ok(payload) => payload,
+        Err(_) => {
+            let cleanup = cleanup_failed_upload(&mut upload);
+            send_upload_failure(&sender, "Upload could not enter finalization state", cleanup);
+            return;
+        }
+    };
+    if ipc::query_upload_finalize(&finalize_payload).is_err() {
+        let cleanup = cleanup_failed_upload(&mut upload);
+        send_upload_failure(&sender, "Agent did not confirm upload finalization", cleanup);
+        return;
+    }
+    if upload.apply_finalize_acknowledgement().is_err() {
+        send_upload_failure(
+            &sender,
+            "Upload finalization succeeded but local acknowledgement state was invalid",
+            UploadCleanupStatus::NotRequired,
+        );
+        return;
+    }
+    let _ = sender.send(UploadWorkerEvent::Completed);
+}
+
+fn render_upload_controls(targets: &TransfersPageTargets) {
+    let enabled = !targets.operation_pending.get();
+    targets.source_entry.set_sensitive(enabled);
+    targets.destination_entry.set_sensitive(enabled);
+    targets.upload_button.set_sensitive(enabled);
+    targets.upload_button.set_label(if enabled {
+        UPLOAD_BUTTON_IDLE_LABEL
+    } else {
+        UPLOAD_BUTTON_BUSY_LABEL
+    });
+}
+
+fn start_upload(targets: &TransfersPageTargets) {
+    if targets.operation_pending.get() {
+        return;
+    }
+
+    let source = targets.source_entry.text().to_string();
+    let destination = targets.destination_entry.text().to_string();
+    if !upload_source_path_is_valid(&source) {
+        targets
+            .status
+            .set_text("Invalid source: enter an absolute local file path");
+        return;
+    }
+    if !upload_destination_is_valid(&destination) {
+        targets.status.set_text(
+            "Invalid destination: use a non-root canonical relative path under owner home",
+        );
+        return;
+    }
+
+    targets.operation_pending.set(true);
+    targets.progress.set_fraction(0.0);
+    targets.progress.set_text(Some("Preparing upload…"));
+    targets.status.set_text("Hashing local source and preparing bounded upload…");
+    render_upload_controls(targets);
+
+    let (sender, receiver) = mpsc::channel();
+    let spawn_result = std::thread::Builder::new()
+        .name("prw-desktop-bounded-upload".to_owned())
+        .spawn(move || run_upload_worker(source, destination, sender));
+    if spawn_result.is_err() {
+        targets.operation_pending.set(false);
+        targets
+            .status
+            .set_text("Unable to start bounded upload worker");
+        targets.progress.set_text(Some("Upload not started"));
+        render_upload_controls(targets);
+        return;
+    }
+
+    let poll_targets = targets.clone();
+    let _source_id = glib::timeout_add_local(WORKER_RESULT_POLL_INTERVAL, move || {
+        match receiver.try_recv() {
+            Ok(UploadWorkerEvent::Progress { committed, total }) => {
+                poll_targets
+                    .progress
+                    .set_fraction(upload_progress_fraction(committed, total));
+                poll_targets
+                    .progress
+                    .set_text(Some(&format!("{committed} / {total} bytes")));
+                poll_targets
+                    .status
+                    .set_text("Upload acknowledged by the Agent and progressing");
+                glib::ControlFlow::Continue
+            }
+            Ok(UploadWorkerEvent::Completed) => {
+                poll_targets.operation_pending.set(false);
+                poll_targets.progress.set_fraction(1.0);
+                poll_targets.progress.set_text(Some("Upload complete"));
+                poll_targets
+                    .status
+                    .set_text("Upload completed and finalized by the Agent");
+                render_upload_controls(&poll_targets);
+                glib::ControlFlow::Break
+            }
+            Ok(UploadWorkerEvent::Failed { reason, cleanup }) => {
+                poll_targets.operation_pending.set(false);
+                poll_targets
+                    .status
+                    .set_text(&upload_failure_status(reason, cleanup));
+                poll_targets.progress.set_text(Some("Upload failed"));
+                render_upload_controls(&poll_targets);
+                glib::ControlFlow::Break
+            }
+            Err(TryRecvError::Empty) => glib::ControlFlow::Continue,
+            Err(TryRecvError::Disconnected) => {
+                poll_targets.operation_pending.set(false);
+                poll_targets
+                    .status
+                    .set_text("Upload worker ended without a terminal result");
+                poll_targets.progress.set_text(Some("Upload failed"));
+                render_upload_controls(&poll_targets);
+                glib::ControlFlow::Break
+            }
+        }
+    });
+}
+
+fn transfers_page() -> gtk::Box {
+    let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    page.set_margin_top(PAGE_OUTER_MARGIN);
+    page.set_margin_bottom(PAGE_OUTER_MARGIN);
+    page.set_margin_start(PAGE_OUTER_MARGIN);
+    page.set_margin_end(PAGE_OUTER_MARGIN);
+
+    let title = gtk::Label::new(Some(NavigationDestination::Transfers.title()));
+    title.set_xalign(0.0);
+    title.add_css_class(PAGE_TITLE_CSS_CLASS);
+    page.append(&title);
+
+    let subtitle = gtk::Label::new(Some(UPLOAD_SUBTITLE));
+    subtitle.set_xalign(0.0);
+    subtitle.set_wrap(true);
+    subtitle.add_css_class(DIM_LABEL_CSS_CLASS);
+    page.append(&subtitle);
+
+    let source_label = gtk::Label::new(Some("Local source file"));
+    source_label.set_xalign(0.0);
+    source_label.add_css_class(HEADING_CSS_CLASS);
+    page.append(&source_label);
+
+    let source_entry = gtk::Entry::new();
+    source_entry.set_placeholder_text(Some("/absolute/path/to/file"));
+    page.append(&source_entry);
+
+    let destination_label = gtk::Label::new(Some("Owner-home destination"));
+    destination_label.set_xalign(0.0);
+    destination_label.add_css_class(HEADING_CSS_CLASS);
+    page.append(&destination_label);
+
+    let destination_entry = gtk::Entry::new();
+    destination_entry.set_placeholder_text(Some("uploads/example.bin"));
+    page.append(&destination_entry);
+
+    let progress = gtk::ProgressBar::new();
+    progress.set_show_text(true);
+    progress.set_text(Some("No upload requested"));
+    page.append(&progress);
+
+    let status = gtk::Label::new(Some("No upload requested yet"));
+    status.set_xalign(0.0);
+    status.set_wrap(true);
+    status.add_css_class(TITLE_3_CSS_CLASS);
+    page.append(&status);
+
+    let upload_button = gtk::Button::with_label(UPLOAD_BUTTON_IDLE_LABEL);
+    page.append(&upload_button);
+
+    let targets = TransfersPageTargets {
+        source_entry,
+        destination_entry,
+        upload_button,
+        progress,
+        status,
+        operation_pending: Rc::new(Cell::new(false)),
+    };
+    render_upload_controls(&targets);
+
+    let click_targets = targets.clone();
+    targets
+        .upload_button
+        .connect_clicked(move |_| start_upload(&click_targets));
+
+    let activate_targets = targets.clone();
+    targets
+        .destination_entry
+        .connect_activate(move |_| start_upload(&activate_targets));
 
     page
 }
@@ -1044,53 +1534,6 @@ fn append_agent_reported_protocol_section(page: &gtk::Box) -> gtk::Label {
     protocol
 }
 
-#[derive(Clone, Copy)]
-enum PlaceholderDestination {
-    Transfers,
-}
-
-impl PlaceholderDestination {
-    const fn navigation_destination(self) -> NavigationDestination {
-        match self {
-            Self::Transfers => NavigationDestination::Transfers,
-        }
-    }
-}
-
-fn placeholder_page(destination: PlaceholderDestination) -> gtk::Box {
-    let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    page.set_margin_top(PAGE_OUTER_MARGIN);
-    page.set_margin_bottom(PAGE_OUTER_MARGIN);
-    page.set_margin_start(PAGE_OUTER_MARGIN);
-    page.set_margin_end(PAGE_OUTER_MARGIN);
-
-    let title = gtk::Label::new(Some(destination.navigation_destination().title()));
-    title.set_xalign(0.0);
-    title.add_css_class(PAGE_TITLE_CSS_CLASS);
-    page.append(&title);
-
-    let status = gtk::Label::new(Some(PLACEHOLDER_STATUS));
-    status.set_xalign(0.0);
-    status.add_css_class(TITLE_3_CSS_CLASS);
-    page.append(&status);
-
-    let detail = gtk::Label::new(Some(placeholder_description(destination)));
-    detail.set_xalign(0.0);
-    detail.set_wrap(true);
-    detail.add_css_class(DIM_LABEL_CSS_CLASS);
-    page.append(&detail);
-
-    page
-}
-
-const fn placeholder_description(destination: PlaceholderDestination) -> &'static str {
-    match destination {
-        PlaceholderDestination::Transfers => {
-            "Reserved for verified upload/download progress and completion state."
-        }
-    }
-}
-
 fn connect_refresh_controls(targets: &StatusProbeTargets) {
     let overview_targets = targets.clone();
     targets
@@ -1234,11 +1677,13 @@ mod tests {
         ACTIVITY_SUBTITLE, COPY_SNAPSHOT_DONE_LABEL, COPY_SNAPSHOT_IDLE_LABEL,
         FILES_LIST_BUSY_LABEL, FILES_LIST_IDLE_LABEL, FILES_PATH_INVALID_STATUS,
         FILES_PATH_UNLOADED_LABEL, FILES_REFRESH_LABEL, FILES_SUBTITLE, MACHINES_SUBTITLE,
-        PLACEHOLDER_STATUS, REFRESH_BUTTON_BUSY_LABEL, REFRESH_BUTTON_IDLE_LABEL,
-        activity_snapshot_clipboard_text, desktop_local_ipc_protocol_text, desktop_version_text,
-        file_list_child_path, file_list_manual_path_is_canonical, file_list_parent_path,
-        file_list_path_label, file_list_refresh_enabled, local_endpoint_contract_text,
-        placeholder_description,
+        REFRESH_BUTTON_BUSY_LABEL, REFRESH_BUTTON_IDLE_LABEL, UPLOAD_BUTTON_BUSY_LABEL,
+        UPLOAD_BUTTON_IDLE_LABEL, UPLOAD_SUBTITLE, activity_snapshot_clipboard_text,
+        desktop_local_ipc_protocol_text, desktop_version_text, file_list_child_path,
+        file_list_manual_path_is_canonical, file_list_parent_path, file_list_path_label,
+        file_list_refresh_enabled, local_endpoint_contract_text, upload_destination_is_valid,
+        upload_failure_status, upload_progress_fraction, upload_source_path_is_valid,
+        UploadCleanupStatus,
     };
 
     #[test]
@@ -1384,20 +1829,49 @@ mod tests {
     }
 
     #[test]
-    fn placeholder_status_has_explicit_no_live_source_contract() {
-        assert_eq!(PLACEHOLDER_STATUS, "No live state source available");
+    fn transfers_surface_locks_bounded_upload_only_contract() {
+        assert_eq!(UPLOAD_BUTTON_IDLE_LABEL, "Upload file");
+        assert_eq!(UPLOAD_BUTTON_BUSY_LABEL, "Uploading…");
+        assert_eq!(
+            UPLOAD_SUBTITLE,
+            concat!(
+                "Bounded one-way upload under the existing Agent owner-home transfer authority. ",
+                "Choose an absolute local source path and a canonical relative destination. ",
+                "Download, resume, and user-triggered abort are not enabled in this checkpoint."
+            )
+        );
     }
 
     #[test]
-    fn placeholder_contract_represents_only_transfer_route() {
-        let destination = super::PlaceholderDestination::Transfers;
+    fn transfer_paths_fail_closed_before_worker_start() {
+        assert!(upload_source_path_is_valid("/home/owner/demo.bin"));
+        assert!(!upload_source_path_is_valid(""));
+        assert!(!upload_source_path_is_valid("relative/demo.bin"));
+
+        assert!(upload_destination_is_valid("uploads/demo.bin"));
+        for invalid in ["", "/absolute.bin", "../escape", "uploads/../escape", "uploads//demo.bin"] {
+            assert!(!upload_destination_is_valid(invalid), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn transfer_progress_and_cleanup_status_are_explicit() {
+        assert_eq!(upload_progress_fraction(0, 10), 0.0);
+        assert_eq!(upload_progress_fraction(5, 10), 0.5);
+        assert_eq!(upload_progress_fraction(10, 10), 1.0);
+        assert_eq!(upload_progress_fraction(12, 10), 1.0);
+        assert_eq!(upload_progress_fraction(0, 0), 0.0);
         assert_eq!(
-            destination.navigation_destination(),
-            super::NavigationDestination::Transfers
+            upload_failure_status("Upload failed", UploadCleanupStatus::NotRequired),
+            "Upload failed"
         );
         assert_eq!(
-            placeholder_description(destination),
-            "Reserved for verified upload/download progress and completion state."
+            upload_failure_status("Upload failed", UploadCleanupStatus::Confirmed),
+            "Upload failed. Staged upload cleanup confirmed."
+        );
+        assert_eq!(
+            upload_failure_status("Upload failed", UploadCleanupStatus::Unconfirmed),
+            "Upload failed. Staged upload cleanup could not be confirmed."
         );
     }
 
