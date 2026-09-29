@@ -1,0 +1,313 @@
+diff --git a/apps/desktop/src/ipc.rs b/apps/desktop/src/ipc.rs
+index 1dc23c0..d174521 100644
+--- a/apps/desktop/src/ipc.rs
++++ b/apps/desktop/src/ipc.rs
+@@ -221,52 +221,71 @@ pub fn query_terminal_close(bridge_payload: &[u8]) -> Result<(), DesktopIpcError
+     query_empty_management(TERMINAL_CLOSE_REQUEST_ID, bridge_payload)
+ }
+ 
+-/// Begins one already-encoded bounded upload and returns the Agent-committed offset.
+-pub fn query_upload_begin(bridge_payload: &[u8]) -> Result<u64, DesktopIpcError> {
+-    query_offset_management(UPLOAD_BEGIN_REQUEST_ID, bridge_payload)
++/// One connection-scoped bounded upload session.
++///
++/// The Agent retains the active upload transaction on the authenticated local connection, so
++/// begin/chunk/finalize/abort must use this same Unix stream for the entire transaction. Dropping
++/// the stream before finalization lets the Agent's connection teardown abort any active staging.
++pub(crate) struct BoundedUploadSession {
++    stream: UnixStream,
+ }
+ 
+-/// Sends one already-encoded bounded upload chunk and returns the Agent-committed offset.
+-pub fn query_upload_chunk(bridge_payload: &[u8]) -> Result<u64, DesktopIpcError> {
+-    query_offset_management(UPLOAD_CHUNK_REQUEST_ID, bridge_payload)
+-}
++impl BoundedUploadSession {
++    pub(crate) fn connect() -> Result<Self, DesktopIpcError> {
++        let endpoint = endpoint_from_environment()?;
++        let stream = connect_configured_stream(&endpoint)?;
++        Ok(Self { stream })
++    }
+ 
+-/// Finalizes one already-encoded bounded upload.
+-pub fn query_upload_finalize(bridge_payload: &[u8]) -> Result<(), DesktopIpcError> {
+-    query_empty_management(UPLOAD_FINALIZE_REQUEST_ID, bridge_payload)
+-}
++    /// Begins one already-encoded bounded upload and returns the Agent-committed offset.
++    pub(crate) fn begin(&mut self, bridge_payload: &[u8]) -> Result<u64, DesktopIpcError> {
++        self.query_offset_management(UPLOAD_BEGIN_REQUEST_ID, bridge_payload)
++    }
+ 
+-/// Best-effort cleanup for one already-encoded failed upload.
+-pub fn query_upload_abort(bridge_payload: &[u8]) -> Result<(), DesktopIpcError> {
+-    query_empty_management(UPLOAD_ABORT_REQUEST_ID, bridge_payload)
+-}
++    /// Sends one already-encoded bounded upload chunk and returns the Agent-committed offset.
++    pub(crate) fn chunk(&mut self, bridge_payload: &[u8]) -> Result<u64, DesktopIpcError> {
++        self.query_offset_management(UPLOAD_CHUNK_REQUEST_ID, bridge_payload)
++    }
+ 
+-fn query_empty_management(
+-    request_id_value: u64,
+-    bridge_payload: &[u8],
+-) -> Result<(), DesktopIpcError> {
+-    let frame = query_management_success_frame(request_id_value, bridge_payload)?;
+-    validate_empty_management_ack(frame.payload().as_bytes())
+-}
++    /// Finalizes one already-encoded bounded upload.
++    pub(crate) fn finalize(&mut self, bridge_payload: &[u8]) -> Result<(), DesktopIpcError> {
++        self.query_empty_management(UPLOAD_FINALIZE_REQUEST_ID, bridge_payload)
++    }
+ 
+-fn query_offset_management(
+-    request_id_value: u64,
+-    bridge_payload: &[u8],
+-) -> Result<u64, DesktopIpcError> {
+-    let frame = query_management_success_frame(request_id_value, bridge_payload)?;
+-    validate_offset_management_ack(frame.payload().as_bytes())
+-}
++    /// Best-effort cleanup for one already-encoded failed upload.
++    pub(crate) fn abort(&mut self, bridge_payload: &[u8]) -> Result<(), DesktopIpcError> {
++        self.query_empty_management(UPLOAD_ABORT_REQUEST_ID, bridge_payload)
++    }
+ 
+-fn query_management_success_frame(
+-    request_id_value: u64,
+-    bridge_payload: &[u8],
+-) -> Result<LocalIpcFrame, DesktopIpcError> {
+-    let endpoint = endpoint_from_environment()?;
+-    let request_id = LocalIpcRequestId::new(request_id_value)
+-        .map_err(|_| DesktopIpcError::RequestIdGenerationFailed)?;
+-    let request = build_local_management_request_frame(request_id, bridge_payload)
+-        .map_err(|_| DesktopIpcError::ManagementRequestInvalid)?;
+-    query_prebuilt_success_frame(&endpoint, request_id, &request)
++    fn query_empty_management(
++        &mut self,
++        request_id_value: u64,
++        bridge_payload: &[u8],
++    ) -> Result<(), DesktopIpcError> {
++        let frame = self.query_management_success_frame(request_id_value, bridge_payload)?;
++        validate_empty_management_ack(frame.payload().as_bytes())
++    }
++
++    fn query_offset_management(
++        &mut self,
++        request_id_value: u64,
++        bridge_payload: &[u8],
++    ) -> Result<u64, DesktopIpcError> {
++        let frame = self.query_management_success_frame(request_id_value, bridge_payload)?;
++        validate_offset_management_ack(frame.payload().as_bytes())
++    }
++
++    fn query_management_success_frame(
++        &mut self,
++        request_id_value: u64,
++        bridge_payload: &[u8],
++    ) -> Result<LocalIpcFrame, DesktopIpcError> {
++        let request_id = LocalIpcRequestId::new(request_id_value)
++            .map_err(|_| DesktopIpcError::RequestIdGenerationFailed)?;
++        let request = build_local_management_request_frame(request_id, bridge_payload)
++            .map_err(|_| DesktopIpcError::ManagementRequestInvalid)?;
++        query_prebuilt_success_frame_on_stream(&mut self.stream, request_id, &request)
++    }
+ }
+ 
+ fn validate_empty_management_ack(payload: &[u8]) -> Result<(), DesktopIpcError> {
+@@ -297,20 +316,32 @@ fn query_prebuilt_success_frame(
+     request_id: LocalIpcRequestId,
+     request: &LocalIpcFrame,
+ ) -> Result<LocalIpcFrame, DesktopIpcError> {
+-    let mut stream = UnixStream::connect(endpoint).map_err(|_| DesktopIpcError::ConnectFailed)?;
++    let mut stream = connect_configured_stream(endpoint)?;
++    query_prebuilt_success_frame_on_stream(&mut stream, request_id, request)
++}
++
++fn connect_configured_stream(endpoint: &Path) -> Result<UnixStream, DesktopIpcError> {
++    let stream = UnixStream::connect(endpoint).map_err(|_| DesktopIpcError::ConnectFailed)?;
+     stream
+         .set_read_timeout(Some(IPC_TIMEOUT))
+         .map_err(|_| DesktopIpcError::ConfigureFailed)?;
+     stream
+         .set_write_timeout(Some(IPC_TIMEOUT))
+         .map_err(|_| DesktopIpcError::ConfigureFailed)?;
++    Ok(stream)
++}
+ 
+-    write_frame(&mut stream, request).map_err(|_| DesktopIpcError::RequestWriteFailed)?;
++fn query_prebuilt_success_frame_on_stream(
++    stream: &mut UnixStream,
++    request_id: LocalIpcRequestId,
++    request: &LocalIpcFrame,
++) -> Result<LocalIpcFrame, DesktopIpcError> {
++    write_frame(stream, request).map_err(|_| DesktopIpcError::RequestWriteFailed)?;
+     stream
+         .flush()
+         .map_err(|_| DesktopIpcError::RequestWriteFailed)?;
+ 
+-    let frame = read_frame(&mut stream).map_err(|_| DesktopIpcError::ResponseReadFailed)?;
++    let frame = read_frame(stream).map_err(|_| DesktopIpcError::ResponseReadFailed)?;
+     let terminal =
+         validate_terminal_response_frame(&frame).map_err(|_| DesktopIpcError::ResponseInvalid)?;
+     ensure_response_id(request_id, terminal.request_id())?;
+diff --git a/apps/desktop/src/ui.rs b/apps/desktop/src/ui.rs
+index dc7545b..8b18dbf 100644
+--- a/apps/desktop/src/ui.rs
++++ b/apps/desktop/src/ui.rs
+@@ -665,12 +665,15 @@ fn next_upload_transfer_id(
+     TransferId::new(identifier).to_hex()
+ }
+ 
+-fn cleanup_failed_upload(upload: &mut UploadPresentation) -> UploadCleanupStatus {
++fn cleanup_failed_upload(
++    upload: &mut UploadPresentation,
++    session: &mut ipc::BoundedUploadSession,
++) -> UploadCleanupStatus {
+     let payload = match upload.request_abort() {
+         Ok(payload) => payload,
+         Err(_) => return UploadCleanupStatus::Unconfirmed,
+     };
+-    if ipc::query_upload_abort(&payload).is_ok() {
++    if session.abort(&payload).is_ok() {
+         UploadCleanupStatus::Confirmed
+     } else {
+         UploadCleanupStatus::Unconfirmed
+@@ -701,6 +704,17 @@ fn run_upload_worker(
+ 
+     let transfer_id = next_upload_transfer_id(&source, &destination, total_bytes, &sha256);
+     let mut upload = UploadPresentation::new(transfer_id, destination, total_bytes, sha256);
++    let mut session = match ipc::BoundedUploadSession::connect() {
++        Ok(session) => session,
++        Err(_) => {
++            send_upload_failure(
++                &sender,
++                "Unable to open the trusted local Agent upload session",
++                UploadCleanupStatus::NotRequired,
++            );
++            return;
++        }
++    };
+     let begin_payload = match upload.request_begin() {
+         Ok(payload) => payload,
+         Err(_) => {
+@@ -713,10 +727,10 @@ fn run_upload_worker(
+         }
+     };
+ 
+-    let begin_offset = match ipc::query_upload_begin(&begin_payload) {
++    let begin_offset = match session.begin(&begin_payload) {
+         Ok(offset) => offset,
+         Err(_) => {
+-            let cleanup = cleanup_failed_upload(&mut upload);
++            let cleanup = cleanup_failed_upload(&mut upload, &mut session);
+             send_upload_failure(&sender, "Agent rejected or lost the upload begin acknowledgement", cleanup);
+             return;
+         }
+@@ -725,7 +739,7 @@ fn run_upload_worker(
+         .apply_begin_acknowledgement(begin_offset)
+         .is_err()
+     {
+-        let cleanup = cleanup_failed_upload(&mut upload);
++        let cleanup = cleanup_failed_upload(&mut upload, &mut session);
+         send_upload_failure(&sender, "Upload begin acknowledgement was not the exact zero offset", cleanup);
+         return;
+     }
+@@ -736,14 +750,14 @@ fn run_upload_worker(
+         })
+         .is_err()
+     {
+-        let _ = cleanup_failed_upload(&mut upload);
++        let _ = cleanup_failed_upload(&mut upload, &mut session);
+         return;
+     }
+ 
+     let mut file = match File::open(&source_path) {
+         Ok(file) => file,
+         Err(_) => {
+-            let cleanup = cleanup_failed_upload(&mut upload);
++            let cleanup = cleanup_failed_upload(&mut upload, &mut session);
+             send_upload_failure(&sender, "Local source file became unavailable", cleanup);
+             return;
+         }
+@@ -757,13 +771,13 @@ fn run_upload_worker(
+             .min(MAX_BRIDGE_INLINE_BYTES);
+         let read = match file.read(&mut buffer[..requested]) {
+             Ok(0) => {
+-                let cleanup = cleanup_failed_upload(&mut upload);
++                let cleanup = cleanup_failed_upload(&mut upload, &mut session);
+                 send_upload_failure(&sender, "Local source file ended before its hashed length", cleanup);
+                 return;
+             }
+             Ok(read) => read,
+             Err(_) => {
+-                let cleanup = cleanup_failed_upload(&mut upload);
++                let cleanup = cleanup_failed_upload(&mut upload, &mut session);
+                 send_upload_failure(&sender, "Local source file could not be read during upload", cleanup);
+                 return;
+             }
+@@ -772,21 +786,21 @@ fn run_upload_worker(
+         let payload = match upload.request_chunk(&buffer[..read]) {
+             Ok(payload) => payload,
+             Err(_) => {
+-                let cleanup = cleanup_failed_upload(&mut upload);
++                let cleanup = cleanup_failed_upload(&mut upload, &mut session);
+                 send_upload_failure(&sender, "Upload chunk failed local bounds validation", cleanup);
+                 return;
+             }
+         };
+-        let committed = match ipc::query_upload_chunk(&payload) {
++        let committed = match session.chunk(&payload) {
+             Ok(offset) => offset,
+             Err(_) => {
+-                let cleanup = cleanup_failed_upload(&mut upload);
++                let cleanup = cleanup_failed_upload(&mut upload, &mut session);
+                 send_upload_failure(&sender, "Agent rejected or lost an upload chunk acknowledgement", cleanup);
+                 return;
+             }
+         };
+         if upload.apply_chunk_acknowledgement(committed).is_err() {
+-            let cleanup = cleanup_failed_upload(&mut upload);
++            let cleanup = cleanup_failed_upload(&mut upload, &mut session);
+             send_upload_failure(&sender, "Upload chunk acknowledgement offset did not match", cleanup);
+             return;
+         }
+@@ -797,7 +811,7 @@ fn run_upload_worker(
+             })
+             .is_err()
+         {
+-            let _ = cleanup_failed_upload(&mut upload);
++            let _ = cleanup_failed_upload(&mut upload, &mut session);
+             return;
+         }
+     }
+@@ -806,12 +820,12 @@ fn run_upload_worker(
+     match file.read(&mut trailing) {
+         Ok(0) => {}
+         Ok(_) => {
+-            let cleanup = cleanup_failed_upload(&mut upload);
++            let cleanup = cleanup_failed_upload(&mut upload, &mut session);
+             send_upload_failure(&sender, "Local source file changed length during upload", cleanup);
+             return;
+         }
+         Err(_) => {
+-            let cleanup = cleanup_failed_upload(&mut upload);
++            let cleanup = cleanup_failed_upload(&mut upload, &mut session);
+             send_upload_failure(&sender, "Local source file could not be revalidated", cleanup);
+             return;
+         }
+@@ -820,13 +834,13 @@ fn run_upload_worker(
+     let finalize_payload = match upload.request_finalize() {
+         Ok(payload) => payload,
+         Err(_) => {
+-            let cleanup = cleanup_failed_upload(&mut upload);
++            let cleanup = cleanup_failed_upload(&mut upload, &mut session);
+             send_upload_failure(&sender, "Upload could not enter finalization state", cleanup);
+             return;
+         }
+     };
+-    if ipc::query_upload_finalize(&finalize_payload).is_err() {
+-        let cleanup = cleanup_failed_upload(&mut upload);
++    if session.finalize(&finalize_payload).is_err() {
++        let cleanup = cleanup_failed_upload(&mut upload, &mut session);
+         send_upload_failure(&sender, "Agent did not confirm upload finalization", cleanup);
+         return;
+     }
