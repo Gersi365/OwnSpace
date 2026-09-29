@@ -16,14 +16,14 @@ jobs:
       - name: Checkout carrier
         uses: actions/checkout@v4
         with:
-          fetch-depth: 3
+          fetch-depth: 4
 
       - name: Verify exact authoritative base and carrier scope
         shell: bash
         run: |
           set -euo pipefail
           expected_base='e76a81acea47dd362e7c383b723de99f93875409'
-          actual_base=$(git rev-parse HEAD~2)
+          actual_base=$(git rev-parse HEAD~3)
           test "$actual_base" = "$expected_base"
           mapfile -t changed < <(git diff --name-only "$expected_base"..HEAD)
           test "${#changed[@]}" -eq 1
