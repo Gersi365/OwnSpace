@@ -1,9 +1,9 @@
-name: Ownspace bounded upload Agent plus Desktop validation R11
+name: Ownspace bounded upload Agent plus Desktop validation R12
 
 on:
   push:
     branches:
-      - validation/desktop-transfers-bounded-upload-2026-09-29-r11
+      - validation/desktop-transfers-bounded-upload-2026-09-29-r12
 
 permissions:
   contents: read
@@ -14,12 +14,13 @@ jobs:
     timeout-minutes: 45
     env:
       BASE_SHA: 42ca051422d6f21fc499db2b392f12bfed736733
-      EXPECTED_BRANCH: validation/desktop-transfers-bounded-upload-2026-09-29-r11
+      EXPECTED_BRANCH: validation/desktop-transfers-bounded-upload-2026-09-29-r12
       R7_DELTA: .github/validation/OWNSPACE_AGENT_BOUNDED_UPLOAD_RUNTIME_R7_CLIPPY_FORMAT_DELTA_2026-09-29.patch
       DESKTOP_R8_DELTA: .github/validation/OWNSPACE_DESKTOP_TRANSFERS_BOUNDED_UPLOAD_R8_CONNECTION_SESSION_DELTA_2026-09-29.patch
       DESKTOP_R9_FORMAT_DELTA: .github/validation/OWNSPACE_DESKTOP_TRANSFERS_BOUNDED_UPLOAD_R9_RUSTFMT_DELTA_2026-09-29.patch
       DESKTOP_R10_IPC_DELTA: .github/validation/OWNSPACE_DESKTOP_TRANSFERS_BOUNDED_UPLOAD_R10_TERMINAL_HELPER_DELTA_2026-09-29.patch
-      EXPECTED_WORKFLOW: .github/workflows/validate-desktop-transfers-bounded-upload-r11-2026-09-29.yml
+      DESKTOP_R12_CLIPPY_DELTA: .github/validation/OWNSPACE_DESKTOP_TRANSFERS_BOUNDED_UPLOAD_R12_CLIPPY_DELTA_2026-09-29.patch
+      EXPECTED_WORKFLOW: .github/workflows/validate-desktop-transfers-bounded-upload-r12-2026-09-29.yml
       DESKTOP_R1_COMMIT: 3288b82f7415f3dca08b8cf9d46abae4b5d40a13
 
     steps:
@@ -28,17 +29,17 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Verify isolated R11 carrier
+      - name: Verify isolated R12 carrier
         shell: bash
         run: |
           set -euo pipefail
           test "$GITHUB_REF_NAME" = "$EXPECTED_BRANCH"
           test "$(git merge-base "$BASE_SHA" HEAD)" = "$BASE_SHA"
-          test "$(git rev-list --count "$BASE_SHA"..HEAD)" -eq 6
+          test "$(git rev-list --count "$BASE_SHA"..HEAD)" -eq 7
           mapfile -t changed < <(git diff --name-only "$BASE_SHA"...HEAD | sort)
-          expected=("$R7_DELTA" "$DESKTOP_R8_DELTA" "$DESKTOP_R9_FORMAT_DELTA" "$DESKTOP_R10_IPC_DELTA" "$EXPECTED_WORKFLOW")
+          expected=("$R7_DELTA" "$DESKTOP_R8_DELTA" "$DESKTOP_R9_FORMAT_DELTA" "$DESKTOP_R10_IPC_DELTA" "$DESKTOP_R12_CLIPPY_DELTA" "$EXPECTED_WORKFLOW")
           mapfile -t expected_sorted < <(printf '%s\n' "${expected[@]}" | sort)
-          test "${#changed[@]}" -eq 5
+          test "${#changed[@]}" -eq 6
           diff -u <(printf '%s\n' "${expected_sorted[@]}") <(printf '%s\n' "${changed[@]}")
           test "$(sha256sum "$R7_DELTA" | awk '{print $1}')" = "ceac1754cde06855a18ccc1b74351fdf13178c1772f989fcf2bb068c5909d8d8"
           test "$(wc -c < "$R7_DELTA")" = "7450"
@@ -48,6 +49,8 @@ jobs:
           test "$(wc -c < "$DESKTOP_R9_FORMAT_DELTA")" = "9641"
           test "$(sha256sum "$DESKTOP_R10_IPC_DELTA" | awk '{print $1}')" = "a5d6d907880131d1e5373648158d24efb646629b4f8a23db67bce9f092ef3278"
           test "$(wc -c < "$DESKTOP_R10_IPC_DELTA")" = "1083"
+          test "$(sha256sum "$DESKTOP_R12_CLIPPY_DELTA" | awk '{print $1}')" = "19956fed4292a1429f37a5a7724d7572f044182c45ef68ffc6a810f25b5e6369"
+          test "$(wc -c < "$DESKTOP_R12_CLIPPY_DELTA")" = "1430"
 
       - name: Recover exact R2 and R5 Agent carriers
         shell: bash
@@ -147,7 +150,7 @@ jobs:
           test "$(sha256sum /tmp/r7-combined.patch | awk '{print $1}')" = "e481cb3ddd40bd531575b12330e91e7de5c81998657556f19709f0e82ada31a0"
           test "$(wc -c < /tmp/r7-combined.patch)" = "57324"
 
-      - name: Recover exact approved Desktop candidate and apply R8 plus R9 plus R10 corrections
+      - name: Recover exact approved Desktop candidate and apply R8 plus R9 plus R10 plus R12 Clippy correction
         shell: bash
         run: |
           set -euo pipefail
@@ -204,6 +207,27 @@ jobs:
             ceedb82756849cf14ece21821ef249a22877ecad3940c0f73e8bf66f3ce98910 apps/desktop/src/ipc.rs \
             9d7f6674f6a8315842f225f9fe64531a1f1123451d5f588d1333b89a7c8b4587 apps/desktop/src/ui.rs \
             | sha256sum -c -
+          git apply --check "$DESKTOP_R12_CLIPPY_DELTA"
+          git apply "$DESKTOP_R12_CLIPPY_DELTA"
+          cargo fmt --all -- --check
+          git diff --check
+          python3 - <<'PY'
+          from pathlib import Path
+          ipc = Path("apps/desktop/src/ipc.rs").read_text()
+          ui = Path("apps/desktop/src/ui.rs").read_text()
+          assert ipc.count("#[allow(clippy::redundant_pub_crate)]\npub(crate) struct BoundedUploadSession") == 1
+          assert ui.count("#[allow(clippy::manual_let_else)]\nfn cleanup_failed_upload(") == 1
+          for lint in [
+              "clippy::manual_let_else",
+              "clippy::needless_pass_by_value",
+              "clippy::single_match_else",
+              "clippy::too_many_lines",
+          ]:
+              assert ui.count(lint) >= 1
+          assert ui.count("#[allow(clippy::float_cmp)]\n    fn transfer_progress_and_cleanup_status_are_explicit") == 1
+          PY
+          sha256sum apps/desktop/src/ipc.rs apps/desktop/src/ui.rs
+
 
       - name: Verify exact combined source scope and bounded capability contract
         shell: bash
