@@ -1,9 +1,9 @@
-name: Ownspace bounded upload Agent plus Desktop validation R9
+name: Ownspace bounded upload Agent plus Desktop validation R10
 
 on:
   push:
     branches:
-      - validation/desktop-transfers-bounded-upload-2026-09-29-r9
+      - validation/desktop-transfers-bounded-upload-2026-09-29-r10
 
 permissions:
   contents: read
@@ -18,7 +18,8 @@ jobs:
       R7_DELTA: .github/validation/OWNSPACE_AGENT_BOUNDED_UPLOAD_RUNTIME_R7_CLIPPY_FORMAT_DELTA_2026-09-29.patch
       DESKTOP_R8_DELTA: .github/validation/OWNSPACE_DESKTOP_TRANSFERS_BOUNDED_UPLOAD_R8_CONNECTION_SESSION_DELTA_2026-09-29.patch
       DESKTOP_R9_FORMAT_DELTA: .github/validation/OWNSPACE_DESKTOP_TRANSFERS_BOUNDED_UPLOAD_R9_RUSTFMT_DELTA_2026-09-29.patch
-      EXPECTED_WORKFLOW: .github/workflows/validate-desktop-transfers-bounded-upload-r9-2026-09-29.yml
+      DESKTOP_R10_IPC_DELTA: .github/validation/OWNSPACE_DESKTOP_TRANSFERS_BOUNDED_UPLOAD_R10_TERMINAL_HELPER_DELTA_2026-09-29.patch
+      EXPECTED_WORKFLOW: .github/workflows/validate-desktop-transfers-bounded-upload-r10-2026-09-29.yml
       DESKTOP_R1_COMMIT: 3288b82f7415f3dca08b8cf9d46abae4b5d40a13
 
     steps:
@@ -27,17 +28,17 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Verify isolated R9 carrier
+      - name: Verify isolated R10 carrier
         shell: bash
         run: |
           set -euo pipefail
           test "$GITHUB_REF_NAME" = "$EXPECTED_BRANCH"
           test "$(git merge-base "$BASE_SHA" HEAD)" = "$BASE_SHA"
-          test "$(git rev-list --count "$BASE_SHA"..HEAD)" -eq 4
+          test "$(git rev-list --count "$BASE_SHA"..HEAD)" -eq 5
           mapfile -t changed < <(git diff --name-only "$BASE_SHA"...HEAD | sort)
-          expected=("$R7_DELTA" "$DESKTOP_R8_DELTA" "$DESKTOP_R9_FORMAT_DELTA" "$EXPECTED_WORKFLOW")
+          expected=("$R7_DELTA" "$DESKTOP_R8_DELTA" "$DESKTOP_R9_FORMAT_DELTA" "$DESKTOP_R10_IPC_DELTA" "$EXPECTED_WORKFLOW")
           mapfile -t expected_sorted < <(printf '%s\n' "${expected[@]}" | sort)
-          test "${#changed[@]}" -eq 4
+          test "${#changed[@]}" -eq 5
           diff -u <(printf '%s\n' "${expected_sorted[@]}") <(printf '%s\n' "${changed[@]}")
           test "$(sha256sum "$R7_DELTA" | awk '{print $1}')" = "ceac1754cde06855a18ccc1b74351fdf13178c1772f989fcf2bb068c5909d8d8"
           test "$(wc -c < "$R7_DELTA")" = "7450"
@@ -45,6 +46,8 @@ jobs:
           test "$(wc -c < "$DESKTOP_R8_DELTA")" = "13933"
           test "$(sha256sum "$DESKTOP_R9_FORMAT_DELTA" | awk '{print $1}')" = "101267305bdbe9465c5fe2079bea5f4dad17dfc8baf1dfac0550dc5e39eb5345"
           test "$(wc -c < "$DESKTOP_R9_FORMAT_DELTA")" = "9641"
+          test "$(sha256sum "$DESKTOP_R10_IPC_DELTA" | awk '{print $1}')" = "a5d6d907880131d1e5373648158d24efb646629b4f8a23db67bce9f092ef3278"
+          test "$(wc -c < "$DESKTOP_R10_IPC_DELTA")" = "1083"
 
       - name: Recover exact R2 and R5 Agent carriers
         shell: bash
@@ -144,7 +147,7 @@ jobs:
           test "$(sha256sum /tmp/r7-combined.patch | awk '{print $1}')" = "e481cb3ddd40bd531575b12330e91e7de5c81998657556f19709f0e82ada31a0"
           test "$(wc -c < /tmp/r7-combined.patch)" = "57324"
 
-      - name: Recover exact approved Desktop candidate and apply R8 plus R9 corrections
+      - name: Recover exact approved Desktop candidate and apply R8 plus R9 plus R10 corrections
         shell: bash
         run: |
           set -euo pipefail
@@ -188,6 +191,17 @@ jobs:
             64eb5fd2e82302674bdc0534c9b1df889bedbf49355cd87e7a4756f1b5f4acea apps/desktop/README.md \
             d2a3d162769d826e91156c1e26ca067c5a1b2bff9297e87b8e1c123fc4875455 apps/desktop/src/management.rs \
             6aeb5137a98d49eeef2ff787d4f54615fa23754c8ef405a0b0c438269740dd5b apps/desktop/src/ipc.rs \
+            9d7f6674f6a8315842f225f9fe64531a1f1123451d5f588d1333b89a7c8b4587 apps/desktop/src/ui.rs \
+            | sha256sum -c -
+          git apply --check "$DESKTOP_R10_IPC_DELTA"
+          git apply "$DESKTOP_R10_IPC_DELTA"
+          git diff --check
+          printf '%s  %s\n' \
+            3fbd3cb723facd41389055a3d7e64caa27882265ed1f6aa2246c78fed6f59210 Cargo.lock \
+            ef212ff7d1f09f805f7ba8d6f826dbf6667d55d41622a45e86deace71d3217f5 apps/desktop/Cargo.toml \
+            64eb5fd2e82302674bdc0534c9b1df889bedbf49355cd87e7a4756f1b5f4acea apps/desktop/README.md \
+            d2a3d162769d826e91156c1e26ca067c5a1b2bff9297e87b8e1c123fc4875455 apps/desktop/src/management.rs \
+            ceedb82756849cf14ece21821ef249a22877ecad3940c0f73e8bf66f3ce98910 apps/desktop/src/ipc.rs \
             9d7f6674f6a8315842f225f9fe64531a1f1123451d5f588d1333b89a7c8b4587 apps/desktop/src/ui.rs \
             | sha256sum -c -
 
@@ -234,6 +248,7 @@ jobs:
           assert ipc.count("pub(crate) struct BoundedUploadSession") == 1
           assert ipc.count("fn connect_configured_stream") == 1
           assert ipc.count("fn query_prebuilt_success_frame_on_stream") == 1
+          assert ipc.count("fn query_empty_management(") == 2
           assert "query_upload_begin" not in ipc
           assert "query_upload_chunk" not in ipc
           assert "query_upload_finalize" not in ipc
