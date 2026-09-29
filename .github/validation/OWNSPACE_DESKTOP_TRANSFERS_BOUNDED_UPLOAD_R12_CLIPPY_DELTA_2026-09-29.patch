@@ -26,7 +26,7 @@ diff --git a/apps/desktop/src/ui.rs b/apps/desktop/src/ui.rs
 +    clippy::manual_let_else,
 +    clippy::needless_pass_by_value,
 +    clippy::single_match_else,
-+    clippy::too_many_lines,
++    clippy::too_many_lines
 +)]
  fn run_upload_worker(source: String, destination: String, sender: mpsc::Sender<UploadWorkerEvent>) {
      let source_path = PathBuf::from(&source);

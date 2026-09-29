@@ -35,7 +35,7 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REF_NAME" = "$EXPECTED_BRANCH"
           test "$(git merge-base "$BASE_SHA" HEAD)" = "$BASE_SHA"
-          test "$(git rev-list --count "$BASE_SHA"..HEAD)" -eq 8
+          test "$(git rev-list --count "$BASE_SHA"..HEAD)" -eq 9
           mapfile -t changed < <(git diff --name-only "$BASE_SHA"...HEAD | sort)
           expected=("$R7_DELTA" "$DESKTOP_R8_DELTA" "$DESKTOP_R9_FORMAT_DELTA" "$DESKTOP_R10_IPC_DELTA" "$DESKTOP_R12_CLIPPY_DELTA" "$EXPECTED_WORKFLOW")
           mapfile -t expected_sorted < <(printf '%s\n' "${expected[@]}" | sort)
@@ -49,8 +49,8 @@ jobs:
           test "$(wc -c < "$DESKTOP_R9_FORMAT_DELTA")" = "9641"
           test "$(sha256sum "$DESKTOP_R10_IPC_DELTA" | awk '{print $1}')" = "a5d6d907880131d1e5373648158d24efb646629b4f8a23db67bce9f092ef3278"
           test "$(wc -c < "$DESKTOP_R10_IPC_DELTA")" = "1083"
-          test "$(sha256sum "$DESKTOP_R12_CLIPPY_DELTA" | awk '{print $1}')" = "219139f8f0b2e5ccf10161b98c2ffb6cc451016aaaacf9fe37b494b297ceb9c0"
-          test "$(wc -c < "$DESKTOP_R12_CLIPPY_DELTA")" = "1689"
+          test "$(sha256sum "$DESKTOP_R12_CLIPPY_DELTA" | awk '{print $1}')" = "c314acddc1cc8a495083bb24c60e41f9e7b5aca5bfee3e55da547a25fc41fe97"
+          test "$(wc -c < "$DESKTOP_R12_CLIPPY_DELTA")" = "1688"
 
       - name: Recover exact R2 and R5 Agent carriers
         shell: bash
