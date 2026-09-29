@@ -1,7 +1,7 @@
 diff --git a/apps/desktop/src/ipc.rs b/apps/desktop/src/ipc.rs
 --- a/apps/desktop/src/ipc.rs
 +++ b/apps/desktop/src/ipc.rs
-@@
+@@ -239,6 +239,7 @@
  /// The Agent retains the active upload transaction on the authenticated local connection, so
  /// begin/chunk/finalize/abort must use this same Unix stream for the entire transaction. Dropping
  /// the stream before finalization lets the Agent's connection teardown abort any active staging.
@@ -12,23 +12,29 @@ diff --git a/apps/desktop/src/ipc.rs b/apps/desktop/src/ipc.rs
 diff --git a/apps/desktop/src/ui.rs b/apps/desktop/src/ui.rs
 --- a/apps/desktop/src/ui.rs
 +++ b/apps/desktop/src/ui.rs
-@@
--fn cleanup_failed_upload(
+@@ -670,6 +670,7 @@
+ 
 +#[allow(clippy::manual_let_else)]
-+fn cleanup_failed_upload(
+ fn cleanup_failed_upload(
      upload: &mut UploadPresentation,
      session: &mut ipc::BoundedUploadSession,
  ) -> UploadCleanupStatus {
-@@
--fn run_upload_worker(source: String, destination: String, sender: mpsc::Sender<UploadWorkerEvent>) {
+     let payload = match upload.request_abort() {
+@@ -693,7 +694,13 @@
+ 
 +#[allow(
 +    clippy::manual_let_else,
 +    clippy::needless_pass_by_value,
 +    clippy::single_match_else,
 +    clippy::too_many_lines,
 +)]
-+fn run_upload_worker(source: String, destination: String, sender: mpsc::Sender<UploadWorkerEvent>) {
-@@
+ fn run_upload_worker(source: String, destination: String, sender: mpsc::Sender<UploadWorkerEvent>) {
+     let source_path = PathBuf::from(&source);
+     let (sha256, total_bytes) = match hash_upload_source(&source_path) {
+         Ok(result) => result,
+         Err(reason) => {
+             send_upload_failure(&sender, reason, UploadCleanupStatus::NotRequired);
+@@ -1919,4 +1926,5 @@
      #[test]
 +    #[allow(clippy::float_cmp)]
      fn transfer_progress_and_cleanup_status_are_explicit() {
