@@ -1,0 +1,180 @@
+name: Ownspace Desktop Sessions live terminal validation
+
+on:
+  push:
+    branches:
+      - validation/desktop-sessions-live-terminal-2026-09-29-r3
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout carrier
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify exact authoritative base and carrier scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=e76a81acea47dd362e7c383b723de99f93875409
+          test "$(git merge-base HEAD "$base")" = "$base"
+          test "$(git rev-list --count "$base"..HEAD)" = "2"
+          mapfile -t changed < <(git diff --name-only "$base"..HEAD)
+          test "${#changed[@]}" -eq 2
+          test "${changed[0]}" = ".github/validation/OWNSPACE_DESKTOP_SESSIONS_LIVE_TERMINAL_CANDIDATE_R3_2026-09-29.patch"
+          test "${changed[1]}" = ".github/workflows/validate-desktop-sessions-live-terminal-r3-2026-09-29.yml"
+
+      - name: Verify exact authoritative Desktop baseline
+        shell: python
+        run: |
+          from pathlib import Path
+          import hashlib
+
+          expected = {
+              "apps/desktop/README.md": "c8deb465b3e10510faf02ecf336f179bcb5caeaade4ca12706784217b5c0fe1a",
+              "apps/desktop/src/ipc.rs": "6e1af96bd930f95dac25a63508bbfb759a34bddc54aebec6261d0071fe3f3b6b",
+              "apps/desktop/src/ui.rs": "d16b0b0af00952a5b4abbe9bd3b993cf98b650d8534c1e3a74007b02e36952ba",
+              "apps/desktop/src/management.rs": "e49734c6fd33844020f904054c57dbbe3b7a15c098131834b3020a129c16b75f",
+              "apps/desktop/src/local_management_ipc.rs": "7ff6f71af20d1c66bff1cd8724c4ab5cc2f581c70147781d8e35ffbbe961eb0f",
+          }
+          for path, expected_sha in expected.items():
+              actual = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+              assert actual == expected_sha, (path, actual, expected_sha)
+
+          ui = Path("apps/desktop/src/ui.rs").read_text()
+          readme = Path("apps/desktop/README.md").read_text()
+          assert "NavigationDestination::Sessions => placeholder_page" in ui
+          assert "Sessions and Transfers remain structural placeholders" in readme
+
+      - name: Verify exact candidate patch identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(sha256sum .github/validation/OWNSPACE_DESKTOP_SESSIONS_LIVE_TERMINAL_CANDIDATE_R3_2026-09-29.patch | awk '{print $1}')" = "a6a955d67000d3362b87a1f5d566c796f20244089610c7f21746dafe8ca96da2"
+          test "$(wc -c < .github/validation/OWNSPACE_DESKTOP_SESSIONS_LIVE_TERMINAL_CANDIDATE_R3_2026-09-29.patch)" = "27632"
+
+      - name: Apply exact candidate patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          patch=.github/validation/OWNSPACE_DESKTOP_SESSIONS_LIVE_TERMINAL_CANDIDATE_R3_2026-09-29.patch
+          git apply --check "$patch"
+          git apply "$patch"
+          git diff --check
+          mapfile -t changed < <(git diff --name-only)
+          test "${#changed[@]}" -eq 3
+          test "${changed[0]}" = "apps/desktop/README.md"
+          test "${changed[1]}" = "apps/desktop/src/ipc.rs"
+          test "${changed[2]}" = "apps/desktop/src/ui.rs"
+
+      - name: Verify bounded Sessions capability contract
+        shell: python
+        run: |
+          from pathlib import Path
+          import hashlib
+
+          expected = {
+              "apps/desktop/README.md": "bae2a469f117f7c12e86831f58f2137caa4d91669aafcd54a1787ab15bdf886a",
+              "apps/desktop/src/ipc.rs": "9a1da6eff0aa85a60c7382cbdacd68d857b50f93e3be71a75cef5f52a01ac9df",
+              "apps/desktop/src/ui.rs": "b76d3dce0bbbf09895618ae3d69836142b1398fa8fe62c98a9a7ececc1194d61",
+              "apps/desktop/src/management.rs": "e49734c6fd33844020f904054c57dbbe3b7a15c098131834b3020a129c16b75f",
+              "apps/desktop/src/local_management_ipc.rs": "7ff6f71af20d1c66bff1cd8724c4ab5cc2f581c70147781d8e35ffbbe961eb0f",
+          }
+          for path, expected_sha in expected.items():
+              actual = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+              assert actual == expected_sha, (path, actual, expected_sha)
+
+          ui = Path("apps/desktop/src/ui.rs").read_text()
+          ipc = Path("apps/desktop/src/ipc.rs").read_text()
+          management = Path("apps/desktop/src/management.rs").read_text()
+          readme = Path("apps/desktop/README.md").read_text()
+
+          assert ui.count("NavigationDestination::Sessions => sessions.clone()") == 1
+          assert "NavigationDestination::Sessions => placeholder_page" not in ui
+          assert ui.count("PlaceholderDestination::Transfers") >= 1
+          assert "PlaceholderDestination::Sessions" not in ui
+
+          assert ipc.count("pub fn query_terminal_open") == 1
+          assert ipc.count("pub fn query_terminal_input") == 1
+          assert ipc.count("pub fn query_terminal_close") == 1
+          assert ipc.count("build_local_management_request_frame") >= 2
+          assert ipc.count("validate_empty_management_ack") >= 2
+
+          assert management.count("pub(crate) fn encode_terminal_open") == 1
+          assert management.count("pub(crate) fn encode_terminal_input") == 1
+          assert management.count("pub(crate) fn encode_terminal_close") == 1
+          assert management.count("pub(crate) struct TerminalPresentation") == 1
+
+          for forbidden in [
+              "TerminalRead",
+              "TerminalResize",
+              "ForwardOpen",
+              "ForwardClose",
+              "UploadBegin",
+              "UploadChunk",
+              "UploadFinalize",
+              "UploadAbort",
+              "DownloadChunk",
+          ]:
+              assert forbidden not in ui
+              assert forbidden not in ipc
+
+          assert ui.count("const fn terminal_operation_status") == 1
+          assert "\nfn terminal_operation_status" not in ui
+          assert "terminal output presentation is not enabled" in readme
+          assert "Transfers remains a structural placeholder" in readme
+          assert "Agent-owned terminal authority checks" in readme
+
+      - name: Verify exact reverse and reapply
+        shell: bash
+        run: |
+          set -euo pipefail
+          patch=.github/validation/OWNSPACE_DESKTOP_SESSIONS_LIVE_TERMINAL_CANDIDATE_R3_2026-09-29.patch
+          cp apps/desktop/README.md /tmp/candidate-readme.md
+          cp apps/desktop/src/ipc.rs /tmp/candidate-ipc.rs
+          cp apps/desktop/src/ui.rs /tmp/candidate-ui.rs
+          git apply --reverse --check "$patch"
+          git apply --reverse "$patch"
+          test "$(sha256sum apps/desktop/README.md | awk '{print $1}')" = "c8deb465b3e10510faf02ecf336f179bcb5caeaade4ca12706784217b5c0fe1a"
+          test "$(sha256sum apps/desktop/src/ipc.rs | awk '{print $1}')" = "6e1af96bd930f95dac25a63508bbfb759a34bddc54aebec6261d0071fe3f3b6b"
+          test "$(sha256sum apps/desktop/src/ui.rs | awk '{print $1}')" = "d16b0b0af00952a5b4abbe9bd3b993cf98b650d8534c1e3a74007b02e36952ba"
+          git diff --exit-code -- apps/desktop/README.md apps/desktop/src/ipc.rs apps/desktop/src/ui.rs
+          git apply --check "$patch"
+          git apply "$patch"
+          cmp -s apps/desktop/README.md /tmp/candidate-readme.md
+          cmp -s apps/desktop/src/ipc.rs /tmp/candidate-ipc.rs
+          cmp -s apps/desktop/src/ui.rs /tmp/candidate-ui.rs
+          git diff --check
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config protobuf-compiler libgtk-4-dev libadwaita-1-dev
+
+      - name: Formatting check
+        run: cargo fmt --all -- --check
+
+      - name: Focused Desktop terminal contract tests
+        run: |
+          cargo test --locked -p prw-desktop terminal_intent_reuses_bridge_and_never_forges_open_or_closed
+          cargo test --locked -p prw-desktop terminal_management_ack_accepts_only_exact_empty_result
+          cargo test --locked -p prw-desktop terminal_controls_fail_closed_outside_open_state
+
+      - name: Focused Agent terminal authority tests
+        run: |
+          cargo test --locked -p prw-agent management_typed_provider_dispatch
+          cargo test --locked -p prw-agent management_response
+
+      - name: Desktop tests
+        run: cargo test --locked -p prw-desktop
+
+      - name: Desktop compile check
+        run: cargo check --locked -p prw-desktop
+
+      - name: Desktop Clippy
+        run: cargo clippy --locked -p prw-desktop --all-targets -- -D warnings
