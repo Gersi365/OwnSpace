@@ -16,15 +16,16 @@ jobs:
       - name: Checkout carrier
         uses: actions/checkout@v4
         with:
-          fetch-depth: 4
+          fetch-depth: 0
 
       - name: Verify exact authoritative base and carrier scope
         shell: bash
         run: |
           set -euo pipefail
           expected_base='e76a81acea47dd362e7c383b723de99f93875409'
-          actual_base=$(git rev-parse HEAD~3)
-          test "$actual_base" = "$expected_base"
+          git cat-file -e "$expected_base^{commit}"
+          merge_base=$(git merge-base HEAD "$expected_base")
+          test "$merge_base" = "$expected_base"
           mapfile -t changed < <(git diff --name-only "$expected_base"..HEAD)
           test "${#changed[@]}" -eq 1
           test "${changed[0]}" = '.github/workflows/validate-agent-source-release-readiness-2026-09-28.yml'
