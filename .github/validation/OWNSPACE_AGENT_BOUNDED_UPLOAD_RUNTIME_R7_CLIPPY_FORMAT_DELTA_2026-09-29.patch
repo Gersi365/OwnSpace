@@ -1,0 +1,141 @@
+diff --git a/crates/prw-agent/src/linux_session_worker/management_agent_status.rs b/crates/prw-agent/src/linux_session_worker/management_agent_status.rs
+index 6ce4e02..0b21959 100644
+--- a/crates/prw-agent/src/linux_session_worker/management_agent_status.rs
++++ b/crates/prw-agent/src/linux_session_worker/management_agent_status.rs
+@@ -22,8 +22,12 @@ use crate::local_commands::management_authority::LocalManagementFilesystemAuthor
+ use crate::local_commands::private_dns_snapshot::LocalPrivateDnsSnapshot;
+ use crate::local_commands::status_snapshot::LocalAgentStatusSnapshot;
+ 
+-const MAX_UPLOAD_CHUNKS: usize = ((MAX_TRANSFER_BYTES + MAX_TRANSFER_CHUNK_BYTES as u64 - 1)
+-    / MAX_TRANSFER_CHUNK_BYTES as u64) as usize;
++#[allow(
++    clippy::cast_possible_truncation,
++    reason = "the fixed transfer limits produce 1024 chunks, which fits every supported usize"
++)]
++const MAX_UPLOAD_CHUNKS: usize =
++    MAX_TRANSFER_BYTES.div_ceil(MAX_TRANSFER_CHUNK_BYTES as u64) as usize;
+ /// After `UploadBegin` has consumed one normal request slot, at most every full transfer
+ /// chunk plus one `UploadFinalize` or `UploadAbort` request may extend the connection.
+ const MAX_UPLOAD_CONTINUATION_REQUESTS: usize = MAX_UPLOAD_CHUNKS + 1;
+@@ -47,7 +51,7 @@ pub(super) enum LocalLinuxAgentStatusManagementSessionWorkerError {
+ ///
+ /// The existing `$HOME` descriptor authority is opened before mutable upload state is created.
+ /// If that authority cannot be opened, the exact compatibility worker remains available so
+-/// AgentStatus keeps working and FileList retains its existing per-request failure behavior.
++/// `AgentStatus` keeps working and `FileList` retains its existing per-request failure behavior.
+ /// No caller can supply management policy, host root, terminal backend, or forwarding backend.
+ ///
+ /// # Errors
+@@ -265,7 +269,7 @@ mod tests {
+ 
+     fn management_frame(
+         request_id: u64,
+-        command: BridgeCommand,
++        command: &BridgeCommand,
+     ) -> crate::frame_object::LocalIpcFrame {
+         let bridge = command.encode().expect("management command encodes");
+         build_local_management_request_frame(id(request_id), &bridge)
+@@ -362,16 +366,16 @@ mod tests {
+         let (server, mut client) = UnixStream::pair().expect("local pair creates");
+ 
+         for frame in [
+-            management_frame(960, BridgeCommand::UploadBegin(plan)),
++            management_frame(960, &BridgeCommand::UploadBegin(plan)),
+             management_frame(
+                 961,
+-                BridgeCommand::UploadChunk {
++                &BridgeCommand::UploadChunk {
+                     transfer_id,
+                     offset: 0,
+                     chunk: payload.to_vec(),
+                 },
+             ),
+-            management_frame(962, BridgeCommand::UploadFinalize(transfer_id)),
++            management_frame(962, &BridgeCommand::UploadFinalize(transfer_id)),
+         ] {
+             write_frame(&mut client, &frame).expect("upload request writes");
+         }
+@@ -419,7 +423,7 @@ mod tests {
+         )
+         .expect("upload plan");
+         let (server, mut client) = UnixStream::pair().expect("local pair creates");
+-        let begin = management_frame(970, BridgeCommand::UploadBegin(plan));
++        let begin = management_frame(970, &BridgeCommand::UploadBegin(plan));
+         write_frame(&mut client, &begin).expect("begin writes");
+         client
+             .shutdown(Shutdown::Write)
+diff --git a/crates/prw-agent/src/local_commands/management_agent_status_boundary.rs b/crates/prw-agent/src/local_commands/management_agent_status_boundary.rs
+index 91fe0a5..0f5b1d1 100644
+--- a/crates/prw-agent/src/local_commands/management_agent_status_boundary.rs
++++ b/crates/prw-agent/src/local_commands/management_agent_status_boundary.rs
+@@ -111,7 +111,7 @@ where
+     clippy::too_many_arguments,
+     reason = "authenticated connection, bounded upload state and protocol snapshots remain explicit"
+ )]
+-pub(crate) fn process_one_agent_status_file_list_upload_management_at_boundary<R, W, RE, S>(
++pub fn process_one_agent_status_file_list_upload_management_at_boundary<R, W, RE, S>(
+     reader: &mut R,
+     writer: &mut W,
+     inbound_state: &mut LocalInboundRequestState,
+diff --git a/crates/prw-agent/src/local_commands/management_agent_status_runtime.rs b/crates/prw-agent/src/local_commands/management_agent_status_runtime.rs
+index 0a11927..8c549a6 100644
+--- a/crates/prw-agent/src/local_commands/management_agent_status_runtime.rs
++++ b/crates/prw-agent/src/local_commands/management_agent_status_runtime.rs
+@@ -66,7 +66,7 @@ const fn agent_status_file_list_upload_policy() -> BoundedLocalManagementPolicy
+ /// capacity to at most one upload in this production slice so teardown can deterministically
+ /// abort the exact retained transaction.
+ #[derive(Debug)]
+-pub(crate) struct LocalBoundedUploadRuntime<'authority> {
++pub struct LocalBoundedUploadRuntime<'authority> {
+     filesystem: &'authority LocalManagementFilesystemAuthority,
+     transfers: UploadTransferManager<'authority>,
+     active_transfer: Option<TransferId>,
+@@ -74,7 +74,7 @@ pub(crate) struct LocalBoundedUploadRuntime<'authority> {
+ 
+ /// Explicit bounded-upload teardown failure.
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+-pub(crate) enum LocalBoundedUploadCleanupError {
++pub enum LocalBoundedUploadCleanupError {
+     /// The active staging transaction could not be explicitly aborted.
+     Abort(FileTransferError),
+     /// Provider state remained active after deterministic cleanup.
+@@ -300,14 +300,8 @@ pub(super) fn process_authenticated_linux_agent_status_file_list_upload_manageme
+         | BridgeCommand::FileCreate { .. }
+         | BridgeCommand::DirectoryCreate(_)
+         | BridgeCommand::UploadResume(_)
+-        | BridgeCommand::DownloadChunk { .. } => {
+-            return build_terminal_response_frame(
+-                request_id,
+-                LocalAgentResponseStatus::UnsupportedCommand,
+-                &[],
+-            );
+-        }
+-        BridgeCommand::TerminalOpen { .. }
++        | BridgeCommand::DownloadChunk { .. }
++        | BridgeCommand::TerminalOpen { .. }
+         | BridgeCommand::TerminalInput { .. }
+         | BridgeCommand::TerminalResize { .. }
+         | BridgeCommand::TerminalRead { .. }
+@@ -325,8 +319,7 @@ pub(super) fn process_authenticated_linux_agent_status_file_list_upload_manageme
+     build_management_provider_response(request_id, result)
+ }
+ 
+-pub(crate) fn home_filesystem_authority()
+--> Result<LocalManagementFilesystemAuthority, FileServiceError> {
++pub fn home_filesystem_authority() -> Result<LocalManagementFilesystemAuthority, FileServiceError> {
+     open_home_filesystem_authority_from_raw(std::env::var_os("HOME").as_deref())
+ }
+ 
+diff --git a/crates/prw-agent/src/local_commands/management_authority.rs b/crates/prw-agent/src/local_commands/management_authority.rs
+index 806bfe3..7599fda 100644
+--- a/crates/prw-agent/src/local_commands/management_authority.rs
++++ b/crates/prw-agent/src/local_commands/management_authority.rs
+@@ -121,7 +121,7 @@ impl LocalManagementLocalPeerAuthority {
+ /// host-root selection API. A later trusted configuration/bootstrap assembly must
+ /// choose the host path before local management dispatch can receive this authority.
+ #[derive(Debug)]
+-pub(crate) struct LocalManagementFilesystemAuthority {
++pub struct LocalManagementFilesystemAuthority {
+     root: AnchoredFileRoot,
+ }
+ 
