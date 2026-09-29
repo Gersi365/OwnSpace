@@ -1,0 +1,232 @@
+diff --git a/apps/desktop/src/ui.rs b/apps/desktop/src/ui.rs
+index 8b18dbf..a42f77e 100644
+--- a/apps/desktop/src/ui.rs
++++ b/apps/desktop/src/ui.rs
+@@ -18,9 +18,7 @@ use sha2::{Digest, Sha256};
+ 
+ use crate::ipc;
+ use crate::local_management_ipc::LocalFileListEntry;
+-use crate::management::{
+-    TerminalPresentation, TerminalPresentationState, UploadPresentation,
+-};
++use crate::management::{TerminalPresentation, TerminalPresentationState, UploadPresentation};
+ use crate::state::{DesktopPresentationState, NavigationDestination};
+ 
+ const REFRESH_BUTTON_IDLE_LABEL: &str = "Refresh status";
+@@ -136,7 +134,10 @@ enum UploadCleanupStatus {
+ 
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+ enum UploadWorkerEvent {
+-    Progress { committed: u64, total: u64 },
++    Progress {
++        committed: u64,
++        total: u64,
++    },
+     Completed,
+     Failed {
+         reason: &'static str,
+@@ -628,7 +629,9 @@ fn hash_upload_source(path: &Path) -> Result<([u8; 32], u64), &'static str> {
+         if total > MAX_TRANSFER_BYTES {
+             return Err("Local source file exceeds the bounded upload size");
+         }
+-        hasher.update(&buffer[..usize::try_from(read).map_err(|_| "Local source length is invalid")?]);
++        hasher.update(
++            &buffer[..usize::try_from(read).map_err(|_| "Local source length is invalid")?],
++        );
+     }
+ 
+     let digest = hasher.finalize();
+@@ -688,11 +691,7 @@ fn send_upload_failure(
+     let _ = sender.send(UploadWorkerEvent::Failed { reason, cleanup });
+ }
+ 
+-fn run_upload_worker(
+-    source: String,
+-    destination: String,
+-    sender: mpsc::Sender<UploadWorkerEvent>,
+-) {
++fn run_upload_worker(source: String, destination: String, sender: mpsc::Sender<UploadWorkerEvent>) {
+     let source_path = PathBuf::from(&source);
+     let (sha256, total_bytes) = match hash_upload_source(&source_path) {
+         Ok(result) => result,
+@@ -731,16 +730,21 @@ fn run_upload_worker(
+         Ok(offset) => offset,
+         Err(_) => {
+             let cleanup = cleanup_failed_upload(&mut upload, &mut session);
+-            send_upload_failure(&sender, "Agent rejected or lost the upload begin acknowledgement", cleanup);
++            send_upload_failure(
++                &sender,
++                "Agent rejected or lost the upload begin acknowledgement",
++                cleanup,
++            );
+             return;
+         }
+     };
+-    if upload
+-        .apply_begin_acknowledgement(begin_offset)
+-        .is_err()
+-    {
++    if upload.apply_begin_acknowledgement(begin_offset).is_err() {
+         let cleanup = cleanup_failed_upload(&mut upload, &mut session);
+-        send_upload_failure(&sender, "Upload begin acknowledgement was not the exact zero offset", cleanup);
++        send_upload_failure(
++            &sender,
++            "Upload begin acknowledgement was not the exact zero offset",
++            cleanup,
++        );
+         return;
+     }
+     if sender
+@@ -772,13 +776,21 @@ fn run_upload_worker(
+         let read = match file.read(&mut buffer[..requested]) {
+             Ok(0) => {
+                 let cleanup = cleanup_failed_upload(&mut upload, &mut session);
+-                send_upload_failure(&sender, "Local source file ended before its hashed length", cleanup);
++                send_upload_failure(
++                    &sender,
++                    "Local source file ended before its hashed length",
++                    cleanup,
++                );
+                 return;
+             }
+             Ok(read) => read,
+             Err(_) => {
+                 let cleanup = cleanup_failed_upload(&mut upload, &mut session);
+-                send_upload_failure(&sender, "Local source file could not be read during upload", cleanup);
++                send_upload_failure(
++                    &sender,
++                    "Local source file could not be read during upload",
++                    cleanup,
++                );
+                 return;
+             }
+         };
+@@ -787,7 +799,11 @@ fn run_upload_worker(
+             Ok(payload) => payload,
+             Err(_) => {
+                 let cleanup = cleanup_failed_upload(&mut upload, &mut session);
+-                send_upload_failure(&sender, "Upload chunk failed local bounds validation", cleanup);
++                send_upload_failure(
++                    &sender,
++                    "Upload chunk failed local bounds validation",
++                    cleanup,
++                );
+                 return;
+             }
+         };
+@@ -795,13 +811,21 @@ fn run_upload_worker(
+             Ok(offset) => offset,
+             Err(_) => {
+                 let cleanup = cleanup_failed_upload(&mut upload, &mut session);
+-                send_upload_failure(&sender, "Agent rejected or lost an upload chunk acknowledgement", cleanup);
++                send_upload_failure(
++                    &sender,
++                    "Agent rejected or lost an upload chunk acknowledgement",
++                    cleanup,
++                );
+                 return;
+             }
+         };
+         if upload.apply_chunk_acknowledgement(committed).is_err() {
+             let cleanup = cleanup_failed_upload(&mut upload, &mut session);
+-            send_upload_failure(&sender, "Upload chunk acknowledgement offset did not match", cleanup);
++            send_upload_failure(
++                &sender,
++                "Upload chunk acknowledgement offset did not match",
++                cleanup,
++            );
+             return;
+         }
+         if sender
+@@ -821,12 +845,20 @@ fn run_upload_worker(
+         Ok(0) => {}
+         Ok(_) => {
+             let cleanup = cleanup_failed_upload(&mut upload, &mut session);
+-            send_upload_failure(&sender, "Local source file changed length during upload", cleanup);
++            send_upload_failure(
++                &sender,
++                "Local source file changed length during upload",
++                cleanup,
++            );
+             return;
+         }
+         Err(_) => {
+             let cleanup = cleanup_failed_upload(&mut upload, &mut session);
+-            send_upload_failure(&sender, "Local source file could not be revalidated", cleanup);
++            send_upload_failure(
++                &sender,
++                "Local source file could not be revalidated",
++                cleanup,
++            );
+             return;
+         }
+     }
+@@ -835,13 +867,21 @@ fn run_upload_worker(
+         Ok(payload) => payload,
+         Err(_) => {
+             let cleanup = cleanup_failed_upload(&mut upload, &mut session);
+-            send_upload_failure(&sender, "Upload could not enter finalization state", cleanup);
++            send_upload_failure(
++                &sender,
++                "Upload could not enter finalization state",
++                cleanup,
++            );
+             return;
+         }
+     };
+     if session.finalize(&finalize_payload).is_err() {
+         let cleanup = cleanup_failed_upload(&mut upload, &mut session);
+-        send_upload_failure(&sender, "Agent did not confirm upload finalization", cleanup);
++        send_upload_failure(
++            &sender,
++            "Agent did not confirm upload finalization",
++            cleanup,
++        );
+         return;
+     }
+     if upload.apply_finalize_acknowledgement().is_err() {
+@@ -890,7 +930,9 @@ fn start_upload(targets: &TransfersPageTargets) {
+     targets.operation_pending.set(true);
+     targets.progress.set_fraction(0.0);
+     targets.progress.set_text(Some("Preparing upload…"));
+-    targets.status.set_text("Hashing local source and preparing bounded upload…");
++    targets
++        .status
++        .set_text("Hashing local source and preparing bounded upload…");
+     render_upload_controls(targets);
+ 
+     let (sender, receiver) = mpsc::channel();
+@@ -1692,12 +1734,12 @@ mod tests {
+         FILES_LIST_BUSY_LABEL, FILES_LIST_IDLE_LABEL, FILES_PATH_INVALID_STATUS,
+         FILES_PATH_UNLOADED_LABEL, FILES_REFRESH_LABEL, FILES_SUBTITLE, MACHINES_SUBTITLE,
+         REFRESH_BUTTON_BUSY_LABEL, REFRESH_BUTTON_IDLE_LABEL, UPLOAD_BUTTON_BUSY_LABEL,
+-        UPLOAD_BUTTON_IDLE_LABEL, UPLOAD_SUBTITLE, activity_snapshot_clipboard_text,
+-        desktop_local_ipc_protocol_text, desktop_version_text, file_list_child_path,
+-        file_list_manual_path_is_canonical, file_list_parent_path, file_list_path_label,
+-        file_list_refresh_enabled, local_endpoint_contract_text, upload_destination_is_valid,
+-        upload_failure_status, upload_progress_fraction, upload_source_path_is_valid,
+-        UploadCleanupStatus,
++        UPLOAD_BUTTON_IDLE_LABEL, UPLOAD_SUBTITLE, UploadCleanupStatus,
++        activity_snapshot_clipboard_text, desktop_local_ipc_protocol_text, desktop_version_text,
++        file_list_child_path, file_list_manual_path_is_canonical, file_list_parent_path,
++        file_list_path_label, file_list_refresh_enabled, local_endpoint_contract_text,
++        upload_destination_is_valid, upload_failure_status, upload_progress_fraction,
++        upload_source_path_is_valid,
+     };
+ 
+     #[test]
+@@ -1863,7 +1905,13 @@ mod tests {
+         assert!(!upload_source_path_is_valid("relative/demo.bin"));
+ 
+         assert!(upload_destination_is_valid("uploads/demo.bin"));
+-        for invalid in ["", "/absolute.bin", "../escape", "uploads/../escape", "uploads//demo.bin"] {
++        for invalid in [
++            "",
++            "/absolute.bin",
++            "../escape",
++            "uploads/../escape",
++            "uploads//demo.bin",
++        ] {
+             assert!(!upload_destination_is_valid(invalid), "{invalid}");
+         }
+     }
