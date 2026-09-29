@@ -998,3 +998,282 @@ index b89ec0c..9f31f16 100644
 +            Capability::FilesWrite,
 +        ] {
 +            assert_eq!(policy.evaluate(capability), Decision::Allow);
++        }
++        for capability in [
++            Capability::PrivateDnsConfigRead,
++            Capability::TerminalOpen,
++            Capability::TerminalExec,
++            Capability::ForwardingCreate,
++            Capability::FilesDelete,
++            Capability::RequesterRendezvousStart,
++            Capability::DeviceManage,
++            Capability::PolicyManage,
++        ] {
++            assert_eq!(policy.evaluate(capability), Decision::Deny);
++        }
++    }
++
+     #[test]
+     fn file_list_home_root_requires_nonempty_absolute_path() {
+         assert!(open_home_filesystem_authority_from_raw(None).is_err());
+@@ -289,6 +544,156 @@ mod tests {
+         }
+     }
+ 
++    #[test]
++    fn bounded_upload_commits_exact_content_and_drains_runtime() {
++        let root = test_root();
++        let filesystem = open_home_filesystem_authority_from_raw(Some(root.as_os_str()))
++            .expect("test filesystem authority opens");
++        let mut runtime = LocalBoundedUploadRuntime::new(&filesystem);
++        let (server, _client) = UnixStream::pair().expect("local pair creates");
++        let connection = AuthenticatedLocalLinuxConnection::try_new(server)
++            .expect("same-UID local pair authenticates");
++        let snapshot = LocalAgentStatusSnapshot::current(LocalAgentRuntimeState::Ready);
++        let payload = b"bounded upload payload";
++        let transfer_id = TransferId::new([0x31; 16]);
++        let plan = UploadPlan::new(
++            transfer_id,
++            RemotePath::parse("uploaded.bin").expect("path"),
++            payload.len() as u64,
++            sha256(payload),
++        )
++        .expect("plan");
++
++        let begin = process_authenticated_linux_agent_status_file_list_upload_management(
++            &request(910, &BridgeCommand::UploadBegin(plan)),
++            &connection,
++            snapshot,
++            &mut runtime,
++        )
++        .expect("begin response builds");
++        assert_eq!(response_offset(&begin), 0);
++        assert!(runtime.is_upload_active());
++
++        let chunk = process_authenticated_linux_agent_status_file_list_upload_management(
++            &request(
++                911,
++                &BridgeCommand::UploadChunk {
++                    transfer_id,
++                    offset: 0,
++                    chunk: payload.to_vec(),
++                },
++            ),
++            &connection,
++            snapshot,
++            &mut runtime,
++        )
++        .expect("chunk response builds");
++        assert_eq!(response_offset(&chunk), payload.len() as u64);
++
++        let finalize = process_authenticated_linux_agent_status_file_list_upload_management(
++            &request(912, &BridgeCommand::UploadFinalize(transfer_id)),
++            &connection,
++            snapshot,
++            &mut runtime,
++        )
++        .expect("finalize response builds");
++        assert_eq!(finalize.payload().as_bytes().get(2), Some(&4));
++        assert!(!runtime.is_upload_active());
++        runtime.finish().expect("runtime drains after finalize");
++        assert_eq!(fs::read(root.join("uploaded.bin")).expect("file reads"), payload);
++        fs::remove_dir_all(root).expect("test root removes");
++    }
++
++    #[test]
++    fn bounded_upload_cleanup_aborts_unfinished_staging_transaction() {
++        let root = test_root();
++        let filesystem = open_home_filesystem_authority_from_raw(Some(root.as_os_str()))
++            .expect("test filesystem authority opens");
++        let mut runtime = LocalBoundedUploadRuntime::new(&filesystem);
++        let (server, _client) = UnixStream::pair().expect("local pair creates");
++        let connection = AuthenticatedLocalLinuxConnection::try_new(server)
++            .expect("same-UID local pair authenticates");
++        let snapshot = LocalAgentStatusSnapshot::current(LocalAgentRuntimeState::Ready);
++        let transfer_id = TransferId::new([0x32; 16]);
++        let plan = UploadPlan::new(
++            transfer_id,
++            RemotePath::parse("unfinished.bin").expect("path"),
++            4,
++            sha256(b"data"),
++        )
++        .expect("plan");
++
++        let begin = process_authenticated_linux_agent_status_file_list_upload_management(
++            &request(913, &BridgeCommand::UploadBegin(plan)),
++            &connection,
++            snapshot,
++            &mut runtime,
++        )
++        .expect("begin response builds");
++        assert_eq!(response_offset(&begin), 0);
++        assert!(runtime.is_upload_active());
++        runtime.finish().expect("unfinished transfer aborts cleanly");
++        assert!(!root.join("unfinished.bin").exists());
++        fs::remove_dir_all(root).expect("test root removes");
++    }
++
++    #[test]
++    fn bounded_upload_command_gate_keeps_adjacent_write_and_download_commands_closed() {
++        let root = test_root();
++        let filesystem = open_home_filesystem_authority_from_raw(Some(root.as_os_str()))
++            .expect("test filesystem authority opens");
++        let mut runtime = LocalBoundedUploadRuntime::new(&filesystem);
++        let (server, _client) = UnixStream::pair().expect("local pair creates");
++        let connection = AuthenticatedLocalLinuxConnection::try_new(server)
++            .expect("same-UID local pair authenticates");
++        let snapshot = LocalAgentStatusSnapshot::current(LocalAgentRuntimeState::Ready);
++        let transfer_id = TransferId::new([0x33; 16]);
++        let resume_plan = UploadPlan::new(
++            transfer_id,
++            RemotePath::parse("resume.bin").expect("path"),
++            1,
++            sha256(b"x"),
++        )
++        .expect("plan");
++
++        for (request_id, command) in [
++            (
++                914,
++                BridgeCommand::FileCreate {
++                    path: RemotePath::parse("create.bin").expect("path"),
++                    contents: b"x".to_vec(),
++                },
++            ),
++            (
++                915,
++                BridgeCommand::UploadResume(resume_plan),
++            ),
++            (
++                916,
++                BridgeCommand::DownloadChunk {
++                    path: RemotePath::parse("missing.bin").expect("path"),
++                    offset: 0,
++                    requested_len: 1,
++                },
++            ),
++        ] {
++            let response = process_authenticated_linux_agent_status_file_list_upload_management(
++                &request(request_id, &command),
++                &connection,
++                snapshot,
++                &mut runtime,
++            )
++            .expect("unsupported response builds");
++            let terminal =
++                validate_terminal_response_frame(&response).expect("response validates");
++            assert_eq!(terminal.status(), LocalAgentResponseStatus::UnsupportedCommand);
++        }
++
++        runtime.finish().expect("runtime remains quiescent");
++        assert!(!root.join("create.bin").exists());
++        fs::remove_dir_all(root).expect("test root removes");
++    }
++
+     #[test]
+     fn agent_status_request_returns_correlated_management_success() {
+         let (server, _client) = UnixStream::pair().expect("local pair creates");
+diff --git a/crates/prw-agent/src/local_commands/management_authority.rs b/crates/prw-agent/src/local_commands/management_authority.rs
+index 86f4b47..806bfe3 100644
+--- a/crates/prw-agent/src/local_commands/management_authority.rs
++++ b/crates/prw-agent/src/local_commands/management_authority.rs
+@@ -121,7 +121,7 @@ impl LocalManagementLocalPeerAuthority {
+ /// host-root selection API. A later trusted configuration/bootstrap assembly must
+ /// choose the host path before local management dispatch can receive this authority.
+ #[derive(Debug)]
+-pub(super) struct LocalManagementFilesystemAuthority {
++pub(crate) struct LocalManagementFilesystemAuthority {
+     root: AnchoredFileRoot,
+ }
+ 
+@@ -133,7 +133,7 @@ impl LocalManagementFilesystemAuthority {
+     /// Returns the file-service root-opening failure without retaining partial
+     /// authority.
+     #[must_use = "opened filesystem authority must be retained to authorize file providers"]
+-    pub(super) fn open_trusted_root(path: &Path) -> Result<Self, FileServiceError> {
++    pub(crate) fn open_trusted_root(path: &Path) -> Result<Self, FileServiceError> {
+         AnchoredFileRoot::open(path).map(|root| Self { root })
+     }
+ 
+diff --git a/crates/prw-agent/src/local_commands/server_connection_state.rs b/crates/prw-agent/src/local_commands/server_connection_state.rs
+index c11f086..977c408 100644
+--- a/crates/prw-agent/src/local_commands/server_connection_state.rs
++++ b/crates/prw-agent/src/local_commands/server_connection_state.rs
+@@ -17,8 +17,11 @@ use super::inbound_state::{
+ };
+ #[cfg(target_os = "linux")]
+ use super::management_agent_status_boundary::{
+-    LocalAgentStatusManagementBoundaryError, process_one_agent_status_management_at_boundary,
++    LocalAgentStatusManagementBoundaryError, process_one_agent_status_file_list_upload_management_at_boundary,
++    process_one_agent_status_management_at_boundary,
+ };
++#[cfg(target_os = "linux")]
++use super::management_agent_status_runtime::LocalBoundedUploadRuntime;
+ use super::private_dns_snapshot::LocalPrivateDnsSnapshot;
+ use super::response_writer::LocalTerminalResponseWriteState;
+ use super::status_snapshot::LocalAgentStatusSnapshot;
+@@ -115,6 +118,55 @@ impl LocalServerConnectionState {
+         )
+         .map_err(LocalAgentStatusManagementServerConnectionError::Transaction)
+     }
++
++    /// Processes one boundary request through the bounded upload management extension.
++    ///
++    /// Aggregate framing/write poison ownership remains unchanged. The supplied runtime is
++    /// connection-scoped and carries only the already-opened `$HOME` transfer authority.
++    #[cfg(target_os = "linux")]
++    #[allow(
++        clippy::too_many_arguments,
++        reason = "authenticated peer, bounded upload state and protocol snapshots remain explicit"
++    )]
++    pub(crate) fn process_one_agent_status_file_list_upload_management_at_boundary<
++        R,
++        W,
++        RE,
++        S,
++    >(
++        &mut self,
++        reader: &mut R,
++        writer: &mut W,
++        connection: &AuthenticatedLocalLinuxConnection<S>,
++        read_evaluator: &RE,
++        status_snapshot: LocalAgentStatusSnapshot,
++        private_dns_snapshot: &LocalPrivateDnsSnapshot,
++        runtime: &mut LocalBoundedUploadRuntime<'_>,
++    ) -> Result<LocalBoundaryRequestResponseOutcome, LocalAgentStatusManagementServerConnectionError>
++    where
++        R: Read,
++        W: Write,
++        RE: PolicyEvaluator + ?Sized,
++    {
++        if let Some(reason) = self.unusable_reason() {
++            return Err(
++                LocalAgentStatusManagementServerConnectionError::ConnectionUnusable(reason),
++            );
++        }
++
++        process_one_agent_status_file_list_upload_management_at_boundary(
++            reader,
++            writer,
++            &mut self.inbound,
++            &mut self.response_write,
++            connection,
++            read_evaluator,
++            status_snapshot,
++            private_dns_snapshot,
++            runtime,
++        )
++        .map_err(LocalAgentStatusManagementServerConnectionError::Transaction)
++    }
+ }
+ 
+ /// Processes one Request through the aggregate server connection state.
+@@ -201,7 +253,7 @@ pub fn process_one_at_boundary_on_server_connection<
+ pub enum LocalAgentStatusManagementServerConnectionError {
+     /// Aggregate state was already unusable before any I/O.
+     ConnectionUnusable(LocalServerConnectionUnusableReason),
+-    /// The fixed `AgentStatus` boundary failed after authoritative state transitions.
++    /// The fixed bounded-management boundary failed after authoritative state transitions.
+     Transaction(LocalAgentStatusManagementBoundaryError),
+ }
+ 
