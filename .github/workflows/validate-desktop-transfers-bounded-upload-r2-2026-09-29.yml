@@ -1,0 +1,168 @@
+name: Ownspace bounded upload Agent runtime validation
+
+on:
+  push:
+    branches:
+      - validation/desktop-transfers-bounded-upload-2026-09-29-r2
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout carrier
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify exact authoritative base and carrier scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=42ca051422d6f21fc499db2b392f12bfed736733
+          test "$(git merge-base HEAD "$base")" = "$base"
+          mapfile -t changed < <(git diff --name-only "$base"..HEAD)
+          test "${#changed[@]}" -eq 2
+          test "${changed[0]}" = ".github/validation/OWNSPACE_AGENT_BOUNDED_UPLOAD_RUNTIME_CANDIDATE_R2_2026-09-29.patch"
+          test "${changed[1]}" = ".github/workflows/validate-desktop-transfers-bounded-upload-r2-2026-09-29.yml"
+
+      - name: Verify exact authoritative Agent baseline
+        shell: python
+        run: |
+          from pathlib import Path
+          import hashlib
+
+          expected = {
+              "crates/prw-agent/src/linux_authenticated_session/management_agent_status.rs": "4a13804d6e548795ea38858fa0988f19226412256d7a70a10cc79655e70e8dce",
+              "crates/prw-agent/src/linux_session_worker.rs": "b63add98495630cb0c1753451614b1ef3aea785f1a0623c72672d5ddc2886ce2",
+              "crates/prw-agent/src/linux_session_worker/management_agent_status.rs": "2f9876e8a90e9c1f832a746105ac5718c0e74b4ea5dca5e473e19727223e2867",
+              "crates/prw-agent/src/local_commands/management_agent_status_boundary.rs": "088a1f0c74db6f38efaa01e7246a4dd67f7289c8cd932a580137c581d08a583e",
+              "crates/prw-agent/src/local_commands/management_agent_status_runtime.rs": "46aa36c73d01d9af174aa1ce8fd2eb7dcaa02ea52efcd3407e54e8b5f3dcac92",
+              "crates/prw-agent/src/local_commands/management_authority.rs": "ee5f88040d91d3e711110ec5d7cc9dbde55fd8e2f8465c0a0b30d306d88ce830",
+              "crates/prw-agent/src/local_commands/server_connection_state.rs": "b9cbae15e53dff8cec0d13cf1a81806021dff35f5295a9a5eac9ebdff0b15c9d",
+          }
+          for path, expected_sha in expected.items():
+              actual = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+              assert actual == expected_sha, (path, actual, expected_sha)
+
+          bootstrap = Path("crates/prw-agent/src/linux_bootstrap.rs").read_text()
+          assert 'NonZeroUsize::new(1).expect("Phase 101 request budget is non-zero")' in bootstrap
+
+      - name: Verify exact candidate patch identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          patch=.github/validation/OWNSPACE_AGENT_BOUNDED_UPLOAD_RUNTIME_CANDIDATE_R2_2026-09-29.patch
+          test "$(sha256sum "$patch" | awk '{print $1}')" = "7d334b99b0dbaf7e8b50134f6780d0191fe4bf7afa88a427fc6021047687b172"
+          test "$(wc -c < "$patch")" = "56134"
+
+      - name: Apply exact candidate patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          patch=.github/validation/OWNSPACE_AGENT_BOUNDED_UPLOAD_RUNTIME_CANDIDATE_R2_2026-09-29.patch
+          git apply --check "$patch"
+          git apply "$patch"
+          git diff --check
+          mapfile -t changed < <(git diff --name-only)
+          expected=(
+            crates/prw-agent/src/linux_authenticated_session/management_agent_status.rs
+            crates/prw-agent/src/linux_session_worker.rs
+            crates/prw-agent/src/linux_session_worker/management_agent_status.rs
+            crates/prw-agent/src/local_commands/management_agent_status_boundary.rs
+            crates/prw-agent/src/local_commands/management_agent_status_runtime.rs
+            crates/prw-agent/src/local_commands/management_authority.rs
+            crates/prw-agent/src/local_commands/server_connection_state.rs
+          )
+          test "${#changed[@]}" -eq "${#expected[@]}"
+          for i in "${!expected[@]}"; do test "${changed[$i]}" = "${expected[$i]}"; done
+
+      - name: Verify exact candidate identities and bounded authority contract
+        shell: python
+        run: |
+          from pathlib import Path
+          import hashlib
+
+          expected = {
+              "crates/prw-agent/src/linux_authenticated_session/management_agent_status.rs": "b9036f0d6b28af72e0550356ec62ea8111f48f7ed10149093eadedcbec35d971",
+              "crates/prw-agent/src/linux_session_worker.rs": "1b0ff4b9e83f3b032345a88963dbc48aeb1e97d61be9572fc66690848e0e5bc4",
+              "crates/prw-agent/src/linux_session_worker/management_agent_status.rs": "b4f338698e61ef66a096d49a57d8be4f6f5836098575729d209eec6cd348c27b",
+              "crates/prw-agent/src/local_commands/management_agent_status_boundary.rs": "239f0f183eb0634406dbf7a72ef9f0f1e05f8705f89efe47d2edb5e89d2d4410",
+              "crates/prw-agent/src/local_commands/management_agent_status_runtime.rs": "adf34bd975246acb1aafe6d02317fb942866e769ff050fa3e2a3eff6a4635290",
+              "crates/prw-agent/src/local_commands/management_authority.rs": "6c5f3a35433b5f10d11d4e912cbba19c7273da964c83473ee473929f568b07f7",
+              "crates/prw-agent/src/local_commands/server_connection_state.rs": "069f5ec6cea555f573eeaed4942ee9e3d565711eba9773fb84e0a5cd21492052",
+          }
+          for path, expected_sha in expected.items():
+              actual = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+              assert actual == expected_sha, (path, actual, expected_sha)
+
+          runtime = Path("crates/prw-agent/src/local_commands/management_agent_status_runtime.rs").read_text()
+          worker = Path("crates/prw-agent/src/linux_session_worker/management_agent_status.rs").read_text()
+          bootstrap = Path("crates/prw-agent/src/linux_bootstrap.rs").read_text()
+
+          assert "files_write: Decision::Allow" in runtime
+          assert "BridgeCommand::UploadBegin" in runtime
+          assert "BridgeCommand::UploadChunk" in runtime
+          assert "BridgeCommand::UploadFinalize" in runtime
+          assert "BridgeCommand::UploadAbort" in runtime
+          assert "BridgeCommand::UploadResume" in runtime
+          assert "LocalAgentResponseStatus::UnsupportedCommand" in runtime
+          assert "LocalBoundedUploadRuntime" in worker
+          assert "MAX_UPLOAD_CONTINUATION_REQUESTS" in worker
+          assert "runtime.finish()" in worker
+          assert 'NonZeroUsize::new(1).expect("Phase 101 request budget is non-zero")' in bootstrap
+          assert "allow_all" not in runtime
+
+      - name: Verify exact reverse and reapply
+        shell: bash
+        run: |
+          set -euo pipefail
+          patch=.github/validation/OWNSPACE_AGENT_BOUNDED_UPLOAD_RUNTIME_CANDIDATE_R2_2026-09-29.patch
+          git apply --reverse --check "$patch"
+          git apply --reverse "$patch"
+          git diff --exit-code -- crates/prw-agent
+          git apply --check "$patch"
+          git apply "$patch"
+          git diff --check
+
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config protobuf-compiler
+
+      - name: Install exact Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
+          rustup default 1.97.1
+          rustc --version
+          cargo --version
+          rustfmt --version
+          cargo clippy -V
+
+      - name: Formatting check
+        run: cargo fmt --all -- --check
+
+      - name: Focused bounded upload tests
+        run: cargo test --locked -p prw-agent bounded_upload
+
+      - name: Focused management runtime tests
+        run: cargo test --locked -p prw-agent management_agent_status
+
+      - name: Agent library tests
+        run: cargo test --locked -p prw-agent --lib
+
+      - name: Agent compile check
+        run: cargo check --locked -p prw-agent --all-targets
+
+      - name: Agent Clippy
+        run: cargo clippy --locked -p prw-agent --all-targets -- -D warnings
+
+      - name: Agent release binary build
+        run: cargo build --locked --release -p prw-agent --bin prw-agent
