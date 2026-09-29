@@ -1,0 +1,183 @@
+﻿name: Ownspace bounded upload Agent runtime validation R4
+
+
+on:
+  push:
+    branches:
+      - validation/desktop-transfers-bounded-upload-2026-09-29-r4
+
+
+permissions:
+  contents: read
+
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout carrier
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+
+      - name: Verify isolated R4 carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=42ca051422d6f21fc499db2b392f12bfed736733
+          delta=.github/validation/OWNSPACE_AGENT_BOUNDED_UPLOAD_RUNTIME_R4_TEST_EXPECTATION_DELTA_2026-09-29.patch
+          test "$(git merge-base HEAD "$base")" = "$base"
+          mapfile -t carrier_changed < <(git diff --name-only "$base"..HEAD)
+          expected_carrier=(
+            .github/validation/OWNSPACE_AGENT_BOUNDED_UPLOAD_RUNTIME_R4_TEST_EXPECTATION_DELTA_2026-09-29.patch
+            .github/workflows/validate-desktop-transfers-bounded-upload-r4-2026-09-29.yml
+          )
+          test "${#carrier_changed[@]}" -eq "${#expected_carrier[@]}"
+          for i in "${!expected_carrier[@]}"; do
+            test "${carrier_changed[$i]}" = "${expected_carrier[$i]}"
+          done
+          test "$(sha256sum "$delta" | awk '{print $1}')" = "a052cd471bc16ff43bd3f1130f670704bd1b865b3013119e1bfec15fef28edb9"
+          test "$(wc -c < "$delta")" = "1585"
+          python3 - "$delta" /tmp/r4-delta.patch <<'PY'
+          import pathlib
+          import sys
+
+
+          source = pathlib.Path(sys.argv[1]).read_bytes()
+          if not source.startswith(b"\xef\xbb\xbf"):
+              raise SystemExit("R4 delta transport is missing the expected UTF-8 BOM")
+          normalized = source[3:].replace(b"\r\n", b"\n")
+          if b"\r" in normalized:
+              raise SystemExit("R4 delta transport contains an unexpected lone CR")
+          if not normalized.endswith(b"\n"):
+              normalized += b"\n"
+          pathlib.Path(sys.argv[2]).write_bytes(normalized)
+          PY
+          test "$(sha256sum /tmp/r4-delta.patch | awk '{print $1}')" = "f6ccb1bff0dc4f3720f4bbc0092c9ba9c0897c4ba8a6ea09e72be06f5a61f9df"
+          test "$(wc -c < /tmp/r4-delta.patch)" = "1558"
+
+
+      - name: Recover exact R2 patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          r2=7a36773800f58c37f31ec81995d30d039eb5f079
+          git cat-file -e "$r2^{commit}"
+          git show "$r2:.github/validation/OWNSPACE_AGENT_BOUNDED_UPLOAD_RUNTIME_CANDIDATE_R2_2026-09-29.patch" > /tmp/r2.patch
+          test "$(sha256sum /tmp/r2.patch | awk '{print $1}')" = "7d334b99b0dbaf7e8b50134f6780d0191fe4bf7afa88a427fc6021047687b172"
+          test "$(wc -c < /tmp/r2.patch)" = "56134"
+          git apply --check /tmp/r2.patch
+          git apply /tmp/r2.patch
+          git diff --check
+
+
+      - name: Install exact Rust validation toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config protobuf-compiler
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
+          rustup default 1.97.1
+          rustc --version
+          cargo --version
+
+
+      - name: Reconstruct exact R3 then apply exact R4 test delta
+        shell: bash
+        run: |
+          set -euo pipefail
+          delta=/tmp/r4-delta.patch
+          cargo fmt --all
+          cargo fmt --all -- --check
+          git diff --check
+
+
+          r3_files=(
+            crates/prw-agent/src/linux_authenticated_session/management_agent_status.rs
+            crates/prw-agent/src/linux_session_worker.rs
+            crates/prw-agent/src/linux_session_worker/management_agent_status.rs
+            crates/prw-agent/src/local_commands/management_agent_status_boundary.rs
+            crates/prw-agent/src/local_commands/management_agent_status_runtime.rs
+            crates/prw-agent/src/local_commands/management_authority.rs
+            crates/prw-agent/src/local_commands/server_connection_state.rs
+          )
+          git diff --binary -- "${r3_files[@]}" > /tmp/r3.patch
+          test "$(sha256sum /tmp/r3.patch | awk '{print $1}')" = "20b1f6897cbf32eaed9696d96af8f3cdc9c70f8f69eef1645ef3e5e959f5ee98"
+          test "$(wc -c < /tmp/r3.patch)" = "55738"
+
+
+          git apply --check "$delta"
+          git apply "$delta"
+          cargo fmt --all -- --check
+          git diff --check
+
+
+          r4_files=(
+            crates/prw-agent/src/linux_authenticated_session/management_agent_status.rs
+            crates/prw-agent/src/linux_runtime_orchestration.rs
+            crates/prw-agent/src/linux_session_worker.rs
+            crates/prw-agent/src/linux_session_worker/management_agent_status.rs
+            crates/prw-agent/src/linux_signal_aware_runtime.rs
+            crates/prw-agent/src/local_commands/management_agent_status_boundary.rs
+            crates/prw-agent/src/local_commands/management_agent_status_runtime.rs
+            crates/prw-agent/src/local_commands/management_authority.rs
+            crates/prw-agent/src/local_commands/server_connection_state.rs
+          )
+          mapfile -t changed < <(git diff --name-only)
+          test "${#changed[@]}" -eq "${#r4_files[@]}"
+          for i in "${!r4_files[@]}"; do
+            test "${changed[$i]}" = "${r4_files[$i]}"
+          done
+
+
+          printf '%s  %s\n' \
+            b9036f0d6b28af72e0550356ec62ea8111f48f7ed10149093eadedcbec35d971 crates/prw-agent/src/linux_authenticated_session/management_agent_status.rs \
+            52251cb286dbe984a91e57bc01c18ccca42e47c586daefe24b28ca21b8e6c355 crates/prw-agent/src/linux_runtime_orchestration.rs \
+            1b0ff4b9e83f3b032345a88963dbc48aeb1e97d61be9572fc66690848e0e5bc4 crates/prw-agent/src/linux_session_worker.rs \
+            65f5cc1f7007bed0140d654614372e42b99a85e03bccbe7054a955a4445b7b5a crates/prw-agent/src/linux_session_worker/management_agent_status.rs \
+            15f1214b0ddbc0e24fd9ff17a949b4985db87cc4a7b0c24e908422004105e641 crates/prw-agent/src/linux_signal_aware_runtime.rs \
+            24f5a6ef322327d87f0a40f037ee2b8fa49321d43f9d4c0e470cac79a7cd45b0 crates/prw-agent/src/local_commands/management_agent_status_boundary.rs \
+            d950ecdc4c839a8a4367a8da28055124635e89f24270e04fe6335fbc168cf0b2 crates/prw-agent/src/local_commands/management_agent_status_runtime.rs \
+            6c5f3a35433b5f10d11d4e912cbba19c7273da964c83473ee473929f568b07f7 crates/prw-agent/src/local_commands/management_authority.rs \
+            90c5e7b00db7bb002896e357dd4f35757c3894f1ec8a0d774d03d1f0a8daaaed crates/prw-agent/src/local_commands/server_connection_state.rs \
+            | sha256sum -c -
+
+
+          git diff --binary -- "${r4_files[@]}" > /tmp/r4.patch
+          test "$(sha256sum /tmp/r4.patch | awk '{print $1}')" = "84856be13fe210dccf7327b18c37a1d6fa03989217f3c684963a0d93be44e91c"
+          test "$(wc -c < /tmp/r4.patch)" = "57296"
+
+
+      - name: Regression test runtime orchestration file-write closure
+        run: cargo test --locked -p prw-agent 'linux_identity::runtime_orchestration::tests::agent_status_worker_selection_denies_file_write_management_command' -- --exact
+
+
+      - name: Regression test signal-aware file-write closure
+        run: cargo test --locked -p prw-agent 'linux_identity::signal_aware_runtime::tests::agent_status_signal_aware_path_denies_file_write_management' -- --exact
+
+
+      - name: Focused bounded upload tests
+        run: cargo test --locked -p prw-agent bounded_upload
+
+
+      - name: Focused management runtime tests
+        run: cargo test --locked -p prw-agent management_agent_status
+
+
+      - name: Agent library tests
+        run: cargo test --locked -p prw-agent --lib
+
+
+      - name: Agent compile check
+        run: cargo check --locked -p prw-agent --all-targets
+
+
+      - name: Agent Clippy
+        run: cargo clippy --locked -p prw-agent --all-targets -- -D warnings
+
+
+      - name: Agent release binary build
+        run: cargo build --locked --release -p prw-agent --bin prw-agent
