@@ -1,0 +1,114 @@
+name: Ownspace Desktop monospace CSS-class source-of-truth validation
+
+on:
+  push:
+    branches:
+      - validation/desktop-monospace-css-class-source-of-truth-2026-09-29
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      BASE_SHA: 279bc1f09decb3af7e219940b1e1d72fe7941d54
+      BASE_UI_SHA256: b76d3dce0bbbf09895618ae3d69836142b1398fa8fe62c98a9a7ececc1194d61
+      PATCH_PATH: .ownspace-validation/OWNSPACE_DESKTOP_MONOSPACE_CSS_CLASS_SOURCE_OF_TRUTH_CANDIDATE_2026-09-29.patch
+      PATCH_SHA256: 55128084d4850107727a172bebf822ea841bf381cc9d35601358f81819fda0f1
+      CANDIDATE_UI_SHA256: 9b24b3e93b8887f37adb3700ca14887b857a3daa1dbb4e860127512a44698e8d
+      EXPECTED_BRANCH: validation/desktop-monospace-css-class-source-of-truth-2026-09-29
+      EXPECTED_WORKFLOW: .github/workflows/validate-desktop-monospace-css-class-2026-09-29.yml
+
+    steps:
+      - name: Checkout carrier
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify exact authoritative base and carrier scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = "$EXPECTED_BRANCH"
+          test "$(git rev-parse HEAD~2)" = "$BASE_SHA"
+          test "$(git merge-base "$BASE_SHA" HEAD)" = "$BASE_SHA"
+          mapfile -t changed < <(git diff --name-only "$BASE_SHA"...HEAD | sort)
+          expected=(
+            "$EXPECTED_WORKFLOW"
+            "$PATCH_PATH"
+          )
+          mapfile -t expected_sorted < <(printf '%s\n' "${expected[@]}" | sort)
+          test "${#changed[@]}" -eq 2
+          diff -u <(printf '%s\n' "${expected_sorted[@]}") <(printf '%s\n' "${changed[@]}")
+
+      - name: Verify exact authoritative Desktop baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(sha256sum apps/desktop/src/ui.rs | awk '{print $1}')" = "$BASE_UI_SHA256"
+
+      - name: Verify exact candidate patch identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(sha256sum "$PATCH_PATH" | awk '{print $1}')" = "$PATCH_SHA256"
+          git apply --check "$PATCH_PATH"
+
+      - name: Apply exact candidate patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply "$PATCH_PATH"
+          test "$(sha256sum apps/desktop/src/ui.rs | awk '{print $1}')" = "$CANDIDATE_UI_SHA256"
+
+      - name: Verify bounded source contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("apps/desktop/src/ui.rs")
+          s = p.read_text()
+          assert s.count('const MONOSPACE_CSS_CLASS: &str = "monospace";') == 1
+          assert s.count('add_css_class(MONOSPACE_CSS_CLASS)') == 5
+          assert s.count('add_css_class("monospace")') == 0
+          assert s.count('const HEADING_CSS_CLASS: &str = "heading";') == 1
+          assert s.count('add_css_class(HEADING_CSS_CLASS)') == 5
+          assert s.count('const PAGE_TITLE_CSS_CLASS: &str = "title-1";') == 1
+          assert s.count('const TITLE_3_CSS_CLASS: &str = "title-3";') == 1
+          assert s.count('const DIM_LABEL_CSS_CLASS: &str = "dim-label";') == 1
+          assert s.count('const PAGE_OUTER_MARGIN: i32 = 32;') == 1
+          assert s.count('const WORKER_RESULT_POLL_INTERVAL: Duration = Duration::from_millis(75);') == 1
+          PY
+          test "$(git diff --name-only "$BASE_SHA" -- apps/desktop/src/ui.rs)" = "apps/desktop/src/ui.rs"
+          git diff --check
+
+      - name: Verify exact reverse and reapply
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply --reverse "$PATCH_PATH"
+          test "$(sha256sum apps/desktop/src/ui.rs | awk '{print $1}')" = "$BASE_UI_SHA256"
+          git apply "$PATCH_PATH"
+          test "$(sha256sum apps/desktop/src/ui.rs | awk '{print $1}')" = "$CANDIDATE_UI_SHA256"
+
+      - name: Install native build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y pkg-config protobuf-compiler libgtk-4-dev libadwaita-1-dev
+
+      - name: Formatting check
+        run: cargo fmt --all -- --check
+
+      - name: Desktop tests
+        run: cargo test --locked -p prw-desktop
+
+      - name: Desktop compile check
+        run: cargo check --locked -p prw-desktop --all-targets
+
+      - name: Desktop Clippy
+        run: cargo clippy --locked -p prw-desktop --all-targets -- -D warnings
