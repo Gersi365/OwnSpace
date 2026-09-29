@@ -1,0 +1,306 @@
+name: Ownspace Agent Debian package validation
+
+on:
+  push:
+    branches:
+      - validation/agent-deb-package-2026-09-29
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout carrier
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify exact authoritative base and carrier scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_base='e76a81acea47dd362e7c383b723de99f93875409'
+          git cat-file -e "$expected_base^{commit}"
+          merge_base=$(git merge-base HEAD "$expected_base")
+          test "$merge_base" = "$expected_base"
+          mapfile -t changed < <(git diff --name-only "$expected_base"..HEAD)
+          test "${#changed[@]}" -eq 1
+          test "${changed[0]}" = '.github/workflows/validate-agent-deb-package-2026-09-29.yml'
+
+      - name: Install native build and package dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config protobuf-compiler dpkg-dev binutils file
+
+      - name: Install exact Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
+          rustup default 1.97.1
+          rustc --version
+          cargo --version
+          rustfmt --version
+          cargo clippy -V
+
+      - name: Verify locked metadata and package version
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo metadata --locked --no-deps --format-version 1 > /tmp/ownspace-cargo-metadata.json
+          test -s /tmp/ownspace-cargo-metadata.json
+          version=$(
+            python3 - <<'PY'
+          import json
+          with open('/tmp/ownspace-cargo-metadata.json', encoding='utf-8') as fh:
+              data = json.load(fh)
+          matches = [p['version'] for p in data['packages'] if p['name'] == 'prw-agent']
+          assert matches == ['0.1.0'], matches
+          print(matches[0])
+          PY
+          )
+          test "$version" = '0.1.0'
+          test "$(dpkg --print-architecture)" = 'amd64'
+
+      - name: Formatting check
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check
+
+      - name: Focused Agent package tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked \
+            -p prw-agent \
+            -p prw-agent-systemd-orchestration \
+            -p prw-device-identity-provisioning
+
+      - name: Focused Agent package Clippy
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo clippy --locked \
+            -p prw-agent \
+            -p prw-agent-systemd-orchestration \
+            -p prw-device-identity-provisioning \
+            --all-targets -- -D warnings
+
+      - name: Build packaged release binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked --release -p prw-agent --bin prw-agent
+          cargo build --locked --release -p prw-agent-systemd-orchestration --bin prw-agent-configure
+          cargo build --locked --release -p prw-device-identity-provisioning --bin prw-device-identity-provision
+          for f in \
+            target/release/prw-agent \
+            target/release/prw-agent-configure \
+            target/release/prw-device-identity-provision
+          do
+            test -x "$f"
+            file "$f" | grep -F 'ELF 64-bit LSB pie executable, x86-64'
+            readelf -h "$f" | grep -F 'Machine:' | grep -F 'Advanced Micro Devices X86-64'
+            ! ldd "$f" | grep -F 'not found'
+          done
+
+      - name: Validate dynamic dependency allowlist
+        shell: bash
+        run: |
+          set -euo pipefail
+          allowed=/tmp/allowed-sonames
+          cat > "$allowed" <<'EOF'
+          ld-linux-x86-64.so.2
+          libc.so.6
+          libgcc_s.so.1
+          libm.so.6
+          linux-vdso.so.1
+          EOF
+          sort -u -o "$allowed" "$allowed"
+
+          actual=/tmp/actual-sonames
+          : > "$actual"
+          for f in \
+            target/release/prw-agent \
+            target/release/prw-agent-configure \
+            target/release/prw-device-identity-provision
+          do
+            ldd "$f" | awk '
+              /=>/ { print $1 }
+              /^[[:space:]]*\/.*ld-linux/ {
+                n=$1
+                sub(/^.*\//, "", n)
+                print n
+              }
+              /linux-vdso/ { print $1 }
+            ' >> "$actual"
+          done
+          sort -u -o "$actual" "$actual"
+          diff -u "$allowed" "$actual"
+
+      - name: Assemble Debian package root
+        shell: bash
+        run: |
+          set -euo pipefail
+          root=out/ownspace-agent-root
+          rm -rf out
+          install -d -m 0755 \
+            "$root/DEBIAN" \
+            "$root/usr/lib/private-remote-workspace" \
+            "$root/usr/lib/systemd/user" \
+            "$root/usr/share/doc/ownspace-agent"
+
+          install -m 0755 target/release/prw-agent \
+            "$root/usr/lib/private-remote-workspace/prw-agent"
+          install -m 0755 target/release/prw-agent-configure \
+            "$root/usr/lib/private-remote-workspace/prw-agent-configure"
+          install -m 0755 target/release/prw-device-identity-provision \
+            "$root/usr/lib/private-remote-workspace/prw-device-identity-provision"
+          install -m 0644 packaging/systemd/prw-agent.service \
+            "$root/usr/lib/systemd/user/prw-agent.service"
+
+          cat > "$root/usr/share/doc/ownspace-agent/BUILD_IDENTITY.txt" <<'EOF'
+          package=ownspace-agent
+          version=0.1.0
+          architecture=amd64
+          source_main=e76a81acea47dd362e7c383b723de99f93875409
+          source_manifest_sha256=1c6a7924c7bf54fd5b231a66fe289919c9c7e775d48c753f965f39990c644976
+          source_archive_sha256=c9fed4ca890f9e4dd99b10bd530e9396f85a396e9046f02de19848e839860e1e
+          prerequisite_release_readiness_run=36537862650
+          rust_toolchain=1.97.1
+          package_intended_use=validation
+          service_activation=not_performed
+          EOF
+          chmod 0644 "$root/usr/share/doc/ownspace-agent/BUILD_IDENTITY.txt"
+
+          cat > "$root/DEBIAN/control" <<'EOF'
+          Package: ownspace-agent
+          Version: 0.1.0
+          Section: admin
+          Priority: optional
+          Architecture: amd64
+          Maintainer: Ownspace
+          Depends: libc6, libgcc-s1
+          Description: Ownspace Agent
+           Standalone Ownspace Ubuntu agent and administrative packaging helpers.
+          EOF
+          chmod 0644 "$root/DEBIAN/control"
+
+          test ! -e "$root/DEBIAN/preinst"
+          test ! -e "$root/DEBIAN/postinst"
+          test ! -e "$root/DEBIAN/prerm"
+          test ! -e "$root/DEBIAN/postrm"
+          test ! -e "$root/DEBIAN/triggers"
+
+      - name: Build deterministic Debian package
+        shell: bash
+        run: |
+          set -euo pipefail
+          root=out/ownspace-agent-root
+          deb=out/ownspace-agent_0.1.0_amd64.deb
+          export SOURCE_DATE_EPOCH=$(git show -s --format=%ct e76a81acea47dd362e7c383b723de99f93875409)
+          find "$root" -print0 | xargs -0 touch --no-dereference --date="@$SOURCE_DATE_EPOCH"
+          dpkg-deb --root-owner-group --build "$root" "$deb"
+          test -s "$deb"
+          sha256sum "$deb"
+
+      - name: Validate Debian metadata and control archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          deb=out/ownspace-agent_0.1.0_amd64.deb
+          test "$(dpkg-deb -f "$deb" Package)" = 'ownspace-agent'
+          test "$(dpkg-deb -f "$deb" Version)" = '0.1.0'
+          test "$(dpkg-deb -f "$deb" Architecture)" = 'amd64'
+          test "$(dpkg-deb -f "$deb" Maintainer)" = 'Ownspace'
+          test "$(dpkg-deb -f "$deb" Depends)" = 'libc6, libgcc-s1'
+          test "$(dpkg-deb -f "$deb" Description | head -n1)" = 'Ownspace Agent'
+
+          mapfile -t control_files < <(
+            dpkg-deb --ctrl-tarfile "$deb" |
+              tar -tf - |
+              sed 's#^\./##' |
+              grep -v '^$' |
+              grep -v '/$' |
+              sort
+          )
+          test "${#control_files[@]}" -eq 1
+          test "${control_files[0]}" = 'control'
+
+      - name: Validate disposable-root package extraction
+        shell: bash
+        run: |
+          set -euo pipefail
+          deb=out/ownspace-agent_0.1.0_amd64.deb
+          root=$(mktemp -d)
+          trap 'rm -rf "$root"' EXIT
+          dpkg-deb -x "$deb" "$root"
+
+          mapfile -t files < <(cd "$root" && find . -type f -printf '%P\n' | sort)
+          expected=(
+            'usr/lib/private-remote-workspace/prw-agent'
+            'usr/lib/private-remote-workspace/prw-agent-configure'
+            'usr/lib/private-remote-workspace/prw-device-identity-provision'
+            'usr/lib/systemd/user/prw-agent.service'
+            'usr/share/doc/ownspace-agent/BUILD_IDENTITY.txt'
+          )
+          mapfile -t expected_sorted < <(printf '%s\n' "${expected[@]}" | sort)
+          test "${files[*]}" = "${expected_sorted[*]}"
+
+          cmp -s target/release/prw-agent \
+            "$root/usr/lib/private-remote-workspace/prw-agent"
+          cmp -s target/release/prw-agent-configure \
+            "$root/usr/lib/private-remote-workspace/prw-agent-configure"
+          cmp -s target/release/prw-device-identity-provision \
+            "$root/usr/lib/private-remote-workspace/prw-device-identity-provision"
+          cmp -s packaging/systemd/prw-agent.service \
+            "$root/usr/lib/systemd/user/prw-agent.service"
+
+          test "$(stat -c '%a' "$root/usr/lib/private-remote-workspace/prw-agent")" = '755'
+          test "$(stat -c '%a' "$root/usr/lib/private-remote-workspace/prw-agent-configure")" = '755'
+          test "$(stat -c '%a' "$root/usr/lib/private-remote-workspace/prw-device-identity-provision")" = '755'
+          test "$(stat -c '%a' "$root/usr/lib/systemd/user/prw-agent.service")" = '644'
+          test "$(stat -c '%a' "$root/usr/share/doc/ownspace-agent/BUILD_IDENTITY.txt")" = '644'
+
+          grep -Fx 'ExecStart=/usr/lib/private-remote-workspace/prw-agent' \
+            "$root/usr/lib/systemd/user/prw-agent.service"
+          grep -Fx 'Description=Ownspace Agent' \
+            "$root/usr/lib/systemd/user/prw-agent.service"
+
+      - name: Assemble Debian validation evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out/evidence
+          cp out/ownspace-agent_0.1.0_amd64.deb out/evidence/
+          cp out/ownspace-agent-root/usr/share/doc/ownspace-agent/BUILD_IDENTITY.txt \
+            out/evidence/DEB_BUILD_IDENTITY.txt
+          {
+            sha256sum out/ownspace-agent_0.1.0_amd64.deb
+            echo
+            dpkg-deb -I out/ownspace-agent_0.1.0_amd64.deb
+            echo
+            dpkg-deb -c out/ownspace-agent_0.1.0_amd64.deb
+          } > out/evidence/DEB_VALIDATION.txt
+          (
+            cd out/evidence
+            find . -type f ! -name 'DEB_SHA256SUMS.txt' -print0 |
+              sort -z |
+              xargs -0 sha256sum
+          ) > out/evidence/DEB_SHA256SUMS.txt
+          (cd out/evidence && sha256sum -c DEB_SHA256SUMS.txt)
+
+      - name: Upload validated Debian package candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: ownspace-agent-deb-validation
+          path: out/evidence/
+          if-no-files-found: error
+          retention-days: 7
