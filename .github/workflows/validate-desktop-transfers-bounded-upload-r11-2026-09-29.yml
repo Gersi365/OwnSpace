@@ -1,9 +1,9 @@
-name: Ownspace bounded upload Agent plus Desktop validation R10
+name: Ownspace bounded upload Agent plus Desktop validation R11
 
 on:
   push:
     branches:
-      - validation/desktop-transfers-bounded-upload-2026-09-29-r10
+      - validation/desktop-transfers-bounded-upload-2026-09-29-r11
 
 permissions:
   contents: read
@@ -14,12 +14,12 @@ jobs:
     timeout-minutes: 45
     env:
       BASE_SHA: 42ca051422d6f21fc499db2b392f12bfed736733
-      EXPECTED_BRANCH: validation/desktop-transfers-bounded-upload-2026-09-29-r9
+      EXPECTED_BRANCH: validation/desktop-transfers-bounded-upload-2026-09-29-r11
       R7_DELTA: .github/validation/OWNSPACE_AGENT_BOUNDED_UPLOAD_RUNTIME_R7_CLIPPY_FORMAT_DELTA_2026-09-29.patch
       DESKTOP_R8_DELTA: .github/validation/OWNSPACE_DESKTOP_TRANSFERS_BOUNDED_UPLOAD_R8_CONNECTION_SESSION_DELTA_2026-09-29.patch
       DESKTOP_R9_FORMAT_DELTA: .github/validation/OWNSPACE_DESKTOP_TRANSFERS_BOUNDED_UPLOAD_R9_RUSTFMT_DELTA_2026-09-29.patch
       DESKTOP_R10_IPC_DELTA: .github/validation/OWNSPACE_DESKTOP_TRANSFERS_BOUNDED_UPLOAD_R10_TERMINAL_HELPER_DELTA_2026-09-29.patch
-      EXPECTED_WORKFLOW: .github/workflows/validate-desktop-transfers-bounded-upload-r10-2026-09-29.yml
+      EXPECTED_WORKFLOW: .github/workflows/validate-desktop-transfers-bounded-upload-r11-2026-09-29.yml
       DESKTOP_R1_COMMIT: 3288b82f7415f3dca08b8cf9d46abae4b5d40a13
 
     steps:
@@ -28,13 +28,13 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Verify isolated R10 carrier
+      - name: Verify isolated R11 carrier
         shell: bash
         run: |
           set -euo pipefail
           test "$GITHUB_REF_NAME" = "$EXPECTED_BRANCH"
           test "$(git merge-base "$BASE_SHA" HEAD)" = "$BASE_SHA"
-          test "$(git rev-list --count "$BASE_SHA"..HEAD)" -eq 5
+          test "$(git rev-list --count "$BASE_SHA"..HEAD)" -eq 6
           mapfile -t changed < <(git diff --name-only "$BASE_SHA"...HEAD | sort)
           expected=("$R7_DELTA" "$DESKTOP_R8_DELTA" "$DESKTOP_R9_FORMAT_DELTA" "$DESKTOP_R10_IPC_DELTA" "$EXPECTED_WORKFLOW")
           mapfile -t expected_sorted < <(printf '%s\n' "${expected[@]}" | sort)
