@@ -1,0 +1,310 @@
+name: Ownspace bounded upload Agent plus Desktop validation R9
+
+on:
+  push:
+    branches:
+      - validation/desktop-transfers-bounded-upload-2026-09-29-r9
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      BASE_SHA: 42ca051422d6f21fc499db2b392f12bfed736733
+      EXPECTED_BRANCH: validation/desktop-transfers-bounded-upload-2026-09-29-r9
+      R7_DELTA: .github/validation/OWNSPACE_AGENT_BOUNDED_UPLOAD_RUNTIME_R7_CLIPPY_FORMAT_DELTA_2026-09-29.patch
+      DESKTOP_R8_DELTA: .github/validation/OWNSPACE_DESKTOP_TRANSFERS_BOUNDED_UPLOAD_R8_CONNECTION_SESSION_DELTA_2026-09-29.patch
+      DESKTOP_R9_FORMAT_DELTA: .github/validation/OWNSPACE_DESKTOP_TRANSFERS_BOUNDED_UPLOAD_R9_RUSTFMT_DELTA_2026-09-29.patch
+      EXPECTED_WORKFLOW: .github/workflows/validate-desktop-transfers-bounded-upload-r9-2026-09-29.yml
+      DESKTOP_R1_COMMIT: 3288b82f7415f3dca08b8cf9d46abae4b5d40a13
+
+    steps:
+      - name: Checkout carrier
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify isolated R9 carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = "$EXPECTED_BRANCH"
+          test "$(git merge-base "$BASE_SHA" HEAD)" = "$BASE_SHA"
+          test "$(git rev-list --count "$BASE_SHA"..HEAD)" -eq 4
+          mapfile -t changed < <(git diff --name-only "$BASE_SHA"...HEAD | sort)
+          expected=("$R7_DELTA" "$DESKTOP_R8_DELTA" "$DESKTOP_R9_FORMAT_DELTA" "$EXPECTED_WORKFLOW")
+          mapfile -t expected_sorted < <(printf '%s\n' "${expected[@]}" | sort)
+          test "${#changed[@]}" -eq 4
+          diff -u <(printf '%s\n' "${expected_sorted[@]}") <(printf '%s\n' "${changed[@]}")
+          test "$(sha256sum "$R7_DELTA" | awk '{print $1}')" = "ceac1754cde06855a18ccc1b74351fdf13178c1772f989fcf2bb068c5909d8d8"
+          test "$(wc -c < "$R7_DELTA")" = "7450"
+          test "$(sha256sum "$DESKTOP_R8_DELTA" | awk '{print $1}')" = "9d34f38b5a5597bbdc93c6cbb8e6504ea7afc36f3e7edaf80ceb9eab672f663c"
+          test "$(wc -c < "$DESKTOP_R8_DELTA")" = "13933"
+          test "$(sha256sum "$DESKTOP_R9_FORMAT_DELTA" | awk '{print $1}')" = "101267305bdbe9465c5fe2079bea5f4dad17dfc8baf1dfac0550dc5e39eb5345"
+          test "$(wc -c < "$DESKTOP_R9_FORMAT_DELTA")" = "9641"
+
+      - name: Recover exact R2 and R5 Agent carriers
+        shell: bash
+        run: |
+          set -euo pipefail
+          r2=7a36773800f58c37f31ec81995d30d039eb5f079
+          r5=e318a4303838a16f700345eae1b1917b5d79a22f
+          git cat-file -e "$r2^{commit}"
+          git cat-file -e "$r5^{commit}"
+          git show "$r2:.github/validation/OWNSPACE_AGENT_BOUNDED_UPLOAD_RUNTIME_CANDIDATE_R2_2026-09-29.patch" > /tmp/r2.patch
+          test "$(sha256sum /tmp/r2.patch | awk '{print $1}')" = "7d334b99b0dbaf7e8b50134f6780d0191fe4bf7afa88a427fc6021047687b172"
+          test "$(wc -c < /tmp/r2.patch)" = "56134"
+          git show "$r5:.github/validation/OWNSPACE_AGENT_BOUNDED_UPLOAD_RUNTIME_R5_TEST_EXPECTATION_DELTA_2026-09-29.patch" > /tmp/r5-transport.patch
+          test "$(sha256sum /tmp/r5-transport.patch | awk '{print $1}')" = "fb776b4f64ddae0aa365cfb8236f04e22e745cc712f08d98e63269cfc07478a4"
+          test "$(wc -c < /tmp/r5-transport.patch)" = "1727"
+          python3 - /tmp/r5-transport.patch /tmp/r5.patch <<'PY'
+          import pathlib
+          import sys
+          source = pathlib.Path(sys.argv[1]).read_bytes()
+          if not source.startswith(b"\xef\xbb\xbf"):
+              raise SystemExit("R5 delta transport is missing the expected UTF-8 BOM")
+          normalized = source[3:].replace(b"\r\n", b"\n")
+          if b"\r" in normalized:
+              raise SystemExit("R5 delta transport contains an unexpected lone CR")
+          if not normalized.endswith(b"\n"):
+              normalized += b"\n"
+          pathlib.Path(sys.argv[2]).write_bytes(normalized)
+          PY
+          test "$(sha256sum /tmp/r5.patch | awk '{print $1}')" = "1138037aa7432e252937abfda8a8924f39be0577d861760bd5202565a7b5e0a5"
+          test "$(wc -c < /tmp/r5.patch)" = "1694"
+          git apply --check /tmp/r2.patch
+          git apply /tmp/r2.patch
+          git diff --check
+
+      - name: Install exact Rust and native Desktop validation dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config protobuf-compiler libgtk-4-dev libadwaita-1-dev
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
+          rustup default 1.97.1
+          rustc --version
+          cargo --version
+
+      - name: Reconstruct exact validated Agent R7
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          cargo fmt --all -- --check
+          git diff --check
+          r3_files=(
+            crates/prw-agent/src/linux_authenticated_session/management_agent_status.rs
+            crates/prw-agent/src/linux_session_worker.rs
+            crates/prw-agent/src/linux_session_worker/management_agent_status.rs
+            crates/prw-agent/src/local_commands/management_agent_status_boundary.rs
+            crates/prw-agent/src/local_commands/management_agent_status_runtime.rs
+            crates/prw-agent/src/local_commands/management_authority.rs
+            crates/prw-agent/src/local_commands/server_connection_state.rs
+          )
+          git diff --binary -- "${r3_files[@]}" > /tmp/r3.patch
+          test "$(sha256sum /tmp/r3.patch | awk '{print $1}')" = "20b1f6897cbf32eaed9696d96af8f3cdc9c70f8f69eef1645ef3e5e959f5ee98"
+          test "$(wc -c < /tmp/r3.patch)" = "55738"
+
+          git apply --check /tmp/r5.patch
+          git apply /tmp/r5.patch
+          cargo fmt --all -- --check
+          git diff --check
+          r7_files=(
+            crates/prw-agent/src/linux_authenticated_session/management_agent_status.rs
+            crates/prw-agent/src/linux_runtime_orchestration.rs
+            crates/prw-agent/src/linux_session_worker.rs
+            crates/prw-agent/src/linux_session_worker/management_agent_status.rs
+            crates/prw-agent/src/linux_signal_aware_runtime.rs
+            crates/prw-agent/src/local_commands/management_agent_status_boundary.rs
+            crates/prw-agent/src/local_commands/management_agent_status_runtime.rs
+            crates/prw-agent/src/local_commands/management_authority.rs
+            crates/prw-agent/src/local_commands/server_connection_state.rs
+          )
+          git apply --check "$R7_DELTA"
+          git apply "$R7_DELTA"
+          cargo fmt --all -- --check
+          git diff --check
+          printf '%s  %s\n' \
+            b9036f0d6b28af72e0550356ec62ea8111f48f7ed10149093eadedcbec35d971 crates/prw-agent/src/linux_authenticated_session/management_agent_status.rs \
+            758a24374d27b14e923d8aa1ba256cc971637bcb6946f25cc7062d3357423de4 crates/prw-agent/src/linux_runtime_orchestration.rs \
+            1b0ff4b9e83f3b032345a88963dbc48aeb1e97d61be9572fc66690848e0e5bc4 crates/prw-agent/src/linux_session_worker.rs \
+            a27236ddfda23a4b231b4ebd4acfad3bacd223665920d63abcdf096e9532414a crates/prw-agent/src/linux_session_worker/management_agent_status.rs \
+            953a3a4a3dba38e30036a958a7edcc40578bb82463ddf960b356f60cea444ef2 crates/prw-agent/src/linux_signal_aware_runtime.rs \
+            1374d474236858fb8932d94e15ce157c606a1691df7ca103331e46bbc9a9aecd crates/prw-agent/src/local_commands/management_agent_status_boundary.rs \
+            0757a39db6ebff114fb5648ae3bebda99db67f11a62735f69d894697c884c20a crates/prw-agent/src/local_commands/management_agent_status_runtime.rs \
+            a8627eefefd2ad201e527172801bfca67b5379187d4b6590a6a363a831be4279 crates/prw-agent/src/local_commands/management_authority.rs \
+            90c5e7b00db7bb002896e357dd4f35757c3894f1ec8a0d774d03d1f0a8daaaed crates/prw-agent/src/local_commands/server_connection_state.rs \
+            | sha256sum -c -
+          git diff --binary -- "${r7_files[@]}" > /tmp/r7-combined.patch
+          test "$(sha256sum /tmp/r7-combined.patch | awk '{print $1}')" = "e481cb3ddd40bd531575b12330e91e7de5c81998657556f19709f0e82ada31a0"
+          test "$(wc -c < /tmp/r7-combined.patch)" = "57324"
+
+      - name: Recover exact approved Desktop candidate and apply R8 plus R9 corrections
+        shell: bash
+        run: |
+          set -euo pipefail
+          git cat-file -e "$DESKTOP_R1_COMMIT^{commit}"
+          desktop_files=(
+            Cargo.lock
+            apps/desktop/Cargo.toml
+            apps/desktop/README.md
+            apps/desktop/src/management.rs
+            apps/desktop/src/ipc.rs
+            apps/desktop/src/ui.rs
+          )
+          for path in "${desktop_files[@]}"; do
+            git show "$DESKTOP_R1_COMMIT:$path" > "$path"
+          done
+          printf '%s  %s\n' \
+            3fbd3cb723facd41389055a3d7e64caa27882265ed1f6aa2246c78fed6f59210 Cargo.lock \
+            ef212ff7d1f09f805f7ba8d6f826dbf6667d55d41622a45e86deace71d3217f5 apps/desktop/Cargo.toml \
+            64eb5fd2e82302674bdc0534c9b1df889bedbf49355cd87e7a4756f1b5f4acea apps/desktop/README.md \
+            d2a3d162769d826e91156c1e26ca067c5a1b2bff9297e87b8e1c123fc4875455 apps/desktop/src/management.rs \
+            5313e83574a4592ce5f931e27cbd444f7a1896d77148e5b4084d689574d4632d apps/desktop/src/ipc.rs \
+            722b1359362da6e149a1fe18855f516137934a73cf72f2779e0273bc3a29c2d7 apps/desktop/src/ui.rs \
+            | sha256sum -c -
+          git apply --check "$DESKTOP_R8_DELTA"
+          git apply "$DESKTOP_R8_DELTA"
+          git diff --check
+          printf '%s  %s\n' \
+            3fbd3cb723facd41389055a3d7e64caa27882265ed1f6aa2246c78fed6f59210 Cargo.lock \
+            ef212ff7d1f09f805f7ba8d6f826dbf6667d55d41622a45e86deace71d3217f5 apps/desktop/Cargo.toml \
+            64eb5fd2e82302674bdc0534c9b1df889bedbf49355cd87e7a4756f1b5f4acea apps/desktop/README.md \
+            d2a3d162769d826e91156c1e26ca067c5a1b2bff9297e87b8e1c123fc4875455 apps/desktop/src/management.rs \
+            6aeb5137a98d49eeef2ff787d4f54615fa23754c8ef405a0b0c438269740dd5b apps/desktop/src/ipc.rs \
+            2aa9372d1b3469fd9780200defb4241e378e7a14a408bcc4d5607f711e343cee apps/desktop/src/ui.rs \
+            | sha256sum -c -
+          git apply --check "$DESKTOP_R9_FORMAT_DELTA"
+          git apply "$DESKTOP_R9_FORMAT_DELTA"
+          git diff --check
+          printf '%s  %s\n' \
+            3fbd3cb723facd41389055a3d7e64caa27882265ed1f6aa2246c78fed6f59210 Cargo.lock \
+            ef212ff7d1f09f805f7ba8d6f826dbf6667d55d41622a45e86deace71d3217f5 apps/desktop/Cargo.toml \
+            64eb5fd2e82302674bdc0534c9b1df889bedbf49355cd87e7a4756f1b5f4acea apps/desktop/README.md \
+            d2a3d162769d826e91156c1e26ca067c5a1b2bff9297e87b8e1c123fc4875455 apps/desktop/src/management.rs \
+            6aeb5137a98d49eeef2ff787d4f54615fa23754c8ef405a0b0c438269740dd5b apps/desktop/src/ipc.rs \
+            9d7f6674f6a8315842f225f9fe64531a1f1123451d5f588d1333b89a7c8b4587 apps/desktop/src/ui.rs \
+            | sha256sum -c -
+
+      - name: Verify exact combined source scope and bounded capability contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t changed < <(git diff --name-only | sort)
+          expected=(
+            Cargo.lock
+            apps/desktop/Cargo.toml
+            apps/desktop/README.md
+            apps/desktop/src/ipc.rs
+            apps/desktop/src/management.rs
+            apps/desktop/src/ui.rs
+            crates/prw-agent/src/linux_authenticated_session/management_agent_status.rs
+            crates/prw-agent/src/linux_runtime_orchestration.rs
+            crates/prw-agent/src/linux_session_worker.rs
+            crates/prw-agent/src/linux_session_worker/management_agent_status.rs
+            crates/prw-agent/src/linux_signal_aware_runtime.rs
+            crates/prw-agent/src/local_commands/management_agent_status_boundary.rs
+            crates/prw-agent/src/local_commands/management_agent_status_runtime.rs
+            crates/prw-agent/src/local_commands/management_authority.rs
+            crates/prw-agent/src/local_commands/server_connection_state.rs
+          )
+          mapfile -t expected_sorted < <(printf '%s\n' "${expected[@]}" | sort)
+          test "${#changed[@]}" -eq 15
+          diff -u <(printf '%s\n' "${expected_sorted[@]}") <(printf '%s\n' "${changed[@]}")
+          python3 - <<'PY'
+          from pathlib import Path
+          cargo = Path("apps/desktop/Cargo.toml").read_text()
+          lock = Path("Cargo.lock").read_text()
+          readme = Path("apps/desktop/README.md").read_text()
+          management = Path("apps/desktop/src/management.rs").read_text()
+          ipc = Path("apps/desktop/src/ipc.rs").read_text()
+          ui = Path("apps/desktop/src/ui.rs").read_text()
+          runtime = Path("crates/prw-agent/src/local_commands/management_agent_status_runtime.rs").read_text()
+
+          assert cargo.count('sha2 = "=0.10.9"') == 1
+          desktop_lock = lock.split('name = "prw-desktop"', 1)[1].split('[[package]]', 1)[0]
+          assert desktop_lock.count('"sha2 0.10.9",') == 1
+          for value, name in [(7, "BEGIN"), (8, "CHUNK"), (9, "FINALIZE"), (10, "ABORT")]:
+              assert ipc.count(f"const UPLOAD_{name}_REQUEST_ID: u64 = {value};") == 1
+          assert ipc.count("pub(crate) struct BoundedUploadSession") == 1
+          assert ipc.count("fn connect_configured_stream") == 1
+          assert ipc.count("fn query_prebuilt_success_frame_on_stream") == 1
+          assert "query_upload_begin" not in ipc
+          assert "query_upload_chunk" not in ipc
+          assert "query_upload_finalize" not in ipc
+          assert "query_upload_abort" not in ipc
+          assert "session.begin(&begin_payload)" in ui
+          assert "session.chunk(&payload)" in ui
+          assert "session.finalize(&finalize_payload)" in ui
+          assert "session.abort(&payload)" in ui
+          assert "cleanup_failed_upload(&mut upload, &mut session)" in ui
+          assert "UploadResume" not in ui and "DownloadChunk" not in ui
+          assert management.count("pub(crate) fn encode_upload_abort") == 1
+          assert management.count("pub(crate) fn request_abort") == 1
+          assert "committed_bytes != 0" in management
+          assert "NavigationDestination::Transfers => transfers.clone()" in ui
+          assert "Transfers remains a structural placeholder" not in readme
+          assert "download, resume, and user-triggered abort are not enabled" in readme
+          assert "pub(crate) fn finish(mut self)" in runtime
+          assert "runtime.is_upload_active()" in runtime
+          assert "BridgeCommand::UploadResume(_)" in runtime
+          assert "BridgeCommand::DownloadChunk { .. }" in runtime
+          PY
+
+      - name: Verify locked metadata
+        run: cargo metadata --locked --format-version 1 >/dev/null
+
+      - name: Formatting check
+        run: cargo fmt --all -- --check
+
+      - name: Regression test runtime orchestration file-write closure
+        run: cargo test --locked -p prw-agent 'linux_identity::runtime_orchestration::tests::agent_status_worker_selection_denies_file_write_management_command' -- --exact
+
+      - name: Regression test signal-aware file-write closure
+        run: cargo test --locked -p prw-agent 'linux_identity::signal_aware_runtime::tests::agent_status_signal_aware_path_denies_file_write_management' -- --exact
+
+      - name: Focused Agent bounded upload tests
+        run: cargo test --locked -p prw-agent bounded_upload
+
+      - name: Focused Agent management runtime tests
+        run: cargo test --locked -p prw-agent management_agent_status
+
+      - name: Focused Desktop upload management test
+        run: cargo test --locked -p prw-desktop upload_progress_advances_only_from_exact_acknowledgements
+
+      - name: Focused Desktop upload IPC acknowledgement test
+        run: cargo test --locked -p prw-desktop management_offset_ack_requires_exact_tag_and_width
+
+      - name: Focused Desktop Transfers presentation tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked -p prw-desktop transfers_surface_locks_bounded_upload_only_contract
+          cargo test --locked -p prw-desktop transfer_paths_fail_closed_before_worker_start
+          cargo test --locked -p prw-desktop transfer_progress_and_cleanup_status_are_explicit
+
+      - name: Agent library tests
+        run: cargo test --locked -p prw-agent --lib
+
+      - name: Desktop tests
+        run: cargo test --locked -p prw-desktop
+
+      - name: Agent compile check
+        run: cargo check --locked -p prw-agent --all-targets
+
+      - name: Desktop compile check
+        run: cargo check --locked -p prw-desktop --all-targets
+
+      - name: Agent Clippy
+        run: cargo clippy --locked -p prw-agent --all-targets -- -D warnings
+
+      - name: Desktop Clippy
+        run: cargo clippy --locked -p prw-desktop --all-targets -- -D warnings
+
+      - name: Agent release binary build
+        run: cargo build --locked --release -p prw-agent --bin prw-agent
