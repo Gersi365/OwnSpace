@@ -11,6 +11,7 @@ use std::time::Duration;
 use prw_agent::frame_object::LocalIpcFrame;
 use prw_agent::frame_object::reader::read_frame;
 use prw_agent::frame_object::writer::write_frame;
+use prw_agent::local_commands::management_request::build_local_management_request_frame;
 use prw_agent::local_commands::private_dns_response::decode_success_private_dns_frame;
 use prw_agent::local_commands::private_dns_snapshot::LocalPrivateDnsSnapshot;
 use prw_agent::local_commands::request_frame::stream::write_local_command_request;
@@ -29,6 +30,11 @@ use crate::local_management_ipc::{
 use crate::state::{AgentAvailability, DesktopPresentationState};
 
 const IPC_TIMEOUT: Duration = Duration::from_secs(2);
+const TERMINAL_OPEN_REQUEST_ID: u64 = 4;
+const TERMINAL_INPUT_REQUEST_ID: u64 = 5;
+const TERMINAL_CLOSE_REQUEST_ID: u64 = 6;
+const MANAGEMENT_STATUS_PREFIX_LENGTH: usize = 2;
+const MANAGEMENT_EMPTY_RESULT: u8 = 4;
 
 #[derive(Debug, Clone)]
 pub struct StatusProbe {
@@ -148,7 +154,7 @@ impl fmt::Display for DesktopIpcError {
                 "Ownspace Agent returned an unexpected success-status error"
             }
             Self::AgentStatus(_) => "Ownspace Agent returned an unknown response status",
-            Self::ManagementRequestInvalid => "Ownspace file-list request is invalid",
+            Self::ManagementRequestInvalid => "Ownspace management request is invalid",
         };
         formatter.write_str(message)
     }
@@ -193,6 +199,45 @@ pub fn query_file_list(path: &str) -> Result<Vec<LocalFileListEntry>, DesktopIpc
     let frame = query_prebuilt_success_frame(&endpoint, request_id, &request)?;
     decode_file_list_success_body(frame.payload().as_bytes())
         .map_err(|_| DesktopIpcError::ResponseInvalid)
+}
+
+/// Executes one already-encoded terminal-open management intent through the trusted local Agent socket.
+pub fn query_terminal_open(bridge_payload: &[u8]) -> Result<(), DesktopIpcError> {
+    query_terminal_management(TERMINAL_OPEN_REQUEST_ID, bridge_payload)
+}
+
+/// Executes one already-encoded terminal-input management intent through the trusted local Agent socket.
+pub fn query_terminal_input(bridge_payload: &[u8]) -> Result<(), DesktopIpcError> {
+    query_terminal_management(TERMINAL_INPUT_REQUEST_ID, bridge_payload)
+}
+
+/// Executes one already-encoded terminal-close management intent through the trusted local Agent socket.
+pub fn query_terminal_close(bridge_payload: &[u8]) -> Result<(), DesktopIpcError> {
+    query_terminal_management(TERMINAL_CLOSE_REQUEST_ID, bridge_payload)
+}
+
+fn query_terminal_management(
+    request_id_value: u64,
+    bridge_payload: &[u8],
+) -> Result<(), DesktopIpcError> {
+    let endpoint = endpoint_from_environment()?;
+    let request_id = LocalIpcRequestId::new(request_id_value)
+        .map_err(|_| DesktopIpcError::RequestIdGenerationFailed)?;
+    let request = build_local_management_request_frame(request_id, bridge_payload)
+        .map_err(|_| DesktopIpcError::ManagementRequestInvalid)?;
+    let frame = query_prebuilt_success_frame(&endpoint, request_id, &request)?;
+    validate_empty_management_ack(frame.payload().as_bytes())
+}
+
+fn validate_empty_management_ack(payload: &[u8]) -> Result<(), DesktopIpcError> {
+    let body = payload
+        .get(MANAGEMENT_STATUS_PREFIX_LENGTH..)
+        .ok_or(DesktopIpcError::ResponseInvalid)?;
+    if body == [MANAGEMENT_EMPTY_RESULT].as_slice() {
+        Ok(())
+    } else {
+        Err(DesktopIpcError::ResponseInvalid)
+    }
 }
 
 fn query_prebuilt_success_frame(
@@ -362,7 +407,7 @@ mod tests {
 
     use super::{
         DesktopIpcError, StatusProbe, endpoint_candidate_from_raw, ensure_response_id,
-        runtime_root_from_raw,
+        runtime_root_from_raw, validate_empty_management_ack,
     };
     use crate::state::{AgentAvailability, AgentRuntimePresentation};
     use prw_agent::local_commands::{
@@ -593,11 +638,28 @@ mod tests {
     }
 
     #[test]
-    fn invalid_file_list_request_has_stable_error_contract() {
+    fn invalid_management_request_has_stable_error_contract() {
         assert_error_contract(
             DesktopIpcError::ManagementRequestInvalid,
             AgentAvailability::Error,
-            "Ownspace file-list request is invalid",
+            "Ownspace management request is invalid",
+        );
+    }
+
+    #[test]
+    fn terminal_management_ack_accepts_only_exact_empty_result() {
+        assert_eq!(validate_empty_management_ack(&[0, 0, 4]), Ok(()));
+        assert_eq!(
+            validate_empty_management_ack(&[0, 0]),
+            Err(DesktopIpcError::ResponseInvalid)
+        );
+        assert_eq!(
+            validate_empty_management_ack(&[0, 0, 6]),
+            Err(DesktopIpcError::ResponseInvalid)
+        );
+        assert_eq!(
+            validate_empty_management_ack(&[0, 0, 4, 0]),
+            Err(DesktopIpcError::ResponseInvalid)
         );
     }
 }

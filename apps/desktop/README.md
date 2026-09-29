@@ -6,7 +6,7 @@ The desktop application is a separate native Rust/GTK 4/libadwaita UI/client pro
 
 It is not required for the Ubuntu host to remain remotely reachable. The headless Ownspace Agent remains authoritative for host runtime state, policy enforcement, remote capability execution, private-key boundaries, and production lifecycle ownership.
 
-## Current read-only scope
+## Current management scope
 
 The desktop shell provides:
 
@@ -17,11 +17,12 @@ The desktop shell provides:
 - manual bounded local status refresh that preserves the last rendered status while the read-only probe is active and gives explicit `Refreshing…` progress feedback;
 - a read-only Settings diagnostics page that shows the local Ownspace Desktop package version, the desktop client’s compiled-in supported local IPC protocol version, and the latest Agent-reported local IPC protocol version from the same bounded `GetAgentStatus` snapshot used by Overview and Activity; it also exposes both the compatibility-sensitive endpoint contract and the session-resolved candidate endpoint derived through the existing `LocalIpcContract`, with a local-only copy action for the resolved path and no Agent configuration mutation;
 - a read-only Activity page that mirrors the latest local Agent/Private DNS probe snapshot, can trigger the same bounded local refresh as Overview, and can copy the currently rendered snapshot plus the session-resolved local IPC endpoint candidate to the local desktop clipboard without persisting history or emitting external telemetry;
+- an implemented Sessions page for one local terminal session through existing command-3 terminal authority: it opens a provider-selected POSIX shell at fixed bounded geometry, sends bounded input lines, and closes the session through the trusted local Agent socket; Agent-owned terminal principal/capability checks remain authoritative, and terminal output presentation is not enabled in this checkpoint;
 - an implemented Files page for authenticated read-only directory listing under the local owner-home authority through command-3 `FileList`, with canonical relative-path entry, Home/Up navigation, Refresh after a successful listing, explicit current-path presentation, and no file-content read/open or mutation;
 - explicit offline/error handling, including partial Private DNS query failure visibility;
 - a bounded worker thread so local Unix-socket reads do not block the GTK main thread.
 
-The implemented status/diagnostics surfaces use only the existing local `GetAgentStatus` and `GetPrivateDnsConfig` commands. The Files page separately uses the already-authorized read-only command-3 `FileList` path over the same trusted local Agent socket.
+The implemented status/diagnostics surfaces use only the existing local `GetAgentStatus` and `GetPrivateDnsConfig` commands. The Files page separately uses the already-authorized read-only command-3 `FileList` path over the same trusted local Agent socket. The Sessions page uses existing command-3 terminal open/input/close operations over that same trusted socket and does not weaken Agent-owned terminal authority checks.
 
 The local control endpoint remains:
 
@@ -35,9 +36,9 @@ The desktop client performs no TCP, D-Bus, abstract-socket, `/tmp`, shell-comman
 
 ## Deliberately not activated by this surface
 
-Sessions and Transfers remain structural placeholders unless backed by separately validated capability work. Their shared status text is `No live state source available`, and a deterministic presentation-contract test locks that authority boundary without activating live session or transfer state. Activity is limited to the latest in-memory local diagnostics snapshot; its refresh action reuses the same bounded local status probe as Overview, and its copy action exports only the currently rendered text plus the session-resolved local IPC endpoint candidate to the local desktop clipboard. The endpoint value is path derivation from `XDG_RUNTIME_DIR` through the existing `LocalIpcContract`; it does not perform an Agent read or assert endpoint trust, availability, or connectivity. Activity does not provide persisted history, external telemetry, or Remote Desktop clipboard integration. The current desktop management surface does not implement or activate:
+Transfers remains a structural placeholder unless backed by separately validated capability work. Its status text is `No live state source available`, and a deterministic presentation-contract test locks that remaining authority boundary. Sessions now activates only terminal open/input/close over the existing trusted local management path; it does not yet read or render terminal output, resize terminals, activate Remote Desktop, or activate forwarding. Activity is limited to the latest in-memory local diagnostics snapshot; its refresh action reuses the same bounded local status probe as Overview, and its copy action exports only the currently rendered text plus the session-resolved local IPC endpoint candidate to the local desktop clipboard. The endpoint value is path derivation from `XDG_RUNTIME_DIR` through the existing `LocalIpcContract`; it does not perform an Agent read or assert endpoint trust, availability, or connectivity. Activity does not provide persisted history, external telemetry, or Remote Desktop clipboard integration. The current desktop management surface does not implement or activate:
 
-- terminal actions;
+- terminal output reads/presentation, resize operations, arbitrary run-command shortcuts, or alternate terminal transports;
 - `FileStat`, `DownloadChunk`, file-content read/open, file mutation, or upload/download transfer execution;
 - forwarding actions;
 - enrollment/device mutations;
