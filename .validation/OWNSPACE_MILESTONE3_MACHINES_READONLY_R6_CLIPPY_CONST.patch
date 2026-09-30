@@ -1,0 +1,11 @@
+--- a/apps/desktop/src/local_management_ipc.rs
++++ b/apps/desktop/src/local_management_ipc.rs
+@@ -65,7 +65,7 @@
+     }
+ 
+     #[must_use]
+-    pub(crate) fn lifecycle_text(&self) -> &'static str {
++    pub(crate) const fn lifecycle_text(&self) -> &'static str {
+         match self.lifecycle {
+             DeviceLifecycle::PendingEnrollment => "Pending enrollment",
+             DeviceLifecycle::Enrolled => "Enrolled",

@@ -1,0 +1,126 @@
+name: Ownspace Desktop Machines read-only validation R7
+
+on:
+  push:
+    branches:
+      - validation/desktop-machines-readonly-2026-09-30-r7
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      BASE_SHA: 1b32e19e8b21aebfcd7527b572994f19356fb8bc
+      BASE_TREE: b1116d53d1039b70f41203cd0ad4b87b2fe04fd5
+      EXPECTED_BRANCH: validation/desktop-machines-readonly-2026-09-30-r7
+      R5_PATCH_PATH: .validation/OWNSPACE_MILESTONE3_MACHINES_READONLY_R5.patch
+      R5_PATCH_SHA256: e345ba59eb680783c73aa96822b4065999506a3752b3b3652a56205c839e796f
+      R5_PATCH_GIT_BLOB: c24877b5ec517e4ab9b3db3b6b71c0cc99faeab2
+      R6_DELTA_PATH: .validation/OWNSPACE_MILESTONE3_MACHINES_READONLY_R6_CLIPPY_CONST.patch
+      R6_DELTA_SHA256: eeb0d2ed1402268d7875a624e9228ac554efa603729915053511b4ed0fc3c075
+      R6_DELTA_GIT_BLOB: cc132b9c3fccad5f1ceede515758f826a8a4d034
+      R6_PATCH_SHA256: a809b5e56f5614444b0d74de3ab0abf4a2ded08f30f520d7680f891c6ded374e
+      EXPECTED_WORKFLOW: .github/workflows/validate-desktop-machines-readonly-r7-2026-09-30.yml
+
+    steps:
+      - name: Checkout isolated carrier
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify carrier and exact R6 reconstruction
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = "$EXPECTED_BRANCH"
+          test "$(git merge-base "$BASE_SHA" HEAD)" = "$BASE_SHA"
+          test "$(git rev-list --count "$BASE_SHA"..HEAD)" -eq 1
+          test "$(git rev-parse "$BASE_SHA^{tree}")" = "$BASE_TREE"
+
+          mapfile -t carrier < <(git diff --name-only "$BASE_SHA"...HEAD | sort)
+          printf '%s\n' "$EXPECTED_WORKFLOW" "$R5_PATCH_PATH" "$R6_DELTA_PATH" | sort > "$RUNNER_TEMP/expected_carrier.txt"
+          printf '%s\n' "${carrier[@]}" > "$RUNNER_TEMP/actual_carrier.txt"
+          diff -u "$RUNNER_TEMP/expected_carrier.txt" "$RUNNER_TEMP/actual_carrier.txt"
+          test "${#carrier[@]}" -eq 3
+          git diff --check "$BASE_SHA"...HEAD -- "$EXPECTED_WORKFLOW"
+
+          echo "$R5_PATCH_SHA256  $R5_PATCH_PATH" | sha256sum -c -
+          test "$(git hash-object "$R5_PATCH_PATH")" = "$R5_PATCH_GIT_BLOB"
+          echo "$R6_DELTA_SHA256  $R6_DELTA_PATH" | sha256sum -c -
+          test "$(git hash-object "$R6_DELTA_PATH")" = "$R6_DELTA_GIT_BLOB"
+
+          git apply --check "$R5_PATCH_PATH"
+          git apply "$R5_PATCH_PATH"
+          git apply --check "$R6_DELTA_PATH"
+          git apply "$R6_DELTA_PATH"
+          git diff --check
+          git diff --binary > "$RUNNER_TEMP/reconstructed-r6.patch"
+          echo "$R6_PATCH_SHA256  $RUNNER_TEMP/reconstructed-r6.patch" | sha256sum -c -
+
+          mapfile -t changed < <(git diff --name-only | sort)
+          printf '%s\n' 'apps/desktop/README.md' 'apps/desktop/src/ipc.rs' 'apps/desktop/src/local_management_ipc.rs' 'apps/desktop/src/ui.rs' 'crates/prw-agent/src/candidate_publication_requester_rendezvous_start_intent_policy_source.rs' 'crates/prw-agent/src/linux_bootstrap.rs' 'crates/prw-agent/src/local_commands/management_agent_status_runtime.rs' 'crates/prw-agent/src/local_commands/management_boundary_transaction.rs' 'crates/prw-agent/src/local_commands/management_dispatch.rs' 'crates/prw-agent/src/local_commands/management_response.rs' 'crates/prw-agent/src/local_commands/management_typed_provider_dispatch.rs' 'crates/prw-policy/src/lib.rs' 'crates/prw-registry/src/durable_registry_sqlite_store.rs' 'crates/prw-remote-bridge/src/lib.rs' 'crates/prw-remote-bridge/tests/end_to_end.rs' | sort > "$RUNNER_TEMP/expected_source_paths.txt"
+          printf '%s\n' "${changed[@]}" > "$RUNNER_TEMP/actual_source_paths.txt"
+          diff -u "$RUNNER_TEMP/expected_source_paths.txt" "$RUNNER_TEMP/actual_source_paths.txt"
+          test "${#changed[@]}" -eq 15
+
+      - name: Install exact Rust and native Desktop validation dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config protobuf-compiler libgtk-4-dev libadwaita-1-dev
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
+          rustup default 1.97.1
+          rustc --version
+          cargo --version
+          pkg-config --modversion gtk4
+          pkg-config --modversion libadwaita-1
+
+      - name: Verify locked metadata
+        run: cargo metadata --locked --format-version 1 >/dev/null
+
+      - name: Formatting check
+        run: cargo fmt --all -- --check
+
+      - name: Policy tests
+        run: cargo test --locked -p prw-policy
+
+      - name: Registry tests
+        run: cargo test --locked -p prw-registry
+
+      - name: Remote bridge tests
+        run: cargo test --locked -p prw-remote-bridge
+
+      - name: Agent tests
+        run: cargo test --locked -p prw-agent
+
+      - name: Desktop tests
+        run: cargo test --locked -p prw-desktop
+
+      - name: Agent and Desktop compile check
+        run: cargo check --locked -p prw-agent -p prw-desktop --all-targets
+
+      - name: Affected-crate Clippy
+        run: cargo clippy --locked -p prw-policy -p prw-registry -p prw-remote-bridge -p prw-agent -p prw-desktop --all-targets -- -D warnings
+
+      - name: Agent release build
+        run: cargo build --locked --release -p prw-agent --bin prw-agent
+
+      - name: Desktop release build
+        run: cargo build --locked --release -p prw-desktop --bin prw-desktop
+
+      - name: Retain exact R7 carrier inputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ownspace-machines-readonly-r7-carrier
+          path: |
+            .validation/OWNSPACE_MILESTONE3_MACHINES_READONLY_R5.patch
+            .validation/OWNSPACE_MILESTONE3_MACHINES_READONLY_R6_CLIPPY_CONST.patch
+            .github/workflows/validate-desktop-machines-readonly-r7-2026-09-30.yml
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
