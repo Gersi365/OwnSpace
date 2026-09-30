@@ -1,0 +1,606 @@
+diff --git a/apps/desktop/README.md b/apps/desktop/README.md
+index 7e5ae8e..2ceddfc 100644
+--- a/apps/desktop/README.md
++++ b/apps/desktop/README.md
+@@ -18,13 +18,13 @@ The desktop shell provides:
+ - a read-only Machines registered-device inventory loaded through the authenticated local Agent from the existing owner-PC registry authority, exposing only device identifier and lifecycle metadata; this surface does not mutate enrollment/device authority and does not infer Online/Offline from endpoint or transport data when no authoritative live per-device reachability observation is available;
+ - a read-only Settings diagnostics page that shows the local Ownspace Desktop package version, the desktop client’s compiled-in supported local IPC protocol version, and the latest Agent-reported local IPC protocol version from the same bounded `GetAgentStatus` snapshot used by Overview and Activity; it also exposes both the compatibility-sensitive endpoint contract and the session-resolved candidate endpoint derived through the existing `LocalIpcContract`, with a local-only copy action for the resolved path and no Agent configuration mutation;
+ - a read-only Activity page that mirrors the latest local Agent/Private DNS probe snapshot, can trigger the same bounded local refresh as Overview, and can copy the currently rendered snapshot plus the session-resolved local IPC endpoint candidate to the local desktop clipboard without persisting history or emitting external telemetry;
+-- an implemented Sessions page for one local terminal session through existing command-3 terminal authority: it keeps terminal open/input/close on one authenticated local Agent connection, where the Agent owns a fixed `/bin/sh -i` PTY as the same UID with bounded geometry/I/O and explicit process-group cleanup; Agent-owned terminal principal/capability checks remain authoritative, and terminal output presentation/resize controls are not enabled in this checkpoint;
++- an implemented Sessions page for one local terminal session through existing command-3 terminal authority: it keeps terminal open/input/read/resize/close on one authenticated local Agent connection, where the Agent owns a fixed `/bin/sh -i` PTY as the same UID with bounded geometry/I/O and explicit process-group cleanup; Agent-owned terminal principal/capability checks remain authoritative, output reads are explicit and bounded, and resize uses the existing validated terminal geometry contract;
+ - an implemented Files page for authenticated read-only directory listing under the local owner-home authority through command-3 `FileList`, with canonical relative-path entry, Home/Up navigation, Refresh after a successful listing, explicit current-path presentation, and no file-content read/open or mutation;
+ - an implemented Transfers page for one bounded local-file upload at a time through existing command-3 upload begin/chunk/finalize authority, with exact Agent-acknowledged committed offsets, SHA-256 finalization, progress/completion/failure presentation, and internal best-effort abort cleanup after an uncertain or failed active upload; download, resume, and user-triggered abort are not enabled in this checkpoint;
+ - explicit offline/error handling, including partial Private DNS query failure visibility;
+ - a bounded worker thread so local Unix-socket reads do not block the GTK main thread.
+ 
+-The implemented status/diagnostics surfaces use only the existing local `GetAgentStatus` and `GetPrivateDnsConfig` commands. Machines separately uses the additive read-only command-3 `DeviceList` path over the same authenticated local Agent socket and reads the existing owner-PC registry in strict read-only mode; it does not read SQLite directly from the Desktop. The Files page separately uses the already-authorized read-only command-3 `FileList` path over the same trusted local Agent socket. The Sessions page uses existing command-3 terminal open/input/close operations on one retained authenticated local Agent connection; the Agent-side production terminal provider is limited to the existing POSIX-shell profile and preserves same-UID principal/capability checks, bounded I/O/geometry, and explicit connection teardown cleanup. Provider-level read/resize primitives remain behind the existing typed terminal contract and are not presented by Desktop in this checkpoint. The Transfers page uses the existing upload begin/chunk/finalize transfer family and Agent-owned owner-home filesystem authority; its internal abort request is cleanup-only after a failed or uncertain active upload and does not expose resume or user-triggered abort controls.
++The implemented status/diagnostics surfaces use only the existing local `GetAgentStatus` and `GetPrivateDnsConfig` commands. Machines separately uses the additive read-only command-3 `DeviceList` path over the same authenticated local Agent socket and reads the existing owner-PC registry in strict read-only mode; it does not read SQLite directly from the Desktop. The Files page separately uses the already-authorized read-only command-3 `FileList` path over the same trusted local Agent socket. The Sessions page uses existing command-3 terminal open/input/read/resize/close operations on one retained authenticated local Agent connection; the Agent-side production terminal provider is limited to the existing POSIX-shell profile and preserves same-UID principal/capability checks, bounded I/O/geometry, and explicit connection teardown cleanup. Desktop presents terminal output only through an explicit bounded read action and exposes explicit validated columns/rows resize controls; it does not introduce background output streaming or an alternate transport. The Transfers page uses the existing upload begin/chunk/finalize transfer family and Agent-owned owner-home filesystem authority; its internal abort request is cleanup-only after a failed or uncertain active upload and does not expose resume or user-triggered abort controls.
+ 
+ The local control endpoint remains:
+ 
+@@ -38,9 +38,9 @@ The desktop client performs no TCP, D-Bus, abstract-socket, `/tmp`, shell-comman
+ 
+ ## Deliberately not activated by this surface
+ 
+-Transfers now activates only bounded upload begin/chunk/finalize plus internal failure cleanup over the existing trusted local management path; it does not activate download execution, transfer resume, user-triggered abort, or full bidirectional transfer management. Sessions activates only terminal open/input/close over one retained authenticated local management connection backed by the fixed same-UID POSIX PTY provider; Desktop does not yet read or render terminal output, expose resize controls, activate Remote Desktop, or activate forwarding. Activity is limited to the latest in-memory local diagnostics snapshot; its refresh action reuses the same bounded local status probe as Overview, and its copy action exports only the currently rendered text plus the session-resolved local IPC endpoint candidate to the local desktop clipboard. The endpoint value is path derivation from `XDG_RUNTIME_DIR` through the existing `LocalIpcContract`; it does not perform an Agent read or assert endpoint trust, availability, or connectivity. Activity does not provide persisted history, external telemetry, or Remote Desktop clipboard integration. The current desktop management surface does not implement or activate:
++Transfers now activates only bounded upload begin/chunk/finalize plus internal failure cleanup over the existing trusted local management path; it does not activate download execution, transfer resume, user-triggered abort, or full bidirectional transfer management. Sessions activates terminal open/input/read/resize/close over one retained authenticated local management connection backed by the fixed same-UID POSIX PTY provider; output presentation is driven only by explicit bounded reads and resize remains within the existing typed geometry contract. Desktop does not activate Remote Desktop or forwarding. Activity is limited to the latest in-memory local diagnostics snapshot; its refresh action reuses the same bounded local status probe as Overview, and its copy action exports only the currently rendered text plus the session-resolved local IPC endpoint candidate to the local desktop clipboard. The endpoint value is path derivation from `XDG_RUNTIME_DIR` through the existing `LocalIpcContract`; it does not perform an Agent read or assert endpoint trust, availability, or connectivity. Activity does not provide persisted history, external telemetry, or Remote Desktop clipboard integration. The current desktop management surface does not implement or activate:
+ 
+-- terminal output reads/presentation, resize operations, arbitrary run-command shortcuts, or alternate terminal transports;
++- arbitrary run-command shortcuts, request-selected terminal executable/profile/environment/cwd, background terminal-output streaming, or alternate terminal transports;
+ - `FileStat`, `DownloadChunk`, file-content read/open, general file mutation, download execution, upload resume, or user-triggered upload abort;
+ - forwarding actions;
+ - enrollment/device mutations;
+diff --git a/apps/desktop/src/ipc.rs b/apps/desktop/src/ipc.rs
+index ff297b0..d6bc105 100644
+--- a/apps/desktop/src/ipc.rs
++++ b/apps/desktop/src/ipc.rs
+@@ -40,9 +40,12 @@ const UPLOAD_CHUNK_REQUEST_ID: u64 = 8;
+ const UPLOAD_FINALIZE_REQUEST_ID: u64 = 9;
+ const UPLOAD_ABORT_REQUEST_ID: u64 = 10;
+ const DEVICE_LIST_REQUEST_ID: u64 = 11;
++const TERMINAL_RESIZE_REQUEST_ID: u64 = 12;
++const TERMINAL_READ_REQUEST_ID: u64 = 13;
+ const MANAGEMENT_STATUS_PREFIX_LENGTH: usize = 2;
+ const MANAGEMENT_EMPTY_RESULT: u8 = 4;
+ const MANAGEMENT_OFFSET_RESULT: u8 = 5;
++const MANAGEMENT_BYTES_RESULT: u8 = 6;
+ 
+ #[derive(Debug, Clone)]
+ pub struct StatusProbe {
+@@ -253,6 +256,23 @@ impl TerminalManagementSession {
+         self.query_empty_management(TERMINAL_INPUT_REQUEST_ID, bridge_payload)
+     }
+ 
++    pub(crate) fn resize(&mut self, bridge_payload: &[u8]) -> Result<(), DesktopIpcError> {
++        self.query_empty_management(TERMINAL_RESIZE_REQUEST_ID, bridge_payload)
++    }
++
++    pub(crate) fn read(
++        &mut self,
++        bridge_payload: &[u8],
++        maximum_bytes: usize,
++    ) -> Result<Vec<u8>, DesktopIpcError> {
++        let request_id = LocalIpcRequestId::new(TERMINAL_READ_REQUEST_ID)
++            .map_err(|_| DesktopIpcError::RequestIdGenerationFailed)?;
++        let request = build_local_management_request_frame(request_id, bridge_payload)
++            .map_err(|_| DesktopIpcError::ManagementRequestInvalid)?;
++        let frame = query_prebuilt_success_frame_on_stream(&mut self.stream, request_id, &request)?;
++        validate_bytes_management_ack(frame.payload().as_bytes(), maximum_bytes)
++    }
++
+     pub(crate) fn close(&mut self, bridge_payload: &[u8]) -> Result<(), DesktopIpcError> {
+         self.query_empty_management(TERMINAL_CLOSE_REQUEST_ID, bridge_payload)
+     }
+@@ -362,6 +382,23 @@ fn validate_offset_management_ack(payload: &[u8]) -> Result<u64, DesktopIpcError
+     Ok(u64::from_be_bytes(offset))
+ }
+ 
++fn validate_bytes_management_ack(
++    payload: &[u8],
++    maximum_bytes: usize,
++) -> Result<Vec<u8>, DesktopIpcError> {
++    let body = payload
++        .get(MANAGEMENT_STATUS_PREFIX_LENGTH..)
++        .ok_or(DesktopIpcError::ResponseInvalid)?;
++    if body.first().copied() != Some(MANAGEMENT_BYTES_RESULT) {
++        return Err(DesktopIpcError::ResponseInvalid);
++    }
++    let bytes = &body[1..];
++    if maximum_bytes == 0 || bytes.len() > maximum_bytes {
++        return Err(DesktopIpcError::ResponseInvalid);
++    }
++    Ok(bytes.to_vec())
++}
++
+ fn query_prebuilt_success_frame(
+     endpoint: &Path,
+     request_id: LocalIpcRequestId,
+@@ -541,7 +578,8 @@ mod tests {
+ 
+     use super::{
+         DesktopIpcError, StatusProbe, endpoint_candidate_from_raw, ensure_response_id,
+-        runtime_root_from_raw, validate_empty_management_ack, validate_offset_management_ack,
++        runtime_root_from_raw, validate_bytes_management_ack, validate_empty_management_ack,
++        validate_offset_management_ack,
+     };
+     use crate::state::{AgentAvailability, AgentRuntimePresentation};
+     use prw_agent::local_commands::{
+@@ -819,4 +857,23 @@ mod tests {
+             Err(DesktopIpcError::ResponseInvalid)
+         );
+     }
++
++    #[test]
++    fn terminal_management_bytes_ack_is_bounded_by_the_requested_read() {
++        assert_eq!(
++            validate_bytes_management_ack(&[0, 0, 6, b'o', b'k'], 2),
++            Ok(b"ok".to_vec())
++        );
++        assert_eq!(validate_bytes_management_ack(&[0, 0, 6], 2), Ok(Vec::new()));
++        for invalid in [
++            (&[0, 0, 4][..], 2),
++            (&[0, 0, 6, b'o', b'k', b'!'][..], 2),
++            (&[0, 0, 6, b'o'][..], 0),
++        ] {
++            assert_eq!(
++                validate_bytes_management_ack(invalid.0, invalid.1),
++                Err(DesktopIpcError::ResponseInvalid)
++            );
++        }
++    }
+ }
+diff --git a/apps/desktop/src/management.rs b/apps/desktop/src/management.rs
+index 9557c08..3677874 100644
+--- a/apps/desktop/src/management.rs
++++ b/apps/desktop/src/management.rs
+@@ -69,6 +69,36 @@ pub(crate) fn encode_terminal_input(
+     })
+ }
+ 
++pub(crate) fn encode_terminal_resize(
++    session_id: u64,
++    columns: u16,
++    rows: u16,
++) -> Result<Vec<u8>, ManagementError> {
++    let session_id =
++        TerminalSessionId::new(session_id).map_err(|_| ManagementError::InvalidTerminal)?;
++    let geometry =
++        TerminalGeometry::new(columns, rows).map_err(|_| ManagementError::InvalidTerminal)?;
++    bridge_payload(&BridgeCommand::TerminalResize {
++        session_id,
++        geometry,
++    })
++}
++
++pub(crate) fn encode_terminal_read(
++    session_id: u64,
++    maximum_bytes: usize,
++) -> Result<Vec<u8>, ManagementError> {
++    if maximum_bytes == 0 || maximum_bytes > MAX_BRIDGE_INLINE_BYTES {
++        return Err(ManagementError::InvalidTerminal);
++    }
++    let session_id =
++        TerminalSessionId::new(session_id).map_err(|_| ManagementError::InvalidTerminal)?;
++    bridge_payload(&BridgeCommand::TerminalRead {
++        session_id,
++        maximum_bytes,
++    })
++}
++
+ pub(crate) fn encode_terminal_close(session_id: u64) -> Result<Vec<u8>, ManagementError> {
+     let session_id =
+         TerminalSessionId::new(session_id).map_err(|_| ManagementError::InvalidTerminal)?;
+@@ -291,6 +321,24 @@ impl TerminalPresentation {
+         encode_terminal_input(self.session_id, input)
+     }
+ 
++    pub(crate) fn request_resize(
++        &self,
++        columns: u16,
++        rows: u16,
++    ) -> Result<Vec<u8>, ManagementError> {
++        if self.state != TerminalPresentationState::Open {
++            return Err(ManagementError::InvalidState);
++        }
++        encode_terminal_resize(self.session_id, columns, rows)
++    }
++
++    pub(crate) fn request_read(&self, maximum_bytes: usize) -> Result<Vec<u8>, ManagementError> {
++        if self.state != TerminalPresentationState::Open {
++            return Err(ManagementError::InvalidState);
++        }
++        encode_terminal_read(self.session_id, maximum_bytes)
++    }
++
+     pub(crate) fn request_close(&mut self) -> Result<Vec<u8>, ManagementError> {
+         if self.state != TerminalPresentationState::Open {
+             return Err(ManagementError::InvalidState);
+@@ -616,6 +664,18 @@ mod tests {
+             BridgeCommand::TerminalInput { .. }
+         ));
+ 
++        let resize = terminal.request_resize(100, 40).expect("terminal resize");
++        assert!(matches!(
++            BridgeCommand::decode(&resize).expect("decode resize"),
++            BridgeCommand::TerminalResize { .. }
++        ));
++
++        let read = terminal.request_read(16_384).expect("terminal read");
++        assert!(matches!(
++            BridgeCommand::decode(&read).expect("decode read"),
++            BridgeCommand::TerminalRead { maximum_bytes: 16_384, .. }
++        ));
++
+         let close = terminal.request_close().expect("terminal close intent");
+         assert!(matches!(
+             BridgeCommand::decode(&close).expect("decode close"),
+@@ -634,6 +694,10 @@ mod tests {
+         assert!(encode_terminal_open(1, TerminalProfile::PosixShell, 0, 24).is_err());
+         assert!(encode_terminal_input(1, b"").is_err());
+         assert!(encode_terminal_input(1, &vec![0; MAX_BRIDGE_INLINE_BYTES + 1]).is_err());
++        assert!(encode_terminal_resize(1, 0, 24).is_err());
++        assert!(encode_terminal_resize(1, 80, 0).is_err());
++        assert!(encode_terminal_read(1, 0).is_err());
++        assert!(encode_terminal_read(1, MAX_BRIDGE_INLINE_BYTES + 1).is_err());
+     }
+ 
+     #[test]
+diff --git a/apps/desktop/src/ui.rs b/apps/desktop/src/ui.rs
+index 1a06dff..899cb4f 100644
+--- a/apps/desktop/src/ui.rs
++++ b/apps/desktop/src/ui.rs
+@@ -32,9 +32,12 @@ const COPY_SNAPSHOT_IDLE_LABEL: &str = "Copy current snapshot";
+ const COPY_SNAPSHOT_DONE_LABEL: &str = "Copied";
+ const TERMINAL_OPEN_LABEL: &str = "Open POSIX shell session";
+ const TERMINAL_SEND_LABEL: &str = "Send line";
++const TERMINAL_READ_LABEL: &str = "Read output";
++const TERMINAL_RESIZE_LABEL: &str = "Resize";
+ const TERMINAL_CLOSE_LABEL: &str = "Close session";
+ const TERMINAL_COLUMNS: u16 = 80;
+ const TERMINAL_ROWS: u16 = 24;
++const TERMINAL_READ_MAXIMUM_BYTES: usize = 16_384;
+ static NEXT_TERMINAL_SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
+ static NEXT_UPLOAD_TRANSFER_COUNTER: AtomicU64 = AtomicU64::new(1);
+ const UPLOAD_BUTTON_IDLE_LABEL: &str = "Upload file";
+@@ -112,9 +115,14 @@ struct FilesPageTargets {
+ #[derive(Clone)]
+ struct SessionsPageTargets {
+     status: gtk::Label,
++    output: gtk::TextView,
+     input: gtk::Entry,
++    columns: gtk::Entry,
++    rows: gtk::Entry,
+     open_button: gtk::Button,
+     send_button: gtk::Button,
++    read_button: gtk::Button,
++    resize_button: gtk::Button,
+     close_button: gtk::Button,
+     terminal: Rc<RefCell<TerminalPresentation>>,
+     terminal_connection: Arc<Mutex<Option<ipc::TerminalManagementSession>>>,
+@@ -125,9 +133,17 @@ struct SessionsPageTargets {
+ enum TerminalOperation {
+     Open,
+     Input,
++    Read,
++    Resize,
+     Close,
+ }
+ 
++#[derive(Debug, Clone, PartialEq, Eq)]
++enum TerminalOperationResult {
++    Acknowledged,
++    Output(Vec<u8>),
++}
++
+ #[derive(Clone)]
+ struct TransfersPageTargets {
+     source_entry: gtk::Entry,
+@@ -472,27 +488,31 @@ fn next_terminal_session_id() -> u64 {
+ const fn terminal_controls_for_state(
+     state: TerminalPresentationState,
+     operation_pending: bool,
+-) -> (bool, bool, bool, bool) {
++) -> (bool, bool, bool, bool, bool, bool) {
+     if operation_pending {
+-        return (false, false, false, false);
++        return (false, false, false, false, false, false);
+     }
+ 
+     match state {
+-        TerminalPresentationState::Closed => (true, false, false, false),
+-        TerminalPresentationState::Open => (false, true, true, true),
++        TerminalPresentationState::Closed => (true, false, false, false, false, false),
++        TerminalPresentationState::Open => (false, true, true, true, true, true),
+         TerminalPresentationState::Opening
+         | TerminalPresentationState::Closing
+-        | TerminalPresentationState::Failed => (false, false, false, false),
++        | TerminalPresentationState::Failed => (false, false, false, false, false, false),
+     }
+ }
+ 
+ fn render_terminal_controls(targets: &SessionsPageTargets) {
+     let state = targets.terminal.borrow().state();
+-    let (open, input, send, close) =
++    let (open, input, send, read, resize, close) =
+         terminal_controls_for_state(state, targets.operation_pending.get());
+     targets.open_button.set_sensitive(open);
+     targets.input.set_sensitive(input);
+     targets.send_button.set_sensitive(send);
++    targets.read_button.set_sensitive(read);
++    targets.columns.set_sensitive(resize);
++    targets.rows.set_sensitive(resize);
++    targets.resize_button.set_sensitive(resize);
+     targets.close_button.set_sensitive(close);
+ }
+ 
+@@ -500,6 +520,8 @@ const fn terminal_operation_status(operation: TerminalOperation) -> &'static str
+     match operation {
+         TerminalOperation::Open => "Opening authorized terminal session…",
+         TerminalOperation::Input => "Sending bounded terminal input…",
++        TerminalOperation::Read => "Reading bounded terminal output…",
++        TerminalOperation::Resize => "Resizing terminal session…",
+         TerminalOperation::Close => "Closing terminal session…",
+     }
+ }
+@@ -508,7 +530,7 @@ fn execute_terminal_operation(
+     connection: &Arc<Mutex<Option<ipc::TerminalManagementSession>>>,
+     operation: TerminalOperation,
+     payload: &[u8],
+-) -> Result<(), ipc::DesktopIpcError> {
++) -> Result<TerminalOperationResult, ipc::DesktopIpcError> {
+     let mut connection = connection
+         .lock()
+         .map_err(|_| ipc::DesktopIpcError::TerminalSessionUnavailable)?;
+@@ -520,23 +542,48 @@ fn execute_terminal_operation(
+             let mut session = ipc::TerminalManagementSession::connect()?;
+             session.open(payload)?;
+             *connection = Some(session);
+-            Ok(())
++            Ok(TerminalOperationResult::Acknowledged)
++        }
++        TerminalOperation::Input => {
++            connection
++                .as_mut()
++                .ok_or(ipc::DesktopIpcError::TerminalSessionUnavailable)?
++                .input(payload)?;
++            Ok(TerminalOperationResult::Acknowledged)
+         }
+-        TerminalOperation::Input => connection
++        TerminalOperation::Read => connection
+             .as_mut()
+             .ok_or(ipc::DesktopIpcError::TerminalSessionUnavailable)?
+-            .input(payload),
++            .read(payload, TERMINAL_READ_MAXIMUM_BYTES)
++            .map(TerminalOperationResult::Output),
++        TerminalOperation::Resize => {
++            connection
++                .as_mut()
++                .ok_or(ipc::DesktopIpcError::TerminalSessionUnavailable)?
++                .resize(payload)?;
++            Ok(TerminalOperationResult::Acknowledged)
++        }
+         TerminalOperation::Close => {
+             let result = connection
+                 .as_mut()
+                 .ok_or(ipc::DesktopIpcError::TerminalSessionUnavailable)?
+                 .close(payload);
+             *connection = None;
+-            result
++            result.map(|()| TerminalOperationResult::Acknowledged)
+         }
+     }
+ }
+ 
++fn append_terminal_output(output: &gtk::TextView, bytes: &[u8]) {
++    if bytes.is_empty() {
++        return;
++    }
++    let rendered = String::from_utf8_lossy(bytes);
++    let buffer = output.buffer();
++    let mut end = buffer.end_iter();
++    buffer.insert(&mut end, rendered.as_ref());
++}
++
+ fn start_terminal_operation(
+     targets: &SessionsPageTargets,
+     operation: TerminalOperation,
+@@ -575,17 +622,20 @@ fn start_terminal_operation(
+     let poll_targets = targets.clone();
+     let _source_id = glib::timeout_add_local(WORKER_RESULT_POLL_INTERVAL, move || {
+         match receiver.try_recv() {
+-            Ok(Ok(())) => {
+-                let acknowledgement = match operation {
+-                    TerminalOperation::Open => poll_targets
++            Ok(Ok(result)) => {
++                let acknowledgement = match (&operation, &result) {
++                    (TerminalOperation::Open, TerminalOperationResult::Acknowledged) => poll_targets
+                         .terminal
+                         .borrow_mut()
+                         .apply_open_acknowledgement(),
+-                    TerminalOperation::Input => Ok(()),
+-                    TerminalOperation::Close => poll_targets
++                    (TerminalOperation::Input, TerminalOperationResult::Acknowledged)
++                    | (TerminalOperation::Resize, TerminalOperationResult::Acknowledged)
++                    | (TerminalOperation::Read, TerminalOperationResult::Output(_)) => Ok(()),
++                    (TerminalOperation::Close, TerminalOperationResult::Acknowledged) => poll_targets
+                         .terminal
+                         .borrow_mut()
+                         .apply_close_acknowledgement(),
++                    _ => Err(crate::management::ManagementError::InvalidAcknowledgement),
+                 };
+ 
+                 poll_targets.operation_pending.set(false);
+@@ -598,17 +648,35 @@ fn start_terminal_operation(
+                         .status
+                         .set_text("Terminal acknowledgement did not match local session state");
+                 } else {
+-                    match operation {
+-                        TerminalOperation::Open => poll_targets.status.set_text(
+-                            "Session open. Input is authorized by the Agent; output presentation is not enabled in this checkpoint.",
+-                        ),
+-                        TerminalOperation::Input => {
++                    match (operation, result) {
++                        (TerminalOperation::Open, TerminalOperationResult::Acknowledged) => {
++                            poll_targets.output.buffer().set_text("");
++                            poll_targets
++                                .status
++                                .set_text("Session open. Input, bounded output reads, and resize are authorized by the Agent");
++                        }
++                        (TerminalOperation::Input, TerminalOperationResult::Acknowledged) => {
+                             poll_targets.input.set_text("");
+                             poll_targets.status.set_text("Terminal input acknowledged");
+                         }
+-                        TerminalOperation::Close => {
++                        (TerminalOperation::Read, TerminalOperationResult::Output(bytes)) => {
++                            append_terminal_output(&poll_targets.output, &bytes);
++                            if bytes.is_empty() {
++                                poll_targets.status.set_text("No new terminal output available");
++                            } else {
++                                poll_targets.status.set_text(&format!(
++                                    "Read {} bytes of bounded terminal output",
++                                    bytes.len()
++                                ));
++                            }
++                        }
++                        (TerminalOperation::Resize, TerminalOperationResult::Acknowledged) => {
++                            poll_targets.status.set_text("Terminal geometry updated");
++                        }
++                        (TerminalOperation::Close, TerminalOperationResult::Acknowledged) => {
+                             poll_targets.status.set_text("Terminal session closed");
+                         }
++                        _ => unreachable!("terminal result shape was validated above"),
+                     }
+                 }
+                 render_terminal_controls(&poll_targets);
+@@ -669,6 +737,37 @@ fn request_terminal_input(targets: &SessionsPageTargets) {
+     }
+ }
+ 
++fn request_terminal_read(targets: &SessionsPageTargets) {
++    let payload = targets
++        .terminal
++        .borrow()
++        .request_read(TERMINAL_READ_MAXIMUM_BYTES);
++    match payload {
++        Ok(payload) => start_terminal_operation(targets, TerminalOperation::Read, payload),
++        Err(_) => targets
++            .status
++            .set_text("Terminal output read is unavailable from the current local state"),
++    }
++}
++
++fn request_terminal_resize(targets: &SessionsPageTargets) {
++    let columns = targets.columns.text().parse::<u16>();
++    let rows = targets.rows.text().parse::<u16>();
++    let (Ok(columns), Ok(rows)) = (columns, rows) else {
++        targets
++            .status
++            .set_text("Invalid terminal geometry: enter numeric columns and rows");
++        return;
++    };
++    let payload = targets.terminal.borrow().request_resize(columns, rows);
++    match payload {
++        Ok(payload) => start_terminal_operation(targets, TerminalOperation::Resize, payload),
++        Err(_) => targets
++            .status
++            .set_text("Terminal geometry is unavailable or outside the authorized bounds"),
++    }
++}
++
+ fn request_terminal_close(targets: &SessionsPageTargets) {
+     let payload = targets.terminal.borrow_mut().request_close();
+     match payload {
+@@ -692,7 +791,7 @@ fn sessions_page() -> gtk::Box {
+     page.append(&title);
+ 
+     let subtitle = gtk::Label::new(Some(
+-        "Authorized local terminal-session control through the existing trusted Agent socket and Agent-owned terminal capability checks. This checkpoint opens a POSIX shell, sends bounded input lines, and closes the session; terminal output presentation is not enabled yet.",
++        "Authorized local terminal-session control through the existing trusted Agent socket and Agent-owned terminal capability checks. This surface opens a fixed POSIX shell, sends bounded input lines, reads bounded output on demand, resizes validated terminal geometry, and closes the session on the same authenticated connection.",
+     ));
+     subtitle.set_xalign(0.0);
+     subtitle.set_wrap(true);
+@@ -710,24 +809,61 @@ fn sessions_page() -> gtk::Box {
+     status.set_wrap(true);
+     page.append(&status);
+ 
++    let output_title = gtk::Label::new(Some("Terminal output"));
++    output_title.set_xalign(0.0);
++    output_title.add_css_class(HEADING_CSS_CLASS);
++    page.append(&output_title);
++
++    let output = gtk::TextView::new();
++    output.set_editable(false);
++    output.set_cursor_visible(false);
++    output.set_monospace(true);
++    let output_scroller = gtk::ScrolledWindow::new();
++    output_scroller.set_min_content_height(220);
++    output_scroller.set_vexpand(true);
++    output_scroller.set_child(Some(&output));
++    page.append(&output_scroller);
++
+     let input = gtk::Entry::new();
+     input.set_placeholder_text(Some("Terminal input line"));
+     page.append(&input);
+ 
++    let geometry = gtk::Box::new(gtk::Orientation::Horizontal, 8);
++    let columns = gtk::Entry::new();
++    columns.set_width_chars(6);
++    columns.set_text(&TERMINAL_COLUMNS.to_string());
++    columns.set_placeholder_text(Some("Columns"));
++    let rows = gtk::Entry::new();
++    rows.set_width_chars(6);
++    rows.set_text(&TERMINAL_ROWS.to_string());
++    rows.set_placeholder_text(Some("Rows"));
++    let resize_button = gtk::Button::with_label(TERMINAL_RESIZE_LABEL);
++    geometry.append(&columns);
++    geometry.append(&rows);
++    geometry.append(&resize_button);
++    page.append(&geometry);
++
+     let controls = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+     let open_button = gtk::Button::with_label(TERMINAL_OPEN_LABEL);
+     let send_button = gtk::Button::with_label(TERMINAL_SEND_LABEL);
++    let read_button = gtk::Button::with_label(TERMINAL_READ_LABEL);
+     let close_button = gtk::Button::with_label(TERMINAL_CLOSE_LABEL);
+     controls.append(&open_button);
+     controls.append(&send_button);
++    controls.append(&read_button);
+     controls.append(&close_button);
+     page.append(&controls);
+ 
+     let targets = SessionsPageTargets {
+         status,
++        output,
+         input,
++        columns,
++        rows,
+         open_button,
+         send_button,
++        read_button,
++        resize_button,
+         close_button,
+         terminal: Rc::new(RefCell::new(TerminalPresentation::new(session_id))),
+         terminal_connection: Arc::new(Mutex::new(None)),
+@@ -750,6 +886,16 @@ fn sessions_page() -> gtk::Box {
+         .input
+         .connect_activate(move |_| request_terminal_input(&activate_targets));
+ 
++    let read_targets = targets.clone();
++    targets
++        .read_button
++        .connect_clicked(move |_| request_terminal_read(&read_targets));
++
++    let resize_targets = targets.clone();
++    targets
++        .resize_button
++        .connect_clicked(move |_| request_terminal_resize(&resize_targets));
++
+     let close_targets = targets.clone();
+     targets
+         .close_button
+@@ -2145,21 +2291,21 @@ mod tests {
+ 
+         assert_eq!(
+             super::terminal_controls_for_state(Closed, false),
+-            (true, false, false, false)
++            (true, false, false, false, false, false)
+         );
+         assert_eq!(
+             super::terminal_controls_for_state(Open, false),
+-            (false, true, true, true)
++            (false, true, true, true, true, true)
+         );
+         for state in [Opening, Closing, Failed] {
+             assert_eq!(
+                 super::terminal_controls_for_state(state, false),
+-                (false, false, false, false)
++                (false, false, false, false, false, false)
+             );
+         }
+         assert_eq!(
+             super::terminal_controls_for_state(Open, true),
+-            (false, false, false, false)
++            (false, false, false, false, false, false)
+         );
+     }
+ 
