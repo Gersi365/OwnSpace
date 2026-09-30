@@ -32,9 +32,12 @@ const COPY_SNAPSHOT_IDLE_LABEL: &str = "Copy current snapshot";
 const COPY_SNAPSHOT_DONE_LABEL: &str = "Copied";
 const TERMINAL_OPEN_LABEL: &str = "Open POSIX shell session";
 const TERMINAL_SEND_LABEL: &str = "Send line";
+const TERMINAL_READ_LABEL: &str = "Read output";
+const TERMINAL_RESIZE_LABEL: &str = "Resize";
 const TERMINAL_CLOSE_LABEL: &str = "Close session";
 const TERMINAL_COLUMNS: u16 = 80;
 const TERMINAL_ROWS: u16 = 24;
+const TERMINAL_READ_MAXIMUM_BYTES: usize = 16_384;
 static NEXT_TERMINAL_SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
 static NEXT_UPLOAD_TRANSFER_COUNTER: AtomicU64 = AtomicU64::new(1);
 const UPLOAD_BUTTON_IDLE_LABEL: &str = "Upload file";
@@ -112,9 +115,14 @@ struct FilesPageTargets {
 #[derive(Clone)]
 struct SessionsPageTargets {
     status: gtk::Label,
+    output: gtk::TextView,
     input: gtk::Entry,
+    columns: gtk::Entry,
+    rows: gtk::Entry,
     open_button: gtk::Button,
     send_button: gtk::Button,
+    read_button: gtk::Button,
+    resize_button: gtk::Button,
     close_button: gtk::Button,
     terminal: Rc<RefCell<TerminalPresentation>>,
     terminal_connection: Arc<Mutex<Option<ipc::TerminalManagementSession>>>,
@@ -125,7 +133,15 @@ struct SessionsPageTargets {
 enum TerminalOperation {
     Open,
     Input,
+    Read,
+    Resize,
     Close,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TerminalOperationResult {
+    Acknowledged,
+    Output(Vec<u8>),
 }
 
 #[derive(Clone)]
@@ -472,27 +488,31 @@ fn next_terminal_session_id() -> u64 {
 const fn terminal_controls_for_state(
     state: TerminalPresentationState,
     operation_pending: bool,
-) -> (bool, bool, bool, bool) {
+) -> (bool, bool, bool, bool, bool, bool) {
     if operation_pending {
-        return (false, false, false, false);
+        return (false, false, false, false, false, false);
     }
 
     match state {
-        TerminalPresentationState::Closed => (true, false, false, false),
-        TerminalPresentationState::Open => (false, true, true, true),
+        TerminalPresentationState::Closed => (true, false, false, false, false, false),
+        TerminalPresentationState::Open => (false, true, true, true, true, true),
         TerminalPresentationState::Opening
         | TerminalPresentationState::Closing
-        | TerminalPresentationState::Failed => (false, false, false, false),
+        | TerminalPresentationState::Failed => (false, false, false, false, false, false),
     }
 }
 
 fn render_terminal_controls(targets: &SessionsPageTargets) {
     let state = targets.terminal.borrow().state();
-    let (open, input, send, close) =
+    let (open, input, send, read, resize, close) =
         terminal_controls_for_state(state, targets.operation_pending.get());
     targets.open_button.set_sensitive(open);
     targets.input.set_sensitive(input);
     targets.send_button.set_sensitive(send);
+    targets.read_button.set_sensitive(read);
+    targets.columns.set_sensitive(resize);
+    targets.rows.set_sensitive(resize);
+    targets.resize_button.set_sensitive(resize);
     targets.close_button.set_sensitive(close);
 }
 
@@ -500,6 +520,8 @@ const fn terminal_operation_status(operation: TerminalOperation) -> &'static str
     match operation {
         TerminalOperation::Open => "Opening authorized terminal session…",
         TerminalOperation::Input => "Sending bounded terminal input…",
+        TerminalOperation::Read => "Reading bounded terminal output…",
+        TerminalOperation::Resize => "Resizing terminal session…",
         TerminalOperation::Close => "Closing terminal session…",
     }
 }
@@ -508,7 +530,7 @@ fn execute_terminal_operation(
     connection: &Arc<Mutex<Option<ipc::TerminalManagementSession>>>,
     operation: TerminalOperation,
     payload: &[u8],
-) -> Result<(), ipc::DesktopIpcError> {
+) -> Result<TerminalOperationResult, ipc::DesktopIpcError> {
     let mut connection = connection
         .lock()
         .map_err(|_| ipc::DesktopIpcError::TerminalSessionUnavailable)?;
@@ -520,23 +542,50 @@ fn execute_terminal_operation(
             let mut session = ipc::TerminalManagementSession::connect()?;
             session.open(payload)?;
             *connection = Some(session);
-            Ok(())
+            Ok(TerminalOperationResult::Acknowledged)
         }
-        TerminalOperation::Input => connection
+        TerminalOperation::Input => {
+            connection
+                .as_mut()
+                .ok_or(ipc::DesktopIpcError::TerminalSessionUnavailable)?
+                .input(payload)?;
+            Ok(TerminalOperationResult::Acknowledged)
+        }
+        TerminalOperation::Read => connection
             .as_mut()
             .ok_or(ipc::DesktopIpcError::TerminalSessionUnavailable)?
-            .input(payload),
+            .read(payload, TERMINAL_READ_MAXIMUM_BYTES)
+            .map(TerminalOperationResult::Output),
+        TerminalOperation::Resize => {
+            connection
+                .as_mut()
+                .ok_or(ipc::DesktopIpcError::TerminalSessionUnavailable)?
+                .resize(payload)?;
+            Ok(TerminalOperationResult::Acknowledged)
+        }
         TerminalOperation::Close => {
             let result = connection
                 .as_mut()
                 .ok_or(ipc::DesktopIpcError::TerminalSessionUnavailable)?
                 .close(payload);
             *connection = None;
-            result
+            drop(connection);
+            result.map(|()| TerminalOperationResult::Acknowledged)
         }
     }
 }
 
+fn append_terminal_output(output: &gtk::TextView, bytes: &[u8]) {
+    if bytes.is_empty() {
+        return;
+    }
+    let rendered = String::from_utf8_lossy(bytes);
+    let buffer = output.buffer();
+    let mut end = buffer.end_iter();
+    buffer.insert(&mut end, rendered.as_ref());
+}
+
+#[allow(clippy::too_many_lines)]
 fn start_terminal_operation(
     targets: &SessionsPageTargets,
     operation: TerminalOperation,
@@ -575,17 +624,26 @@ fn start_terminal_operation(
     let poll_targets = targets.clone();
     let _source_id = glib::timeout_add_local(WORKER_RESULT_POLL_INTERVAL, move || {
         match receiver.try_recv() {
-            Ok(Ok(())) => {
-                let acknowledgement = match operation {
-                    TerminalOperation::Open => poll_targets
-                        .terminal
-                        .borrow_mut()
-                        .apply_open_acknowledgement(),
-                    TerminalOperation::Input => Ok(()),
-                    TerminalOperation::Close => poll_targets
-                        .terminal
-                        .borrow_mut()
-                        .apply_close_acknowledgement(),
+            Ok(Ok(result)) => {
+                let acknowledgement = match (&operation, &result) {
+                    (TerminalOperation::Open, TerminalOperationResult::Acknowledged) => {
+                        poll_targets
+                            .terminal
+                            .borrow_mut()
+                            .apply_open_acknowledgement()
+                    }
+                    (
+                        TerminalOperation::Input | TerminalOperation::Resize,
+                        TerminalOperationResult::Acknowledged,
+                    )
+                    | (TerminalOperation::Read, TerminalOperationResult::Output(_)) => Ok(()),
+                    (TerminalOperation::Close, TerminalOperationResult::Acknowledged) => {
+                        poll_targets
+                            .terminal
+                            .borrow_mut()
+                            .apply_close_acknowledgement()
+                    }
+                    _ => Err(crate::management::ManagementError::InvalidAcknowledgement),
                 };
 
                 poll_targets.operation_pending.set(false);
@@ -598,17 +656,37 @@ fn start_terminal_operation(
                         .status
                         .set_text("Terminal acknowledgement did not match local session state");
                 } else {
-                    match operation {
-                        TerminalOperation::Open => poll_targets.status.set_text(
-                            "Session open. Input is authorized by the Agent; output presentation is not enabled in this checkpoint.",
-                        ),
-                        TerminalOperation::Input => {
+                    match (operation, result) {
+                        (TerminalOperation::Open, TerminalOperationResult::Acknowledged) => {
+                            poll_targets.output.buffer().set_text("");
+                            poll_targets
+                                .status
+                                .set_text("Session open. Input, bounded output reads, and resize are authorized by the Agent");
+                        }
+                        (TerminalOperation::Input, TerminalOperationResult::Acknowledged) => {
                             poll_targets.input.set_text("");
                             poll_targets.status.set_text("Terminal input acknowledged");
                         }
-                        TerminalOperation::Close => {
+                        (TerminalOperation::Read, TerminalOperationResult::Output(bytes)) => {
+                            append_terminal_output(&poll_targets.output, &bytes);
+                            if bytes.is_empty() {
+                                poll_targets
+                                    .status
+                                    .set_text("No new terminal output available");
+                            } else {
+                                poll_targets.status.set_text(&format!(
+                                    "Read {} bytes of bounded terminal output",
+                                    bytes.len()
+                                ));
+                            }
+                        }
+                        (TerminalOperation::Resize, TerminalOperationResult::Acknowledged) => {
+                            poll_targets.status.set_text("Terminal geometry updated");
+                        }
+                        (TerminalOperation::Close, TerminalOperationResult::Acknowledged) => {
                             poll_targets.status.set_text("Terminal session closed");
                         }
+                        _ => unreachable!("terminal result shape was validated above"),
                     }
                 }
                 render_terminal_controls(&poll_targets);
@@ -669,6 +747,37 @@ fn request_terminal_input(targets: &SessionsPageTargets) {
     }
 }
 
+fn request_terminal_read(targets: &SessionsPageTargets) {
+    let payload = targets
+        .terminal
+        .borrow()
+        .request_read(TERMINAL_READ_MAXIMUM_BYTES);
+    match payload {
+        Ok(payload) => start_terminal_operation(targets, TerminalOperation::Read, payload),
+        Err(_) => targets
+            .status
+            .set_text("Terminal output read is unavailable from the current local state"),
+    }
+}
+
+fn request_terminal_resize(targets: &SessionsPageTargets) {
+    let columns = targets.columns.text().parse::<u16>();
+    let rows = targets.rows.text().parse::<u16>();
+    let (Ok(columns), Ok(rows)) = (columns, rows) else {
+        targets
+            .status
+            .set_text("Invalid terminal geometry: enter numeric columns and rows");
+        return;
+    };
+    let payload = targets.terminal.borrow().request_resize(columns, rows);
+    match payload {
+        Ok(payload) => start_terminal_operation(targets, TerminalOperation::Resize, payload),
+        Err(_) => targets
+            .status
+            .set_text("Terminal geometry is unavailable or outside the authorized bounds"),
+    }
+}
+
 fn request_terminal_close(targets: &SessionsPageTargets) {
     let payload = targets.terminal.borrow_mut().request_close();
     match payload {
@@ -679,6 +788,7 @@ fn request_terminal_close(targets: &SessionsPageTargets) {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn sessions_page() -> gtk::Box {
     let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
     page.set_margin_top(PAGE_OUTER_MARGIN);
@@ -692,7 +802,7 @@ fn sessions_page() -> gtk::Box {
     page.append(&title);
 
     let subtitle = gtk::Label::new(Some(
-        "Authorized local terminal-session control through the existing trusted Agent socket and Agent-owned terminal capability checks. This checkpoint opens a POSIX shell, sends bounded input lines, and closes the session; terminal output presentation is not enabled yet.",
+        "Authorized local terminal-session control through the existing trusted Agent socket and Agent-owned terminal capability checks. This surface opens a fixed POSIX shell, sends bounded input lines, reads bounded output on demand, resizes validated terminal geometry, and closes the session on the same authenticated connection.",
     ));
     subtitle.set_xalign(0.0);
     subtitle.set_wrap(true);
@@ -710,24 +820,61 @@ fn sessions_page() -> gtk::Box {
     status.set_wrap(true);
     page.append(&status);
 
+    let output_title = gtk::Label::new(Some("Terminal output"));
+    output_title.set_xalign(0.0);
+    output_title.add_css_class(HEADING_CSS_CLASS);
+    page.append(&output_title);
+
+    let output = gtk::TextView::new();
+    output.set_editable(false);
+    output.set_cursor_visible(false);
+    output.set_monospace(true);
+    let output_scroller = gtk::ScrolledWindow::new();
+    output_scroller.set_min_content_height(220);
+    output_scroller.set_vexpand(true);
+    output_scroller.set_child(Some(&output));
+    page.append(&output_scroller);
+
     let input = gtk::Entry::new();
     input.set_placeholder_text(Some("Terminal input line"));
     page.append(&input);
 
+    let geometry = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let columns = gtk::Entry::new();
+    columns.set_width_chars(6);
+    columns.set_text(&TERMINAL_COLUMNS.to_string());
+    columns.set_placeholder_text(Some("Columns"));
+    let rows = gtk::Entry::new();
+    rows.set_width_chars(6);
+    rows.set_text(&TERMINAL_ROWS.to_string());
+    rows.set_placeholder_text(Some("Rows"));
+    let resize_button = gtk::Button::with_label(TERMINAL_RESIZE_LABEL);
+    geometry.append(&columns);
+    geometry.append(&rows);
+    geometry.append(&resize_button);
+    page.append(&geometry);
+
     let controls = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     let open_button = gtk::Button::with_label(TERMINAL_OPEN_LABEL);
     let send_button = gtk::Button::with_label(TERMINAL_SEND_LABEL);
+    let read_button = gtk::Button::with_label(TERMINAL_READ_LABEL);
     let close_button = gtk::Button::with_label(TERMINAL_CLOSE_LABEL);
     controls.append(&open_button);
     controls.append(&send_button);
+    controls.append(&read_button);
     controls.append(&close_button);
     page.append(&controls);
 
     let targets = SessionsPageTargets {
         status,
+        output,
         input,
+        columns,
+        rows,
         open_button,
         send_button,
+        read_button,
+        resize_button,
         close_button,
         terminal: Rc::new(RefCell::new(TerminalPresentation::new(session_id))),
         terminal_connection: Arc::new(Mutex::new(None)),
@@ -749,6 +896,16 @@ fn sessions_page() -> gtk::Box {
     targets
         .input
         .connect_activate(move |_| request_terminal_input(&activate_targets));
+
+    let read_targets = targets.clone();
+    targets
+        .read_button
+        .connect_clicked(move |_| request_terminal_read(&read_targets));
+
+    let resize_targets = targets.clone();
+    targets
+        .resize_button
+        .connect_clicked(move |_| request_terminal_resize(&resize_targets));
 
     let close_targets = targets.clone();
     targets
@@ -2145,21 +2302,21 @@ mod tests {
 
         assert_eq!(
             super::terminal_controls_for_state(Closed, false),
-            (true, false, false, false)
+            (true, false, false, false, false, false)
         );
         assert_eq!(
             super::terminal_controls_for_state(Open, false),
-            (false, true, true, true)
+            (false, true, true, true, true, true)
         );
         for state in [Opening, Closing, Failed] {
             assert_eq!(
                 super::terminal_controls_for_state(state, false),
-                (false, false, false, false)
+                (false, false, false, false, false, false)
             );
         }
         assert_eq!(
             super::terminal_controls_for_state(Open, true),
-            (false, false, false, false)
+            (false, false, false, false, false, false)
         );
     }
 

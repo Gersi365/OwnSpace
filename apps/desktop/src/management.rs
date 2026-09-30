@@ -69,6 +69,36 @@ pub(crate) fn encode_terminal_input(
     })
 }
 
+pub(crate) fn encode_terminal_resize(
+    session_id: u64,
+    columns: u16,
+    rows: u16,
+) -> Result<Vec<u8>, ManagementError> {
+    let session_id =
+        TerminalSessionId::new(session_id).map_err(|_| ManagementError::InvalidTerminal)?;
+    let geometry =
+        TerminalGeometry::new(columns, rows).map_err(|_| ManagementError::InvalidTerminal)?;
+    bridge_payload(&BridgeCommand::TerminalResize {
+        session_id,
+        geometry,
+    })
+}
+
+pub(crate) fn encode_terminal_read(
+    session_id: u64,
+    maximum_bytes: usize,
+) -> Result<Vec<u8>, ManagementError> {
+    if maximum_bytes == 0 || maximum_bytes > MAX_BRIDGE_INLINE_BYTES {
+        return Err(ManagementError::InvalidTerminal);
+    }
+    let session_id =
+        TerminalSessionId::new(session_id).map_err(|_| ManagementError::InvalidTerminal)?;
+    bridge_payload(&BridgeCommand::TerminalRead {
+        session_id,
+        maximum_bytes,
+    })
+}
+
 pub(crate) fn encode_terminal_close(session_id: u64) -> Result<Vec<u8>, ManagementError> {
     let session_id =
         TerminalSessionId::new(session_id).map_err(|_| ManagementError::InvalidTerminal)?;
@@ -289,6 +319,24 @@ impl TerminalPresentation {
             return Err(ManagementError::InvalidState);
         }
         encode_terminal_input(self.session_id, input)
+    }
+
+    pub(crate) fn request_resize(
+        &self,
+        columns: u16,
+        rows: u16,
+    ) -> Result<Vec<u8>, ManagementError> {
+        if self.state != TerminalPresentationState::Open {
+            return Err(ManagementError::InvalidState);
+        }
+        encode_terminal_resize(self.session_id, columns, rows)
+    }
+
+    pub(crate) fn request_read(&self, maximum_bytes: usize) -> Result<Vec<u8>, ManagementError> {
+        if self.state != TerminalPresentationState::Open {
+            return Err(ManagementError::InvalidState);
+        }
+        encode_terminal_read(self.session_id, maximum_bytes)
     }
 
     pub(crate) fn request_close(&mut self) -> Result<Vec<u8>, ManagementError> {
@@ -616,6 +664,21 @@ mod tests {
             BridgeCommand::TerminalInput { .. }
         ));
 
+        let resize = terminal.request_resize(100, 40).expect("terminal resize");
+        assert!(matches!(
+            BridgeCommand::decode(&resize).expect("decode resize"),
+            BridgeCommand::TerminalResize { .. }
+        ));
+
+        let read = terminal.request_read(16_384).expect("terminal read");
+        assert!(matches!(
+            BridgeCommand::decode(&read).expect("decode read"),
+            BridgeCommand::TerminalRead {
+                maximum_bytes: 16_384,
+                ..
+            }
+        ));
+
         let close = terminal.request_close().expect("terminal close intent");
         assert!(matches!(
             BridgeCommand::decode(&close).expect("decode close"),
@@ -634,6 +697,10 @@ mod tests {
         assert!(encode_terminal_open(1, TerminalProfile::PosixShell, 0, 24).is_err());
         assert!(encode_terminal_input(1, b"").is_err());
         assert!(encode_terminal_input(1, &vec![0; MAX_BRIDGE_INLINE_BYTES + 1]).is_err());
+        assert!(encode_terminal_resize(1, 0, 24).is_err());
+        assert!(encode_terminal_resize(1, 80, 0).is_err());
+        assert!(encode_terminal_read(1, 0).is_err());
+        assert!(encode_terminal_read(1, MAX_BRIDGE_INLINE_BYTES + 1).is_err());
     }
 
     #[test]

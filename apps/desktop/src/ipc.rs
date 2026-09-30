@@ -40,9 +40,12 @@ const UPLOAD_CHUNK_REQUEST_ID: u64 = 8;
 const UPLOAD_FINALIZE_REQUEST_ID: u64 = 9;
 const UPLOAD_ABORT_REQUEST_ID: u64 = 10;
 const DEVICE_LIST_REQUEST_ID: u64 = 11;
+const TERMINAL_RESIZE_REQUEST_ID: u64 = 12;
+const TERMINAL_READ_REQUEST_ID: u64 = 13;
 const MANAGEMENT_STATUS_PREFIX_LENGTH: usize = 2;
 const MANAGEMENT_EMPTY_RESULT: u8 = 4;
 const MANAGEMENT_OFFSET_RESULT: u8 = 5;
+const MANAGEMENT_BYTES_RESULT: u8 = 6;
 
 #[derive(Debug, Clone)]
 pub struct StatusProbe {
@@ -253,6 +256,23 @@ impl TerminalManagementSession {
         self.query_empty_management(TERMINAL_INPUT_REQUEST_ID, bridge_payload)
     }
 
+    pub(crate) fn resize(&mut self, bridge_payload: &[u8]) -> Result<(), DesktopIpcError> {
+        self.query_empty_management(TERMINAL_RESIZE_REQUEST_ID, bridge_payload)
+    }
+
+    pub(crate) fn read(
+        &mut self,
+        bridge_payload: &[u8],
+        maximum_bytes: usize,
+    ) -> Result<Vec<u8>, DesktopIpcError> {
+        let request_id = LocalIpcRequestId::new(TERMINAL_READ_REQUEST_ID)
+            .map_err(|_| DesktopIpcError::RequestIdGenerationFailed)?;
+        let request = build_local_management_request_frame(request_id, bridge_payload)
+            .map_err(|_| DesktopIpcError::ManagementRequestInvalid)?;
+        let frame = query_prebuilt_success_frame_on_stream(&mut self.stream, request_id, &request)?;
+        validate_bytes_management_ack(frame.payload().as_bytes(), maximum_bytes)
+    }
+
     pub(crate) fn close(&mut self, bridge_payload: &[u8]) -> Result<(), DesktopIpcError> {
         self.query_empty_management(TERMINAL_CLOSE_REQUEST_ID, bridge_payload)
     }
@@ -360,6 +380,23 @@ fn validate_offset_management_ack(payload: &[u8]) -> Result<u64, DesktopIpcError
     let mut offset = [0_u8; 8];
     offset.copy_from_slice(&body[1..]);
     Ok(u64::from_be_bytes(offset))
+}
+
+fn validate_bytes_management_ack(
+    payload: &[u8],
+    maximum_bytes: usize,
+) -> Result<Vec<u8>, DesktopIpcError> {
+    let body = payload
+        .get(MANAGEMENT_STATUS_PREFIX_LENGTH..)
+        .ok_or(DesktopIpcError::ResponseInvalid)?;
+    if body.first().copied() != Some(MANAGEMENT_BYTES_RESULT) {
+        return Err(DesktopIpcError::ResponseInvalid);
+    }
+    let bytes = &body[1..];
+    if maximum_bytes == 0 || bytes.len() > maximum_bytes {
+        return Err(DesktopIpcError::ResponseInvalid);
+    }
+    Ok(bytes.to_vec())
 }
 
 fn query_prebuilt_success_frame(
@@ -541,7 +578,8 @@ mod tests {
 
     use super::{
         DesktopIpcError, StatusProbe, endpoint_candidate_from_raw, ensure_response_id,
-        runtime_root_from_raw, validate_empty_management_ack, validate_offset_management_ack,
+        runtime_root_from_raw, validate_bytes_management_ack, validate_empty_management_ack,
+        validate_offset_management_ack,
     };
     use crate::state::{AgentAvailability, AgentRuntimePresentation};
     use prw_agent::local_commands::{
@@ -818,5 +856,24 @@ mod tests {
             validate_empty_management_ack(&[0, 0, 4, 0]),
             Err(DesktopIpcError::ResponseInvalid)
         );
+    }
+
+    #[test]
+    fn terminal_management_bytes_ack_is_bounded_by_the_requested_read() {
+        assert_eq!(
+            validate_bytes_management_ack(&[0, 0, 6, b'o', b'k'], 2),
+            Ok(b"ok".to_vec())
+        );
+        assert_eq!(validate_bytes_management_ack(&[0, 0, 6], 2), Ok(Vec::new()));
+        for invalid in [
+            (&[0, 0, 4][..], 2),
+            (&[0, 0, 6, b'o', b'k', b'!'][..], 2),
+            (&[0, 0, 6, b'o'][..], 0),
+        ] {
+            assert_eq!(
+                validate_bytes_management_ack(invalid.0, invalid.1),
+                Err(DesktopIpcError::ResponseInvalid)
+            );
+        }
     }
 }
