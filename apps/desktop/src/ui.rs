@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, TryRecvError};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use adw::prelude::*;
@@ -116,6 +117,7 @@ struct SessionsPageTargets {
     send_button: gtk::Button,
     close_button: gtk::Button,
     terminal: Rc<RefCell<TerminalPresentation>>,
+    terminal_connection: Arc<Mutex<Option<ipc::TerminalManagementSession>>>,
     operation_pending: Rc<Cell<bool>>,
 }
 
@@ -503,13 +505,35 @@ const fn terminal_operation_status(operation: TerminalOperation) -> &'static str
 }
 
 fn execute_terminal_operation(
+    connection: &Arc<Mutex<Option<ipc::TerminalManagementSession>>>,
     operation: TerminalOperation,
     payload: &[u8],
 ) -> Result<(), ipc::DesktopIpcError> {
+    let mut connection = connection
+        .lock()
+        .map_err(|_| ipc::DesktopIpcError::TerminalSessionUnavailable)?;
     match operation {
-        TerminalOperation::Open => ipc::query_terminal_open(payload),
-        TerminalOperation::Input => ipc::query_terminal_input(payload),
-        TerminalOperation::Close => ipc::query_terminal_close(payload),
+        TerminalOperation::Open => {
+            if connection.is_some() {
+                return Err(ipc::DesktopIpcError::TerminalSessionUnavailable);
+            }
+            let mut session = ipc::TerminalManagementSession::connect()?;
+            session.open(payload)?;
+            *connection = Some(session);
+            Ok(())
+        }
+        TerminalOperation::Input => connection
+            .as_mut()
+            .ok_or(ipc::DesktopIpcError::TerminalSessionUnavailable)?
+            .input(payload),
+        TerminalOperation::Close => {
+            let result = connection
+                .as_mut()
+                .ok_or(ipc::DesktopIpcError::TerminalSessionUnavailable)?
+                .close(payload);
+            *connection = None;
+            result
+        }
     }
 }
 
@@ -524,11 +548,18 @@ fn start_terminal_operation(
         .set_text(terminal_operation_status(operation));
     render_terminal_controls(targets);
 
+    let connection = Arc::clone(&targets.terminal_connection);
     let (sender, receiver) = mpsc::sync_channel(1);
     let spawn_result = std::thread::Builder::new()
         .name("prw-desktop-terminal-management".to_owned())
         .spawn(move || {
-            let _ = sender.send(execute_terminal_operation(operation, &payload));
+            let result = execute_terminal_operation(&connection, operation, &payload);
+            if result.is_err()
+                && let Ok(mut connection) = connection.lock()
+            {
+                *connection = None;
+            }
+            let _ = sender.send(result);
         });
 
     if spawn_result.is_err() {
@@ -559,6 +590,9 @@ fn start_terminal_operation(
 
                 poll_targets.operation_pending.set(false);
                 if acknowledgement.is_err() {
+                    if let Ok(mut connection) = poll_targets.terminal_connection.lock() {
+                        *connection = None;
+                    }
                     poll_targets.terminal.borrow_mut().apply_failure();
                     poll_targets
                         .status
@@ -582,6 +616,9 @@ fn start_terminal_operation(
             }
             Ok(Err(error)) => {
                 poll_targets.operation_pending.set(false);
+                if let Ok(mut connection) = poll_targets.terminal_connection.lock() {
+                    *connection = None;
+                }
                 poll_targets.terminal.borrow_mut().apply_failure();
                 poll_targets
                     .status
@@ -592,6 +629,9 @@ fn start_terminal_operation(
             Err(TryRecvError::Empty) => glib::ControlFlow::Continue,
             Err(TryRecvError::Disconnected) => {
                 poll_targets.operation_pending.set(false);
+                if let Ok(mut connection) = poll_targets.terminal_connection.lock() {
+                    *connection = None;
+                }
                 poll_targets.terminal.borrow_mut().apply_failure();
                 poll_targets
                     .status
@@ -690,6 +730,7 @@ fn sessions_page() -> gtk::Box {
         send_button,
         close_button,
         terminal: Rc::new(RefCell::new(TerminalPresentation::new(session_id))),
+        terminal_connection: Arc::new(Mutex::new(None)),
         operation_pending: Rc::new(Cell::new(false)),
     };
     render_terminal_controls(&targets);

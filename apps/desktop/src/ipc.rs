@@ -97,6 +97,7 @@ pub enum DesktopIpcError {
     RequestIdMismatch,
     AgentStatus(LocalAgentResponseStatus),
     ManagementRequestInvalid,
+    TerminalSessionUnavailable,
 }
 
 impl DesktopIpcError {
@@ -118,7 +119,8 @@ impl DesktopIpcError {
             | Self::ResponseInvalid
             | Self::RequestIdMismatch
             | Self::AgentStatus(_)
-            | Self::ManagementRequestInvalid => AgentAvailability::Error,
+            | Self::ManagementRequestInvalid
+            | Self::TerminalSessionUnavailable => AgentAvailability::Error,
         }
     }
 }
@@ -163,6 +165,9 @@ impl fmt::Display for DesktopIpcError {
             }
             Self::AgentStatus(_) => "Ownspace Agent returned an unknown response status",
             Self::ManagementRequestInvalid => "Ownspace management request is invalid",
+            Self::TerminalSessionUnavailable => {
+                "Ownspace terminal session connection is unavailable"
+            }
         };
         formatter.write_str(message)
     }
@@ -224,32 +229,46 @@ pub fn query_registered_devices() -> Result<Vec<LocalRegisteredDeviceEntry>, Des
         .map_err(|_| DesktopIpcError::ResponseInvalid)
 }
 
-/// Executes one already-encoded terminal-open management intent through the trusted local Agent socket.
-pub fn query_terminal_open(bridge_payload: &[u8]) -> Result<(), DesktopIpcError> {
-    query_empty_management(TERMINAL_OPEN_REQUEST_ID, bridge_payload)
+/// One connection-scoped local terminal management session.
+///
+/// Terminal open/input/close must remain on the same authenticated Unix stream because the Agent
+/// owns the PTY lifecycle per local connection. Dropping this object closes the stream and lets the
+/// Agent's explicit connection teardown close any still-active terminal process group.
+pub struct TerminalManagementSession {
+    stream: UnixStream,
 }
 
-/// Executes one already-encoded terminal-input management intent through the trusted local Agent socket.
-pub fn query_terminal_input(bridge_payload: &[u8]) -> Result<(), DesktopIpcError> {
-    query_empty_management(TERMINAL_INPUT_REQUEST_ID, bridge_payload)
-}
+impl TerminalManagementSession {
+    pub(crate) fn connect() -> Result<Self, DesktopIpcError> {
+        let endpoint = endpoint_from_environment()?;
+        let stream = connect_configured_stream(&endpoint)?;
+        Ok(Self { stream })
+    }
 
-/// Executes one already-encoded terminal-close management intent through the trusted local Agent socket.
-pub fn query_terminal_close(bridge_payload: &[u8]) -> Result<(), DesktopIpcError> {
-    query_empty_management(TERMINAL_CLOSE_REQUEST_ID, bridge_payload)
-}
+    pub(crate) fn open(&mut self, bridge_payload: &[u8]) -> Result<(), DesktopIpcError> {
+        self.query_empty_management(TERMINAL_OPEN_REQUEST_ID, bridge_payload)
+    }
 
-fn query_empty_management(
-    request_id_value: u64,
-    bridge_payload: &[u8],
-) -> Result<(), DesktopIpcError> {
-    let endpoint = endpoint_from_environment()?;
-    let request_id = LocalIpcRequestId::new(request_id_value)
-        .map_err(|_| DesktopIpcError::RequestIdGenerationFailed)?;
-    let request = build_local_management_request_frame(request_id, bridge_payload)
-        .map_err(|_| DesktopIpcError::ManagementRequestInvalid)?;
-    let frame = query_prebuilt_success_frame(&endpoint, request_id, &request)?;
-    validate_empty_management_ack(frame.payload().as_bytes())
+    pub(crate) fn input(&mut self, bridge_payload: &[u8]) -> Result<(), DesktopIpcError> {
+        self.query_empty_management(TERMINAL_INPUT_REQUEST_ID, bridge_payload)
+    }
+
+    pub(crate) fn close(&mut self, bridge_payload: &[u8]) -> Result<(), DesktopIpcError> {
+        self.query_empty_management(TERMINAL_CLOSE_REQUEST_ID, bridge_payload)
+    }
+
+    fn query_empty_management(
+        &mut self,
+        request_id_value: u64,
+        bridge_payload: &[u8],
+    ) -> Result<(), DesktopIpcError> {
+        let request_id = LocalIpcRequestId::new(request_id_value)
+            .map_err(|_| DesktopIpcError::RequestIdGenerationFailed)?;
+        let request = build_local_management_request_frame(request_id, bridge_payload)
+            .map_err(|_| DesktopIpcError::ManagementRequestInvalid)?;
+        let frame = query_prebuilt_success_frame_on_stream(&mut self.stream, request_id, &request)?;
+        validate_empty_management_ack(frame.payload().as_bytes())
+    }
 }
 
 /// One connection-scoped bounded upload session.
@@ -729,6 +748,10 @@ mod tests {
             (
                 DesktopIpcError::RequestIdMismatch,
                 "Ownspace Agent response correlation failed",
+            ),
+            (
+                DesktopIpcError::TerminalSessionUnavailable,
+                "Ownspace terminal session connection is unavailable",
             ),
         ] {
             assert_error_contract(error, AgentAvailability::Error, message);

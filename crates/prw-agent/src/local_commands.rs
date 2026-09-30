@@ -30,6 +30,8 @@ pub mod codec;
     reason = "pre-runtime inbound request state is intentionally crate-internal"
 )]
 pub(crate) mod inbound_state;
+#[cfg(target_os = "linux")]
+pub(crate) mod linux_terminal_backend;
 #[allow(
     dead_code,
     reason = "C03e-VU fixed AgentStatus boundary remains dormant before production wiring"

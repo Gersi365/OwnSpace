@@ -6,6 +6,7 @@
 //! Teardown explicitly aborts any unfinished staging transaction before provider state drops.
 
 use std::os::unix::net::UnixStream;
+use std::time::Duration;
 
 use prw_file_service::MAX_TRANSFER_CHUNK_BYTES;
 use prw_file_transfer::MAX_TRANSFER_BYTES;
@@ -13,6 +14,7 @@ use prw_policy::PolicyEvaluator;
 
 use super::{LocalLinuxSessionWorkerConfig, LocalLinuxSessionWorkerStop};
 use crate::linux_identity::authenticated_session::AuthenticatedLocalLinuxSession;
+use crate::linux_identity::deadline_io::LocalLinuxIoBudget;
 use crate::linux_identity::worker_capacity::LocalLinuxWorkerPermit;
 use crate::local_commands::boundary_request_response_transaction::LocalBoundaryRequestResponseOutcome;
 use crate::local_commands::management_agent_status_runtime::{
@@ -31,6 +33,16 @@ const MAX_UPLOAD_CHUNKS: usize =
 /// After `UploadBegin` has consumed one normal request slot, at most every full transfer
 /// chunk plus one `UploadFinalize` or `UploadAbort` request may extend the connection.
 const MAX_UPLOAD_CONTINUATION_REQUESTS: usize = MAX_UPLOAD_CHUNKS + 1;
+/// One opened local terminal may consume at most 255 additional requests after its normal
+/// opening request. This keeps one interactive connection finite while leaving room for
+/// bounded input/read/resize activity plus an explicit close.
+const MAX_TERMINAL_CONTINUATION_REQUESTS: usize = 255;
+const TERMINAL_IDLE_READ_SECONDS: u64 = 30 * 60;
+
+fn terminal_idle_read_budget() -> LocalLinuxIoBudget {
+    LocalLinuxIoBudget::try_new(Duration::from_secs(TERMINAL_IDLE_READ_SECONDS))
+        .expect("terminal idle read budget is non-zero")
+}
 
 /// Coarse crate-internal failure for one bounded-management finite worker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,9 +61,9 @@ pub(super) enum LocalLinuxAgentStatusManagementSessionWorkerError {
 
 /// Runs one authenticated local session through the bounded production command-3 slice.
 ///
-/// The existing `$HOME` descriptor authority is opened before mutable upload state is created.
-/// If that authority cannot be opened, the exact compatibility worker remains available so
-/// `AgentStatus` keeps working and `FileList` retains its existing per-request failure behavior.
+/// The existing `$HOME` descriptor authority is opened before mutable upload/terminal state is
+/// created. If that authority cannot be opened, the exact compatibility worker remains available
+/// so `AgentStatus` keeps working and `FileList` retains its existing per-request failure behavior.
 /// No caller can supply management policy, host root, terminal backend, or forwarding backend.
 ///
 /// # Errors
@@ -132,23 +144,33 @@ fn run_authenticated_session_worker_with_bounded_upload<RE: PolicyEvaluator + ?S
 ) -> Result<LocalLinuxSessionWorkerStop, LocalLinuxAgentStatusManagementSessionWorkerError> {
     let mut runtime = LocalBoundedUploadRuntime::new(filesystem);
     let base_request_budget = config.request_budget().get();
-    let hard_request_limit = base_request_budget.saturating_add(MAX_UPLOAD_CONTINUATION_REQUESTS);
+    let hard_request_limit = base_request_budget
+        .saturating_add(MAX_UPLOAD_CONTINUATION_REQUESTS)
+        .saturating_add(MAX_TERMINAL_CONTINUATION_REQUESTS);
     let mut responses_written = 0_usize;
 
     let result = loop {
-        if responses_written >= base_request_budget && !runtime.is_upload_active() {
+        if responses_written >= base_request_budget
+            && !runtime.is_upload_active()
+            && !runtime.is_terminal_active()
+        {
             break Ok(LocalLinuxSessionWorkerStop::RequestBudgetExhausted { responses_written });
         }
         if responses_written >= hard_request_limit {
             break Ok(LocalLinuxSessionWorkerStop::RequestBudgetExhausted { responses_written });
         }
 
+        let read_budget = if runtime.is_terminal_active() {
+            terminal_idle_read_budget()
+        } else {
+            config.read_budget()
+        };
         match session.process_one_agent_status_file_list_upload_management_with_deadlines(
             read_evaluator,
             status_snapshot,
             private_dns_snapshot,
             &mut runtime,
-            config.read_budget(),
+            read_budget,
             config.write_budget(),
         ) {
             Ok(LocalBoundaryRequestResponseOutcome::ResponseWritten) => {
@@ -192,6 +214,7 @@ mod tests {
     use prw_network::PrivateDnsConfig;
     use prw_policy::BoundedLocalReadPolicy;
     use prw_remote_bridge::BridgeCommand;
+    use prw_terminal::{TerminalGeometry, TerminalProfile, TerminalSessionId};
 
     use super::{
         LocalLinuxSessionWorkerConfig, LocalLinuxSessionWorkerStop,
@@ -406,6 +429,110 @@ mod tests {
             fs::read(root.join("uploaded.bin")).expect("final file"),
             payload
         );
+        fs::remove_dir_all(root).expect("test root removes");
+    }
+
+    fn terminal_id(value: u64) -> TerminalSessionId {
+        TerminalSessionId::new(value).expect("terminal id is non-zero")
+    }
+
+    fn terminal_geometry() -> TerminalGeometry {
+        TerminalGeometry::new(80, 24).expect("terminal geometry is bounded")
+    }
+
+    #[test]
+    fn active_terminal_extends_only_its_connection_until_explicit_close() {
+        let root = test_root("terminal-complete");
+        let filesystem = LocalManagementFilesystemAuthority::open_trusted_root(&root)
+            .expect("test filesystem authority opens");
+        let session_id = terminal_id(0x61);
+        let (server, mut client) = UnixStream::pair().expect("local pair creates");
+
+        for frame in [
+            management_frame(
+                963,
+                &BridgeCommand::TerminalOpen {
+                    session_id,
+                    profile: TerminalProfile::PosixShell,
+                    geometry: terminal_geometry(),
+                },
+            ),
+            management_frame(
+                964,
+                &BridgeCommand::TerminalInput {
+                    session_id,
+                    bytes: b"printf 'OWNSPACE_WORKER_OK\n'\n".to_vec(),
+                },
+            ),
+            management_frame(965, &BridgeCommand::TerminalClose(session_id)),
+        ] {
+            write_frame(&mut client, &frame).expect("terminal request writes");
+        }
+
+        let stop = run_authenticated_session_worker_with_bounded_upload(
+            session(server),
+            &BoundedLocalReadPolicy::allow_local_reads(),
+            status(),
+            &dns(),
+            config(),
+            &filesystem,
+        )
+        .expect("terminal worker succeeds");
+
+        assert_eq!(
+            stop,
+            LocalLinuxSessionWorkerStop::RequestBudgetExhausted {
+                responses_written: 3
+            }
+        );
+        for request_id in [963, 964, 965] {
+            let frame = read_frame(&mut client).expect("terminal response reads");
+            let terminal = validate_terminal_response_frame(&frame).expect("response validates");
+            assert_eq!(terminal.request_id(), id(request_id));
+            assert_eq!(terminal.status(), LocalAgentResponseStatus::Ok);
+        }
+        fs::remove_dir_all(root).expect("test root removes");
+    }
+
+    #[test]
+    fn clean_eof_closes_unfinished_terminal_before_worker_returns() {
+        let root = test_root("terminal-eof");
+        let filesystem = LocalManagementFilesystemAuthority::open_trusted_root(&root)
+            .expect("test filesystem authority opens");
+        let session_id = terminal_id(0x62);
+        let (server, mut client) = UnixStream::pair().expect("local pair creates");
+        let open = management_frame(
+            966,
+            &BridgeCommand::TerminalOpen {
+                session_id,
+                profile: TerminalProfile::PosixShell,
+                geometry: terminal_geometry(),
+            },
+        );
+        write_frame(&mut client, &open).expect("terminal open writes");
+        client
+            .shutdown(Shutdown::Write)
+            .expect("client write direction closes");
+
+        let stop = run_authenticated_session_worker_with_bounded_upload(
+            session(server),
+            &BoundedLocalReadPolicy::allow_local_reads(),
+            status(),
+            &dns(),
+            config(),
+            &filesystem,
+        )
+        .expect("clean EOF closes terminal");
+
+        assert_eq!(
+            stop,
+            LocalLinuxSessionWorkerStop::CleanEof {
+                responses_written: 1
+            }
+        );
+        let response = read_frame(&mut client).expect("open response reads");
+        let terminal = validate_terminal_response_frame(&response).expect("response validates");
+        assert_eq!(terminal.status(), LocalAgentResponseStatus::Ok);
         fs::remove_dir_all(root).expect("test root removes");
     }
 

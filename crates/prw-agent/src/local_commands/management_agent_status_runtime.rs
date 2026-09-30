@@ -1,11 +1,11 @@
-//! Narrow command-3 `AgentStatus` + `DeviceList` + `FileList` + bounded upload runtime adapter.
+//! Narrow production command-3 runtime for local status/files/upload plus one local terminal.
 //!
 //! The production slice remains explicitly narrower than the generic typed-management
 //! surface. `AgentStatus`, read-only `DeviceList`, and `FileList` preserve bounded behavior. A connection
-//! may additionally own at most one fresh create-only upload using `UploadBegin`,
-//! `UploadChunk`, `UploadFinalize`, and internal/client-requested `UploadAbort`.
-//! `UploadResume`, `DownloadChunk`, file mutation commands outside upload, terminal, and
-//! forwarding remain unsupported or denied. Filesystem authority is anchored to the
+//! may additionally own at most one fresh create-only upload or one fixed-profile local PTY terminal.
+//! Upload and terminal lifecycles are mutually exclusive on one authenticated connection.
+//! `UploadResume`, `DownloadChunk`, file mutation commands outside upload, forwarding, and
+//! non-POSIX terminal profiles remain unsupported or denied. Filesystem authority is anchored to the
 //! Agent user-service `$HOME`, never to `/` or a request-supplied host path.
 
 #![cfg(target_os = "linux")]
@@ -18,8 +18,13 @@ use prw_file_transfer::{FileTransferError, TransferId, UploadTransferManager};
 use prw_policy::{BoundedLocalManagementDecisions, BoundedLocalManagementPolicy, Decision};
 use prw_registry::durable_registry_sqlite_custody::open_existing_owner_pc_sqlite_authority_from_env;
 use prw_remote_bridge::BridgeCommand;
+use prw_terminal::{
+    LocalTerminalPrincipal, TerminalBroker, TerminalError, TerminalSessionId,
+    TerminalSessionPrincipal, TerminalState,
+};
 
 use super::LocalAgentResponseStatus;
+use super::linux_terminal_backend::LocalPosixPtyTerminalBackend;
 use super::management_authority::LocalManagementFilesystemAuthority;
 use super::management_request::{
     LocalManagementAdmissionError, admit_authenticated_linux_management_request,
@@ -52,8 +57,8 @@ const fn agent_status_file_list_upload_policy() -> BoundedLocalManagementPolicy 
     BoundedLocalManagementPolicy::new(BoundedLocalManagementDecisions {
         agent_status: Decision::Allow,
         private_dns: Decision::Deny,
-        terminal_open: Decision::Deny,
-        terminal_exec: Decision::Deny,
+        terminal_open: Decision::Allow,
+        terminal_exec: Decision::Allow,
         files_read: Decision::Allow,
         files_write: Decision::Allow,
         forwarding_create: Decision::Deny,
@@ -61,25 +66,28 @@ const fn agent_status_file_list_upload_policy() -> BoundedLocalManagementPolicy 
     })
 }
 
-/// Connection-scoped mutable state for the bounded fresh-upload production slice.
+/// Connection-scoped mutable state for the bounded production management slice.
 ///
 /// The runtime borrows one already-opened Agent-selected filesystem authority and owns
-/// exactly one transfer manager for the authenticated local connection lifetime. The
-/// explicit `active_transfer` field deliberately narrows the generic transfer manager's
-/// capacity to at most one upload in this production slice so teardown can deterministically
-/// abort the exact retained transaction.
+/// one transfer manager plus one fixed-profile local PTY broker. At most one upload and
+/// one terminal identifier can be tracked, and command dispatch prevents those mutable
+/// families from being active concurrently on the same authenticated connection.
 #[derive(Debug)]
 pub struct LocalBoundedUploadRuntime<'authority> {
     filesystem: &'authority LocalManagementFilesystemAuthority,
     transfers: UploadTransferManager<'authority>,
     active_transfer: Option<TransferId>,
+    terminal: TerminalBroker<LocalPosixPtyTerminalBackend>,
+    active_terminal: Option<TerminalSessionId>,
 }
 
-/// Explicit bounded-upload teardown failure.
+/// Explicit connection-scoped provider teardown failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocalBoundedUploadCleanupError {
     /// The active staging transaction could not be explicitly aborted.
     Abort(FileTransferError),
+    /// The active terminal process group could not be explicitly closed.
+    Terminal(TerminalError),
     /// Provider state remained active after deterministic cleanup.
     StateNotDrained,
 }
@@ -92,6 +100,8 @@ impl<'authority> LocalBoundedUploadRuntime<'authority> {
             filesystem,
             transfers: UploadTransferManager::new(filesystem.root()),
             active_transfer: None,
+            terminal: TerminalBroker::new(LocalPosixPtyTerminalBackend::new()),
+            active_terminal: None,
         }
     }
 
@@ -99,6 +109,12 @@ impl<'authority> LocalBoundedUploadRuntime<'authority> {
     #[must_use]
     pub(crate) const fn is_upload_active(&self) -> bool {
         self.active_transfer.is_some()
+    }
+
+    /// Returns whether this authenticated connection currently owns a terminal session.
+    #[must_use]
+    pub(crate) const fn is_terminal_active(&self) -> bool {
+        self.active_terminal.is_some()
     }
 
     fn begin(&mut self, plan: &prw_file_transfer::UploadPlan) -> Result<u64, FileTransferError> {
@@ -142,11 +158,100 @@ impl<'authority> LocalBoundedUploadRuntime<'authority> {
         }
     }
 
-    /// Explicitly drains any active upload before the connection-scoped runtime is dropped.
+    fn terminal_open(
+        &mut self,
+        principal: LocalTerminalPrincipal,
+        session_id: TerminalSessionId,
+        profile: prw_terminal::TerminalProfile,
+        geometry: prw_terminal::TerminalGeometry,
+    ) -> Result<(), LocalManagementTypedProviderDispatchError> {
+        if self.active_terminal.is_some() {
+            return Err(LocalManagementTypedProviderDispatchError::Terminal(
+                TerminalError::SessionCapacity,
+            ));
+        }
+        self.terminal
+            .open_session(session_id, principal, profile, geometry)
+            .map_err(LocalManagementTypedProviderDispatchError::Terminal)?;
+        self.active_terminal = Some(session_id);
+        Ok(())
+    }
+
+    fn terminal_input(
+        &mut self,
+        principal: LocalTerminalPrincipal,
+        session_id: TerminalSessionId,
+        bytes: &[u8],
+    ) -> Result<(), LocalManagementTypedProviderDispatchError> {
+        self.require_terminal_principal(principal, session_id)?;
+        self.terminal
+            .write_input(session_id, bytes)
+            .map_err(LocalManagementTypedProviderDispatchError::Terminal)
+    }
+
+    fn terminal_resize(
+        &mut self,
+        principal: LocalTerminalPrincipal,
+        session_id: TerminalSessionId,
+        geometry: prw_terminal::TerminalGeometry,
+    ) -> Result<(), LocalManagementTypedProviderDispatchError> {
+        self.require_terminal_principal(principal, session_id)?;
+        self.terminal
+            .resize_session(session_id, geometry)
+            .map_err(LocalManagementTypedProviderDispatchError::Terminal)
+    }
+
+    fn terminal_read(
+        &mut self,
+        principal: LocalTerminalPrincipal,
+        session_id: TerminalSessionId,
+        maximum_bytes: usize,
+    ) -> Result<Vec<u8>, LocalManagementTypedProviderDispatchError> {
+        self.require_terminal_principal(principal, session_id)?;
+        self.terminal
+            .read_output(session_id, maximum_bytes)
+            .map_err(LocalManagementTypedProviderDispatchError::Terminal)
+    }
+
+    fn terminal_close(
+        &mut self,
+        principal: LocalTerminalPrincipal,
+        session_id: TerminalSessionId,
+    ) -> Result<(), LocalManagementTypedProviderDispatchError> {
+        self.require_terminal_principal(principal, session_id)?;
+        self.terminal
+            .close_session(session_id)
+            .map_err(LocalManagementTypedProviderDispatchError::Terminal)?;
+        self.active_terminal = None;
+        Ok(())
+    }
+
+    fn require_terminal_principal(
+        &self,
+        principal: LocalTerminalPrincipal,
+        session_id: TerminalSessionId,
+    ) -> Result<(), LocalManagementTypedProviderDispatchError> {
+        if self.active_terminal != Some(session_id) {
+            return Err(LocalManagementTypedProviderDispatchError::Terminal(
+                TerminalError::UnknownSession,
+            ));
+        }
+        let expected = TerminalSessionPrincipal::LocalSameUid(principal);
+        let existing = self.terminal.session(session_id).ok_or(
+            LocalManagementTypedProviderDispatchError::Terminal(TerminalError::UnknownSession),
+        )?;
+        if existing.principal() == &expected {
+            Ok(())
+        } else {
+            Err(LocalManagementTypedProviderDispatchError::PrincipalMismatch)
+        }
+    }
+
+    /// Explicitly drains active upload/terminal state before the connection runtime is dropped.
     ///
     /// This is the fail-closed cleanup path for clean EOF, request-processing failure,
-    /// hard request-bound exhaustion, or caller cancellation. It never publishes a final
-    /// destination; only the active staging transaction is removed.
+    /// hard request-bound exhaustion, or caller cancellation. Upload cleanup never publishes
+    /// a final destination. Terminal cleanup explicitly kills/reaps the provider process group.
     pub(crate) fn finish(mut self) -> Result<(), LocalBoundedUploadCleanupError> {
         if let Some(transfer_id) = self.active_transfer {
             self.transfers
@@ -154,7 +259,28 @@ impl<'authority> LocalBoundedUploadRuntime<'authority> {
                 .map_err(LocalBoundedUploadCleanupError::Abort)?;
             self.active_transfer = None;
         }
-        if self.transfers.active_count() == 0 {
+        if let Some(session_id) = self.active_terminal {
+            let state = self
+                .terminal
+                .session(session_id)
+                .map(prw_terminal::TerminalSession::state)
+                .ok_or(LocalBoundedUploadCleanupError::StateNotDrained)?;
+            match state {
+                TerminalState::Open => self
+                    .terminal
+                    .close_session(session_id)
+                    .map_err(LocalBoundedUploadCleanupError::Terminal)?,
+                TerminalState::Failed => self
+                    .terminal
+                    .retry_failed_close(session_id)
+                    .map_err(LocalBoundedUploadCleanupError::Terminal)?,
+                TerminalState::Opening | TerminalState::Closing | TerminalState::Closed => {
+                    return Err(LocalBoundedUploadCleanupError::StateNotDrained);
+                }
+            };
+            self.active_terminal = None;
+        }
+        if self.transfers.active_count() == 0 && self.terminal.is_empty() {
             Ok(())
         } else {
             Err(LocalBoundedUploadCleanupError::StateNotDrained)
@@ -244,18 +370,17 @@ where
     }
 }
 
-/// Processes one command-3 request through the production bounded-upload extension.
+/// Processes one command-3 request through the production upload + local-terminal extension.
 ///
-/// Only `AgentStatus`, read-only `DeviceList`, `FileList`, fresh upload begin/chunk/finalize,
-/// and upload abort
-/// are reachable after capability admission. `UploadResume`, `DownloadChunk`, `FileStat`,
-/// other file mutation, terminal, and forwarding commands remain closed. Once an upload
-/// begins, command-3 requests on that connection are restricted to the matching upload's
-/// chunk/finalize/abort operations until it is finalized or aborted.
+/// `AgentStatus`, read-only `DeviceList`, `FileList`, fresh upload begin/chunk/finalize/abort,
+/// and fixed-profile local terminal open/input/resize/read/close are reachable after capability
+/// admission. `UploadResume`, `DownloadChunk`, other file mutation, and forwarding remain closed.
+/// An active upload and active terminal are mutually exclusive on one authenticated connection.
 ///
 /// # Errors
 ///
 /// Returns only failures from the existing terminal-response frame builder.
+#[allow(clippy::too_many_lines)]
 pub(super) fn process_authenticated_linux_agent_status_file_list_upload_management<S>(
     frame: &LocalIpcFrame,
     connection: &AuthenticatedLocalLinuxConnection<S>,
@@ -281,6 +406,32 @@ pub(super) fn process_authenticated_linux_agent_status_file_list_upload_manageme
     {
         return build_terminal_response_frame(request_id, LocalAgentResponseStatus::Conflict, &[]);
     }
+
+    if runtime.is_terminal_active()
+        && !matches!(
+            admission.command(),
+            BridgeCommand::TerminalInput { .. }
+                | BridgeCommand::TerminalResize { .. }
+                | BridgeCommand::TerminalRead { .. }
+                | BridgeCommand::TerminalClose(_)
+        )
+    {
+        return build_terminal_response_frame(request_id, LocalAgentResponseStatus::Conflict, &[]);
+    }
+
+    if !runtime.is_terminal_active()
+        && matches!(
+            admission.command(),
+            BridgeCommand::TerminalInput { .. }
+                | BridgeCommand::TerminalResize { .. }
+                | BridgeCommand::TerminalRead { .. }
+                | BridgeCommand::TerminalClose(_)
+        )
+    {
+        return build_terminal_response_frame(request_id, LocalAgentResponseStatus::Conflict, &[]);
+    }
+
+    let terminal_principal = LocalTerminalPrincipal::new(connection.peer_credentials().uid());
 
     let result = match admission.command() {
         BridgeCommand::AgentStatus => Ok(LocalManagementTypedProviderResult::AgentStatus(
@@ -320,16 +471,36 @@ pub(super) fn process_authenticated_linux_agent_status_file_list_upload_manageme
             .abort(*transfer_id)
             .map(|()| LocalManagementTypedProviderResult::Empty)
             .map_err(LocalManagementTypedProviderDispatchError::Transfer),
+        BridgeCommand::TerminalOpen {
+            session_id,
+            profile,
+            geometry,
+        } => runtime
+            .terminal_open(terminal_principal, *session_id, *profile, *geometry)
+            .map(|()| LocalManagementTypedProviderResult::Empty),
+        BridgeCommand::TerminalInput { session_id, bytes } => runtime
+            .terminal_input(terminal_principal, *session_id, bytes)
+            .map(|()| LocalManagementTypedProviderResult::Empty),
+        BridgeCommand::TerminalResize {
+            session_id,
+            geometry,
+        } => runtime
+            .terminal_resize(terminal_principal, *session_id, *geometry)
+            .map(|()| LocalManagementTypedProviderResult::Empty),
+        BridgeCommand::TerminalRead {
+            session_id,
+            maximum_bytes,
+        } => runtime
+            .terminal_read(terminal_principal, *session_id, *maximum_bytes)
+            .map(LocalManagementTypedProviderResult::Bytes),
+        BridgeCommand::TerminalClose(session_id) => runtime
+            .terminal_close(terminal_principal, *session_id)
+            .map(|()| LocalManagementTypedProviderResult::Empty),
         BridgeCommand::FileStat(_)
         | BridgeCommand::FileCreate { .. }
         | BridgeCommand::DirectoryCreate(_)
         | BridgeCommand::UploadResume(_)
         | BridgeCommand::DownloadChunk { .. }
-        | BridgeCommand::TerminalOpen { .. }
-        | BridgeCommand::TerminalInput { .. }
-        | BridgeCommand::TerminalResize { .. }
-        | BridgeCommand::TerminalRead { .. }
-        | BridgeCommand::TerminalClose(_)
         | BridgeCommand::ForwardOpen { .. }
         | BridgeCommand::ForwardClose(_) => {
             return build_terminal_response_frame(
@@ -384,6 +555,9 @@ mod tests {
     use prw_file_transfer::{TransferId, UploadPlan};
     use prw_policy::{Capability, Decision, PolicyEvaluator};
     use prw_remote_bridge::BridgeCommand;
+    use prw_terminal::{
+        LocalTerminalPrincipal, TerminalGeometry, TerminalProfile, TerminalSessionId,
+    };
 
     use super::{
         LocalBoundedUploadRuntime, agent_status_file_list_policy,
@@ -460,10 +634,12 @@ mod tests {
     }
 
     #[test]
-    fn bounded_upload_policy_adds_only_files_write() {
+    fn production_policy_adds_files_write_and_bounded_terminal_authority() {
         let policy = agent_status_file_list_upload_policy();
         for capability in [
             Capability::AgentStatusRead,
+            Capability::TerminalOpen,
+            Capability::TerminalExec,
             Capability::FilesRead,
             Capability::FilesWrite,
             Capability::DeviceRead,
@@ -472,8 +648,6 @@ mod tests {
         }
         for capability in [
             Capability::PrivateDnsConfigRead,
-            Capability::TerminalOpen,
-            Capability::TerminalExec,
             Capability::ForwardingCreate,
             Capability::FilesDelete,
             Capability::RequesterRendezvousStart,
@@ -558,6 +732,222 @@ mod tests {
                 LocalAgentResponseStatus::UnsupportedCommand
             );
         }
+    }
+
+    fn terminal_id(value: u64) -> TerminalSessionId {
+        TerminalSessionId::new(value).expect("terminal id is non-zero")
+    }
+
+    fn terminal_geometry(columns: u16, rows: u16) -> TerminalGeometry {
+        TerminalGeometry::new(columns, rows).expect("terminal geometry is bounded")
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn production_terminal_runtime_opens_resizes_reads_and_closes_on_same_principal() {
+        let root = test_root();
+        let filesystem = open_home_filesystem_authority_from_raw(Some(root.as_os_str()))
+            .expect("test filesystem authority opens");
+        let mut runtime = LocalBoundedUploadRuntime::new(&filesystem);
+        let (server, _client) = UnixStream::pair().expect("local pair creates");
+        let connection = AuthenticatedLocalLinuxConnection::try_new(server)
+            .expect("same-UID local pair authenticates");
+        let snapshot = LocalAgentStatusSnapshot::current(LocalAgentRuntimeState::Ready);
+        let session_id = terminal_id(0x51);
+
+        let open = process_authenticated_linux_agent_status_file_list_upload_management(
+            &request(
+                905,
+                &BridgeCommand::TerminalOpen {
+                    session_id,
+                    profile: TerminalProfile::PosixShell,
+                    geometry: terminal_geometry(80, 24),
+                },
+            ),
+            &connection,
+            snapshot,
+            &mut runtime,
+        )
+        .expect("terminal open response builds");
+        let terminal = validate_terminal_response_frame(&open).expect("open response validates");
+        assert_eq!(terminal.status(), LocalAgentResponseStatus::Ok);
+        assert_eq!(open.payload().as_bytes().get(2), Some(&4));
+        assert!(runtime.is_terminal_active());
+
+        let resize = process_authenticated_linux_agent_status_file_list_upload_management(
+            &request(
+                906,
+                &BridgeCommand::TerminalResize {
+                    session_id,
+                    geometry: terminal_geometry(100, 35),
+                },
+            ),
+            &connection,
+            snapshot,
+            &mut runtime,
+        )
+        .expect("terminal resize response builds");
+        assert_eq!(
+            validate_terminal_response_frame(&resize)
+                .expect("resize response validates")
+                .status(),
+            LocalAgentResponseStatus::Ok
+        );
+
+        let input = process_authenticated_linux_agent_status_file_list_upload_management(
+            &request(
+                907,
+                &BridgeCommand::TerminalInput {
+                    session_id,
+                    bytes: b"printf 'OWNSPACE_RUNTIME_OK\n'\n".to_vec(),
+                },
+            ),
+            &connection,
+            snapshot,
+            &mut runtime,
+        )
+        .expect("terminal input response builds");
+        assert_eq!(
+            validate_terminal_response_frame(&input)
+                .expect("input response validates")
+                .status(),
+            LocalAgentResponseStatus::Ok
+        );
+
+        let read = process_authenticated_linux_agent_status_file_list_upload_management(
+            &request(
+                908,
+                &BridgeCommand::TerminalRead {
+                    session_id,
+                    maximum_bytes: 4096,
+                },
+            ),
+            &connection,
+            snapshot,
+            &mut runtime,
+        )
+        .expect("terminal read response builds");
+        assert_eq!(
+            validate_terminal_response_frame(&read)
+                .expect("read response validates")
+                .status(),
+            LocalAgentResponseStatus::Ok
+        );
+        assert_eq!(read.payload().as_bytes().get(2), Some(&6));
+
+        let close = process_authenticated_linux_agent_status_file_list_upload_management(
+            &request(909, &BridgeCommand::TerminalClose(session_id)),
+            &connection,
+            snapshot,
+            &mut runtime,
+        )
+        .expect("terminal close response builds");
+        assert_eq!(
+            validate_terminal_response_frame(&close)
+                .expect("close response validates")
+                .status(),
+            LocalAgentResponseStatus::Ok
+        );
+        assert!(!runtime.is_terminal_active());
+        runtime.finish().expect("terminal runtime drains");
+        fs::remove_dir_all(root).expect("test root removes");
+    }
+
+    #[test]
+    fn production_terminal_runtime_preserves_principal_and_family_exclusion() {
+        let root = test_root();
+        let filesystem = open_home_filesystem_authority_from_raw(Some(root.as_os_str()))
+            .expect("test filesystem authority opens");
+        let mut runtime = LocalBoundedUploadRuntime::new(&filesystem);
+        let principal = LocalTerminalPrincipal::new(1000);
+        let other_principal = LocalTerminalPrincipal::new(1001);
+        let session_id = terminal_id(0x52);
+        runtime
+            .terminal_open(
+                principal,
+                session_id,
+                TerminalProfile::PosixShell,
+                terminal_geometry(80, 24),
+            )
+            .expect("terminal opens");
+        assert_eq!(
+            runtime.terminal_input(other_principal, session_id, b"x"),
+            Err(super::LocalManagementTypedProviderDispatchError::PrincipalMismatch)
+        );
+
+        let (server, _client) = UnixStream::pair().expect("local pair creates");
+        let connection = AuthenticatedLocalLinuxConnection::try_new(server)
+            .expect("same-UID local pair authenticates");
+        let snapshot = LocalAgentStatusSnapshot::current(LocalAgentRuntimeState::Ready);
+        let response = process_authenticated_linux_agent_status_file_list_upload_management(
+            &request(918, &BridgeCommand::AgentStatus),
+            &connection,
+            snapshot,
+            &mut runtime,
+        )
+        .expect("conflict response builds");
+        assert_eq!(
+            validate_terminal_response_frame(&response)
+                .expect("conflict response validates")
+                .status(),
+            LocalAgentResponseStatus::Conflict
+        );
+        runtime.finish().expect("terminal cleanup succeeds");
+        fs::remove_dir_all(root).expect("test root removes");
+    }
+
+    #[test]
+    fn terminal_commands_without_active_terminal_fail_closed_as_conflict() {
+        let root = test_root();
+        let filesystem = open_home_filesystem_authority_from_raw(Some(root.as_os_str()))
+            .expect("test filesystem authority opens");
+        let mut runtime = LocalBoundedUploadRuntime::new(&filesystem);
+        let (server, _client) = UnixStream::pair().expect("local pair creates");
+        let connection = AuthenticatedLocalLinuxConnection::try_new(server)
+            .expect("same-UID local pair authenticates");
+        let snapshot = LocalAgentStatusSnapshot::current(LocalAgentRuntimeState::Ready);
+        let session_id = terminal_id(0x53);
+
+        for (request_id, command) in [
+            (
+                919,
+                BridgeCommand::TerminalInput {
+                    session_id,
+                    bytes: b"x".to_vec(),
+                },
+            ),
+            (
+                920,
+                BridgeCommand::TerminalResize {
+                    session_id,
+                    geometry: terminal_geometry(80, 24),
+                },
+            ),
+            (
+                921,
+                BridgeCommand::TerminalRead {
+                    session_id,
+                    maximum_bytes: 1,
+                },
+            ),
+            (922, BridgeCommand::TerminalClose(session_id)),
+        ] {
+            let response = process_authenticated_linux_agent_status_file_list_upload_management(
+                &request(request_id, &command),
+                &connection,
+                snapshot,
+                &mut runtime,
+            )
+            .expect("conflict response builds");
+            assert_eq!(
+                validate_terminal_response_frame(&response)
+                    .expect("conflict response validates")
+                    .status(),
+                LocalAgentResponseStatus::Conflict
+            );
+        }
+        runtime.finish().expect("quiescent runtime drains");
+        fs::remove_dir_all(root).expect("test root removes");
     }
 
     #[test]
