@@ -1,0 +1,118 @@
+name: Ownspace Desktop release readiness validation R1
+
+on:
+  push:
+    branches:
+      - validation/desktop-release-readiness-2026-09-30-r1
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      BASE_SHA: 1b32e19e8b21aebfcd7527b572994f19356fb8bc
+      BASE_TREE: b1116d53d1039b70f41203cd0ad4b87b2fe04fd5
+      EXPECTED_BRANCH: validation/desktop-release-readiness-2026-09-30-r1
+      EXPECTED_WORKFLOW: .github/workflows/validate-desktop-release-readiness-r1-2026-09-30.yml
+      SOURCE_MANIFEST_SHA256: e49cf0caf573b97e421133225420f287dc060271b4a86a81a3717f69358d2e97
+      SOURCE_ARCHIVE_SHA256: a7fdc1517bc9ba28dcce21ef7db9ec69098001166c057caa747a11bf8cabfe6a
+      DESKTOP_ENTRY: packaging/desktop/debian/io.patchmirror.prw.desktop.desktop
+
+    steps:
+      - name: Checkout isolated carrier
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify exact source base and workflow-only carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = "$EXPECTED_BRANCH"
+          test "$(git merge-base "$BASE_SHA" HEAD)" = "$BASE_SHA"
+          test "$(git rev-list --count "$BASE_SHA"..HEAD)" -eq 1
+          test "$(git rev-parse "$BASE_SHA^{tree}")" = "$BASE_TREE"
+          mapfile -t changed < <(git diff --name-only "$BASE_SHA"...HEAD | sort)
+          test "${#changed[@]}" -eq 1
+          test "${changed[0]}" = "$EXPECTED_WORKFLOW"
+          git diff --check "$BASE_SHA"...HEAD
+          test -f "$DESKTOP_ENTRY"
+          test "$(git diff --name-only "$BASE_SHA"...HEAD -- . ':(exclude).github/workflows/**' | wc -l)" -eq 0
+
+      - name: Install exact Rust and native Desktop validation dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config protobuf-compiler libgtk-4-dev libadwaita-1-dev
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
+          rustup default 1.97.1
+          rustc --version
+          cargo --version
+          pkg-config --modversion gtk4
+          pkg-config --modversion libadwaita-1
+
+      - name: Verify locked metadata
+        run: cargo metadata --locked --format-version 1 >/dev/null
+
+      - name: Formatting check
+        run: cargo fmt --all -- --check
+
+      - name: Desktop tests
+        run: cargo test --locked -p prw-desktop
+
+      - name: Desktop compile check
+        run: cargo check --locked -p prw-desktop --all-targets
+
+      - name: Desktop Clippy
+        run: cargo clippy --locked -p prw-desktop --all-targets -- -D warnings
+
+      - name: Desktop release binary build
+        run: cargo build --locked --release -p prw-desktop --bin prw-desktop
+
+      - name: Assemble and verify validation-only artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_dir="$RUNNER_TEMP/ownspace-desktop-release-readiness"
+          rm -rf "$artifact_dir"
+          mkdir -p "$artifact_dir"
+          test -x target/release/prw-desktop
+          cp target/release/prw-desktop "$artifact_dir/prw-desktop"
+          cp "$DESKTOP_ENTRY" "$artifact_dir/io.patchmirror.prw.desktop.desktop"
+          {
+            echo "Ownspace Desktop release readiness validation"
+            echo "intended_use=validation"
+            echo "source_main=$BASE_SHA"
+            echo "source_tree=$BASE_TREE"
+            echo "carrier_head=$GITHUB_SHA"
+            echo "source_manifest_sha256=$SOURCE_MANIFEST_SHA256"
+            echo "source_archive_sha256=$SOURCE_ARCHIVE_SHA256"
+            echo "rustc=$(rustc --version)"
+            echo "cargo=$(cargo --version)"
+            echo "gtk4=$(pkg-config --modversion gtk4)"
+            echo "libadwaita=$(pkg-config --modversion libadwaita-1)"
+            echo "host_arch=$(uname -m)"
+            echo "build_command=cargo build --locked --release -p prw-desktop --bin prw-desktop"
+            echo "packaging_executed=no"
+            echo "signing_state=unsigned_validation_only"
+            echo "desktop_entry=$DESKTOP_ENTRY"
+          } > "$artifact_dir/BUILD_IDENTITY.txt"
+          (
+            cd "$artifact_dir"
+            sha256sum prw-desktop io.patchmirror.prw.desktop.desktop BUILD_IDENTITY.txt > CHECKSUMS.sha256
+            sha256sum -c CHECKSUMS.sha256
+          )
+          file "$artifact_dir/prw-desktop"
+          ls -l "$artifact_dir"
+
+      - name: Upload Desktop release-readiness artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ownspace_Desktop_Release_Readiness_x86_64_Run_${{ github.run_id }}
+          path: ${{ runner.temp }}/ownspace-desktop-release-readiness
+          if-no-files-found: error
+          retention-days: 7
