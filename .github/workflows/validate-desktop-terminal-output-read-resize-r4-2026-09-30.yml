@@ -1,0 +1,244 @@
+name: Ownspace Desktop terminal output read resize R4 validation
+
+on:
+  push:
+    branches:
+      - validation/desktop-terminal-output-read-resize-2026-09-30-r4
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout validation carrier
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify exact canonical base and carrier scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=18226d62f98012d7570955a6628e6c5896b1a5f0
+          test "$(git merge-base HEAD "$base")" = "$base"
+          test "$(git rev-list --count "$base"..HEAD)" = "4"
+          mapfile -t changed < <(git diff --name-only "$base"..HEAD)
+          test "${#changed[@]}" -eq 4
+          test "${changed[0]}" = ".github/workflows/validate-desktop-terminal-output-read-resize-r4-2026-09-30.yml"
+          test "${changed[1]}" = ".validation/OWNSPACE_DESKTOP_TERMINAL_OUTPUT_READ_RESIZE_R1_2026-09-30.patch"
+          test "${changed[2]}" = ".validation/OWNSPACE_DESKTOP_TERMINAL_OUTPUT_READ_RESIZE_R2_FORMAT_2026-09-30.patch"
+          test "${changed[3]}" = ".validation/OWNSPACE_DESKTOP_TERMINAL_OUTPUT_READ_RESIZE_R3_CLIPPY_2026-09-30.patch"
+
+      - name: Verify exact audited authoritative baseline
+        shell: python
+        run: |
+          from pathlib import Path
+          import hashlib
+
+          expected = {
+              "apps/desktop/README.md": "f483ae72fa4a952e6c6855da344266717669439b799e561f4c215995d1b2956a",
+              "apps/desktop/src/management.rs": "d2a3d162769d826e91156c1e26ca067c5a1b2bff9297e87b8e1c123fc4875455",
+              "apps/desktop/src/ipc.rs": "266efd9cb80eb8a024b00db5a08480f51f32668c315d3b14f2e21226ad7f7071",
+              "apps/desktop/src/ui.rs": "5db01534c83e69c65bcd695ff35a3949814dada2f3837ee2a51a1a2f01bf630b",
+              "crates/prw-agent/src/local_commands/management_agent_status_runtime.rs": "91efc1528a0d98f697ebc92f93a4d461afdc762cb42f3b9647568d61c4b83f60",
+              "crates/prw-agent/src/local_commands/linux_terminal_backend.rs": "7b681493aa24f0503341f62337fef0bf78f83abaedcb8987734d7a94fa5c6913",
+              "crates/prw-terminal/src/lib.rs": "f0d804dee2069a249208dc98993eacbba713f98251d299b3cad5778190489f67",
+              "crates/prw-remote-bridge/src/lib.rs": "7c8f7a765b4ff1688c3c8e6dc6d9691cff3ed746fcd7cf3b27a5b04fe7f422f5",
+          }
+          for path, expected_sha in expected.items():
+              actual = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+              assert actual == expected_sha, (path, actual, expected_sha)
+
+          runtime = Path("crates/prw-agent/src/local_commands/management_agent_status_runtime.rs").read_text()
+          terminal = Path("crates/prw-terminal/src/lib.rs").read_text()
+          bridge = Path("crates/prw-remote-bridge/src/lib.rs").read_text()
+          assert "BridgeCommand::TerminalResize" in runtime
+          assert "BridgeCommand::TerminalRead" in runtime
+          assert "pub fn resize_session" in terminal
+          assert "pub fn read_output" in terminal
+          assert "TerminalResize" in bridge
+          assert "TerminalRead" in bridge
+
+      - name: Verify exact R1 candidate patch identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          patch=.validation/OWNSPACE_DESKTOP_TERMINAL_OUTPUT_READ_RESIZE_R1_2026-09-30.patch
+          test "$(sha256sum "$patch" | awk '{print $1}')" = "5ab27a28dcebc2cf2916111005cbc9209ea134531b3d1e014be07c11b5305fa9"
+          test "$(wc -c < "$patch")" = "32904"
+
+      - name: Verify exact R2 format-only patch identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          format_patch=.validation/OWNSPACE_DESKTOP_TERMINAL_OUTPUT_READ_RESIZE_R2_FORMAT_2026-09-30.patch
+          test "$(sha256sum "$format_patch" | awk '{print $1}')" = "6e0bd3891224b8ddb2628a0d56f09c5f44a134462e9c13308930d1aab95bd2b5"
+          test "$(wc -c < "$format_patch")" = "3187"
+
+      - name: Verify exact R3 Clippy-only patch identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          clippy_patch=.validation/OWNSPACE_DESKTOP_TERMINAL_OUTPUT_READ_RESIZE_R3_CLIPPY_2026-09-30.patch
+          test "$(sha256sum "$clippy_patch" | awk '{print $1}')" = "4e4c711815ad0a431c78c6a37e8a931411cc7e64596907d4c5ceaf13bcbc9868"
+          test "$(wc -c < "$clippy_patch")" = "1768"
+
+      - name: Apply exact candidate and verify four-path scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          patch=.validation/OWNSPACE_DESKTOP_TERMINAL_OUTPUT_READ_RESIZE_R1_2026-09-30.patch
+          format_patch=.validation/OWNSPACE_DESKTOP_TERMINAL_OUTPUT_READ_RESIZE_R2_FORMAT_2026-09-30.patch
+          clippy_patch=.validation/OWNSPACE_DESKTOP_TERMINAL_OUTPUT_READ_RESIZE_R3_CLIPPY_2026-09-30.patch
+          git apply --check "$patch"
+          git apply "$patch"
+          git apply --check "$format_patch"
+          git apply "$format_patch"
+          git apply --check "$clippy_patch"
+          git apply "$clippy_patch"
+          git diff --check
+          mapfile -t changed < <(git diff --name-only)
+          test "${#changed[@]}" -eq 4
+          test "${changed[0]}" = "apps/desktop/README.md"
+          test "${changed[1]}" = "apps/desktop/src/ipc.rs"
+          test "${changed[2]}" = "apps/desktop/src/management.rs"
+          test "${changed[3]}" = "apps/desktop/src/ui.rs"
+          git diff --exit-code -- crates/prw-agent crates/prw-terminal crates/prw-remote-bridge
+
+      - name: Verify exact candidate identities and bounded contract
+        shell: python
+        run: |
+          from pathlib import Path
+          import hashlib
+
+          expected = {
+              "apps/desktop/README.md": "4ab713b2813a5fa265c92367e45308e11498919b00077e914bf7941e37108269",
+              "apps/desktop/src/management.rs": "8acd7a44c762c0d535dedf30d4d9a47d0f55c96dbfc31273f01313624c60f479",
+              "apps/desktop/src/ipc.rs": "30ea7ea9c345181ea71a0bd72149645e3b5025f5adb802cbdfaa54084737559b",
+              "apps/desktop/src/ui.rs": "05d36edda1e458aa10367c00698c3ecdb1215fa5eca7ba5d4ee9a684d6ab14af",
+          }
+          for path, expected_sha in expected.items():
+              actual = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+              assert actual == expected_sha, (path, actual, expected_sha)
+
+          management = Path("apps/desktop/src/management.rs").read_text()
+          ipc = Path("apps/desktop/src/ipc.rs").read_text()
+          ui = Path("apps/desktop/src/ui.rs").read_text()
+          readme = Path("apps/desktop/README.md").read_text()
+
+          assert management.count("pub(crate) fn encode_terminal_resize") == 1
+          assert management.count("pub(crate) fn encode_terminal_read") == 1
+          assert management.count("pub(crate) fn request_resize") == 1
+          assert management.count("pub(crate) fn request_read") == 1
+          assert "BridgeCommand::TerminalResize" in management
+          assert "BridgeCommand::TerminalRead" in management
+
+          assert ipc.count("TERMINAL_RESIZE_REQUEST_ID") >= 2
+          assert ipc.count("TERMINAL_READ_REQUEST_ID") >= 2
+          assert ipc.count("MANAGEMENT_BYTES_RESULT") >= 2
+          assert ipc.count("validate_bytes_management_ack") >= 3
+          assert "bytes.len() > maximum_bytes" in ipc
+
+          assert "const TERMINAL_READ_MAXIMUM_BYTES: usize = 16_384;" in ui
+          assert ".read(payload, TERMINAL_READ_MAXIMUM_BYTES)" in ui
+          assert ".resize(payload)" in ui
+          assert "Read output" in ui
+          assert "Terminal output" in ui
+          assert "output.set_editable(false);" in ui
+          assert "output.set_cursor_visible(false);" in ui
+          assert "std::process::Command" not in ui
+          assert "Command::new(" not in ui
+          assert "ForwardOpen" not in ui
+          assert "ForwardClose" not in ui
+          assert "drop(connection);" in ui
+          assert "TerminalOperation::Input | TerminalOperation::Resize" in ui
+          assert ui.count("#[allow(clippy::too_many_lines)]") >= 2
+
+          assert "open/input/read/resize/close" in readme
+          assert "background terminal-output streaming" in readme
+          assert "request-selected terminal executable/profile/environment/cwd" in readme
+
+      - name: Verify exact reverse and reapply
+        shell: bash
+        run: |
+          set -euo pipefail
+          patch=.validation/OWNSPACE_DESKTOP_TERMINAL_OUTPUT_READ_RESIZE_R1_2026-09-30.patch
+          format_patch=.validation/OWNSPACE_DESKTOP_TERMINAL_OUTPUT_READ_RESIZE_R2_FORMAT_2026-09-30.patch
+          clippy_patch=.validation/OWNSPACE_DESKTOP_TERMINAL_OUTPUT_READ_RESIZE_R3_CLIPPY_2026-09-30.patch
+          mkdir -p /tmp/terminal-candidate
+          cp apps/desktop/README.md /tmp/terminal-candidate/README.md
+          cp apps/desktop/src/management.rs /tmp/terminal-candidate/management.rs
+          cp apps/desktop/src/ipc.rs /tmp/terminal-candidate/ipc.rs
+          cp apps/desktop/src/ui.rs /tmp/terminal-candidate/ui.rs
+
+          git apply --reverse --check "$clippy_patch"
+          git apply --reverse "$clippy_patch"
+          git apply --reverse --check "$format_patch"
+          git apply --reverse "$format_patch"
+          git apply --reverse --check "$patch"
+          git apply --reverse "$patch"
+          test "$(sha256sum apps/desktop/README.md | awk '{print $1}')" = "f483ae72fa4a952e6c6855da344266717669439b799e561f4c215995d1b2956a"
+          test "$(sha256sum apps/desktop/src/management.rs | awk '{print $1}')" = "d2a3d162769d826e91156c1e26ca067c5a1b2bff9297e87b8e1c123fc4875455"
+          test "$(sha256sum apps/desktop/src/ipc.rs | awk '{print $1}')" = "266efd9cb80eb8a024b00db5a08480f51f32668c315d3b14f2e21226ad7f7071"
+          test "$(sha256sum apps/desktop/src/ui.rs | awk '{print $1}')" = "5db01534c83e69c65bcd695ff35a3949814dada2f3837ee2a51a1a2f01bf630b"
+          git diff --exit-code -- apps/desktop/README.md apps/desktop/src/management.rs apps/desktop/src/ipc.rs apps/desktop/src/ui.rs
+
+          git apply --check "$patch"
+          git apply "$patch"
+          git apply --check "$format_patch"
+          git apply "$format_patch"
+          git apply --check "$clippy_patch"
+          git apply "$clippy_patch"
+          cmp -s apps/desktop/README.md /tmp/terminal-candidate/README.md
+          cmp -s apps/desktop/src/management.rs /tmp/terminal-candidate/management.rs
+          cmp -s apps/desktop/src/ipc.rs /tmp/terminal-candidate/ipc.rs
+          cmp -s apps/desktop/src/ui.rs /tmp/terminal-candidate/ui.rs
+          git diff --check
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config protobuf-compiler libgtk-4-dev libadwaita-1-dev
+
+      - name: Formatting check
+        run: cargo fmt --all -- --check
+
+      - name: Focused Desktop terminal contract tests
+        run: |
+          cargo test --locked -p prw-desktop terminal_intent_reuses_bridge_and_never_forges_open_or_closed
+          cargo test --locked -p prw-desktop invalid_terminal_values_fail_closed_through_existing_authority
+          cargo test --locked -p prw-desktop terminal_management_ack_accepts_only_exact_empty_result
+          cargo test --locked -p prw-desktop terminal_management_bytes_ack_is_bounded_by_the_requested_read
+          cargo test --locked -p prw-desktop terminal_controls_fail_closed_outside_open_state
+
+      - name: Focused terminal authority compatibility tests
+        run: |
+          cargo test --locked -p prw-agent production_terminal_runtime_opens_resizes_reads_and_closes_on_same_principal
+          cargo test --locked -p prw-terminal resize_geometry_is_rejected_before_backend_call
+          cargo test --locked -p prw-terminal output_request_bound_fails_before_backend_call
+
+      - name: Full Desktop tests
+        run: cargo test --locked -p prw-desktop
+
+      - name: Desktop compile check
+        run: cargo check --locked -p prw-desktop --all-targets
+
+      - name: Desktop Clippy
+        run: cargo clippy --locked -p prw-desktop --all-targets -- -D warnings
+
+      - name: Desktop release build
+        run: cargo build --locked -p prw-desktop --release
+
+      - name: Retain exact validation inputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ownspace_Desktop_Terminal_Output_Read_Resize_R4_Inputs
+          path: |
+            .validation/OWNSPACE_DESKTOP_TERMINAL_OUTPUT_READ_RESIZE_R1_2026-09-30.patch
+            .validation/OWNSPACE_DESKTOP_TERMINAL_OUTPUT_READ_RESIZE_R2_FORMAT_2026-09-30.patch
+            .validation/OWNSPACE_DESKTOP_TERMINAL_OUTPUT_READ_RESIZE_R3_CLIPPY_2026-09-30.patch
+            .github/workflows/validate-desktop-terminal-output-read-resize-r4-2026-09-30.yml
+          if-no-files-found: error
