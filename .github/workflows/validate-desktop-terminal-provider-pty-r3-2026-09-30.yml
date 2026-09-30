@@ -1,0 +1,129 @@
+name: Ownspace Desktop terminal provider PTY validation R3
+
+on:
+  push:
+    branches:
+      - validation/desktop-terminal-provider-pty-2026-09-30-r3
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      BASE_SHA: 64e5032aa538de5541b846f989faafe48cba50ae
+      BASE_TREE: 9ec45acd0e7768952cfb8592bd5e0908d2386dcd
+      EXPECTED_BRANCH: validation/desktop-terminal-provider-pty-2026-09-30-r3
+      PATCH_PATH: .validation/OWNSPACE_MILESTONE3_TERMINAL_PROVIDER_PTY_R3.patch
+      PATCH_SHA256: 102ba5d94069e63a223bf0b3e4ce6cdac5c208ab61f699fe2af5aedae0a70b3a
+      PATCH_GIT_BLOB: 95f90867d8366cee69524a15c26a33be2915ae4e
+      EXPECTED_WORKFLOW: .github/workflows/validate-desktop-terminal-provider-pty-r3-2026-09-30.yml
+
+    steps:
+      - name: Checkout isolated carrier
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify carrier and exact candidate reconstruction
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = "$EXPECTED_BRANCH"
+          test "$(git merge-base "$BASE_SHA" HEAD)" = "$BASE_SHA"
+          test "$(git rev-list --count "$BASE_SHA"..HEAD)" -eq 2
+          test "$(git rev-parse "$BASE_SHA^{tree}")" = "$BASE_TREE"
+
+          mapfile -t carrier < <(git diff --name-only "$BASE_SHA"...HEAD | sort)
+          printf '%s\n' "$EXPECTED_WORKFLOW" "$PATCH_PATH" | sort > "$RUNNER_TEMP/expected_carrier.txt"
+          printf '%s\n' "${carrier[@]}" > "$RUNNER_TEMP/actual_carrier.txt"
+          diff -u "$RUNNER_TEMP/expected_carrier.txt" "$RUNNER_TEMP/actual_carrier.txt"
+          test "${#carrier[@]}" -eq 2
+          git diff --check "$BASE_SHA"...HEAD -- "$EXPECTED_WORKFLOW"
+
+          echo "$PATCH_SHA256  $PATCH_PATH" | sha256sum -c -
+          test "$(git hash-object "$PATCH_PATH")" = "$PATCH_GIT_BLOB"
+          git apply --check "$PATCH_PATH"
+          git apply "$PATCH_PATH"
+          # New files created by git apply are untracked until intent-to-add; include the
+          # exact new backend path in diff-based reconstruction/scope checks.
+          git add -N crates/prw-agent/src/local_commands/linux_terminal_backend.rs
+          git diff --check
+
+          mapfile -t changed < <(git diff --name-only | sort)
+          printf '%s\n' \
+            'apps/desktop/README.md' \
+            'apps/desktop/src/ipc.rs' \
+            'apps/desktop/src/ui.rs' \
+            'crates/prw-agent/Cargo.toml' \
+            'crates/prw-agent/src/linux_session_worker/management_agent_status.rs' \
+            'crates/prw-agent/src/local_commands.rs' \
+            'crates/prw-agent/src/local_commands/linux_terminal_backend.rs' \
+            'crates/prw-agent/src/local_commands/management_agent_status_runtime.rs' \
+            | sort > "$RUNNER_TEMP/expected_source_paths.txt"
+          printf '%s\n' "${changed[@]}" > "$RUNNER_TEMP/actual_source_paths.txt"
+          diff -u "$RUNNER_TEMP/expected_source_paths.txt" "$RUNNER_TEMP/actual_source_paths.txt"
+          test "${#changed[@]}" -eq 8
+          test -z "$(git status --short -- Cargo.lock)"
+
+      - name: Install exact Rust and native Desktop validation dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config protobuf-compiler libgtk-4-dev libadwaita-1-dev
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
+          rustup default 1.97.1
+          rustc --version
+          cargo --version
+          pkg-config --modversion gtk4
+          pkg-config --modversion libadwaita-1
+
+      - name: Verify locked metadata
+        run: cargo metadata --locked --format-version 1 >/dev/null
+
+      - name: Formatting check
+        run: cargo fmt --all -- --check
+
+      - name: Focused terminal backend tests
+        run: cargo test --locked -p prw-agent production_backend_
+
+      - name: Focused terminal runtime tests
+        run: cargo test --locked -p prw-agent production_terminal_runtime_
+
+      - name: Focused terminal worker tests
+        run: |
+          cargo test --locked -p prw-agent active_terminal_extends_only_its_connection_until_explicit_close
+          cargo test --locked -p prw-agent clean_eof_closes_unfinished_terminal_before_worker_returns
+
+      - name: Agent tests
+        run: cargo test --locked -p prw-agent
+
+      - name: Desktop tests
+        run: cargo test --locked -p prw-desktop
+
+      - name: Agent and Desktop compile check
+        run: cargo check --locked -p prw-agent -p prw-desktop --all-targets
+
+      - name: Agent and Desktop Clippy
+        run: cargo clippy --locked -p prw-agent -p prw-desktop --all-targets -- -D warnings
+
+      - name: Agent release build
+        run: cargo build --locked --release -p prw-agent --bin prw-agent
+
+      - name: Desktop release build
+        run: cargo build --locked --release -p prw-desktop --bin prw-desktop
+
+      - name: Retain exact R3 carrier inputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ownspace-terminal-provider-pty-r3-carrier
+          path: |
+            .validation/OWNSPACE_MILESTONE3_TERMINAL_PROVIDER_PTY_R3.patch
+            .github/workflows/validate-desktop-terminal-provider-pty-r3-2026-09-30.yml
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
