@@ -1,0 +1,1159 @@
+diff --git a/apps/desktop/README.md b/apps/desktop/README.md
+index d5b8097..f99805d 100644
+--- a/apps/desktop/README.md
++++ b/apps/desktop/README.md
+@@ -15,6 +15,7 @@ The desktop shell provides:
+ - read-only local Agent availability/runtime presentation;
+ - read-only Private DNS summary presentation;
+ - manual bounded local status refresh that preserves the last rendered status while the read-only probe is active and gives explicit `Refreshing…` progress feedback;
++- a read-only Machines registered-device inventory loaded through the authenticated local Agent from the existing owner-PC registry authority, exposing only device identifier and lifecycle metadata; this surface does not mutate enrollment/device authority and does not infer Online/Offline from endpoint or transport data when no authoritative live per-device reachability observation is available;
+ - a read-only Settings diagnostics page that shows the local Ownspace Desktop package version, the desktop client’s compiled-in supported local IPC protocol version, and the latest Agent-reported local IPC protocol version from the same bounded `GetAgentStatus` snapshot used by Overview and Activity; it also exposes both the compatibility-sensitive endpoint contract and the session-resolved candidate endpoint derived through the existing `LocalIpcContract`, with a local-only copy action for the resolved path and no Agent configuration mutation;
+ - a read-only Activity page that mirrors the latest local Agent/Private DNS probe snapshot, can trigger the same bounded local refresh as Overview, and can copy the currently rendered snapshot plus the session-resolved local IPC endpoint candidate to the local desktop clipboard without persisting history or emitting external telemetry;
+ - an implemented Sessions page for one local terminal session through existing command-3 terminal authority: it opens a provider-selected POSIX shell at fixed bounded geometry, sends bounded input lines, and closes the session through the trusted local Agent socket; Agent-owned terminal principal/capability checks remain authoritative, and terminal output presentation is not enabled in this checkpoint;
+@@ -23,7 +24,7 @@ The desktop shell provides:
+ - explicit offline/error handling, including partial Private DNS query failure visibility;
+ - a bounded worker thread so local Unix-socket reads do not block the GTK main thread.
+ 
+-The implemented status/diagnostics surfaces use only the existing local `GetAgentStatus` and `GetPrivateDnsConfig` commands. The Files page separately uses the already-authorized read-only command-3 `FileList` path over the same trusted local Agent socket. The Sessions page uses existing command-3 terminal open/input/close operations over that same trusted socket and does not weaken Agent-owned terminal authority checks. The Transfers page uses the existing upload begin/chunk/finalize transfer family and Agent-owned owner-home filesystem authority; its internal abort request is cleanup-only after a failed or uncertain active upload and does not expose resume or user-triggered abort controls.
++The implemented status/diagnostics surfaces use only the existing local `GetAgentStatus` and `GetPrivateDnsConfig` commands. Machines separately uses the additive read-only command-3 `DeviceList` path over the same authenticated local Agent socket and reads the existing owner-PC registry in strict read-only mode; it does not read SQLite directly from the Desktop. The Files page separately uses the already-authorized read-only command-3 `FileList` path over the same trusted local Agent socket. The Sessions page uses existing command-3 terminal open/input/close operations over that same trusted socket and does not weaken Agent-owned terminal authority checks. The Transfers page uses the existing upload begin/chunk/finalize transfer family and Agent-owned owner-home filesystem authority; its internal abort request is cleanup-only after a failed or uncertain active upload and does not expose resume or user-triggered abort controls.
+ 
+ The local control endpoint remains:
+ 
+diff --git a/apps/desktop/src/ipc.rs b/apps/desktop/src/ipc.rs
+index 7fe114c..d28c7ab 100644
+--- a/apps/desktop/src/ipc.rs
++++ b/apps/desktop/src/ipc.rs
+@@ -25,7 +25,9 @@ use prw_agent::{
+ use rustix::process::geteuid;
+ 
+ use crate::local_management_ipc::{
+-    LocalFileListEntry, build_file_list_management_request, decode_file_list_success_body,
++    LocalFileListEntry, LocalRegisteredDeviceEntry, build_file_list_management_request,
++    build_registered_device_list_management_request, decode_file_list_success_body,
++    decode_registered_device_list_success_body,
+ };
+ use crate::state::{AgentAvailability, DesktopPresentationState};
+ 
+@@ -37,6 +39,7 @@ const UPLOAD_BEGIN_REQUEST_ID: u64 = 7;
+ const UPLOAD_CHUNK_REQUEST_ID: u64 = 8;
+ const UPLOAD_FINALIZE_REQUEST_ID: u64 = 9;
+ const UPLOAD_ABORT_REQUEST_ID: u64 = 10;
++const DEVICE_LIST_REQUEST_ID: u64 = 11;
+ const MANAGEMENT_STATUS_PREFIX_LENGTH: usize = 2;
+ const MANAGEMENT_EMPTY_RESULT: u8 = 4;
+ const MANAGEMENT_OFFSET_RESULT: u8 = 5;
+@@ -206,6 +209,21 @@ pub fn query_file_list(path: &str) -> Result<Vec<LocalFileListEntry>, DesktopIpc
+         .map_err(|_| DesktopIpcError::ResponseInvalid)
+ }
+ 
++/// Queries the owner-PC registered-device projection through the authenticated local Agent.
++///
++/// The response contains only registry device identity and lifecycle metadata. Reachability is not
++/// inferred from endpoints or transport identity by this query.
++pub fn query_registered_devices() -> Result<Vec<LocalRegisteredDeviceEntry>, DesktopIpcError> {
++    let endpoint = endpoint_from_environment()?;
++    let request_id = LocalIpcRequestId::new(DEVICE_LIST_REQUEST_ID)
++        .map_err(|_| DesktopIpcError::RequestIdGenerationFailed)?;
++    let request = build_registered_device_list_management_request(request_id)
++        .map_err(|_| DesktopIpcError::ManagementRequestInvalid)?;
++    let frame = query_prebuilt_success_frame(&endpoint, request_id, &request)?;
++    decode_registered_device_list_success_body(frame.payload().as_bytes())
++        .map_err(|_| DesktopIpcError::ResponseInvalid)
++}
++
+ /// Executes one already-encoded terminal-open management intent through the trusted local Agent socket.
+ pub fn query_terminal_open(bridge_payload: &[u8]) -> Result<(), DesktopIpcError> {
+     query_empty_management(TERMINAL_OPEN_REQUEST_ID, bridge_payload)
+diff --git a/apps/desktop/src/local_management_ipc.rs b/apps/desktop/src/local_management_ipc.rs
+index 4bbad24..5f08ef6 100644
+--- a/apps/desktop/src/local_management_ipc.rs
++++ b/apps/desktop/src/local_management_ipc.rs
+@@ -10,6 +10,7 @@ use prw_agent::{
+         LocalManagementRequestBuildError, build_local_management_request_frame,
+     },
+ };
++use prw_core::{DeviceId, DeviceLifecycle};
+ use prw_file_service::{MAX_DIRECTORY_ENTRIES, RemotePath};
+ use prw_remote_bridge::{BridgeCommand, RemoteBridgeError};
+ 
+@@ -45,6 +46,113 @@ pub fn build_bridge_management_request(
+         .map_err(LocalManagementClientError::Local)
+ }
+ 
++/// One decoded registered-device entry returned by the Agent.
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct LocalRegisteredDeviceEntry {
++    device_id: DeviceId,
++    lifecycle: DeviceLifecycle,
++}
++
++impl LocalRegisteredDeviceEntry {
++    #[must_use]
++    pub(crate) fn device_id(&self) -> &str {
++        self.device_id.as_str()
++    }
++
++    #[must_use]
++    pub(crate) const fn lifecycle(&self) -> DeviceLifecycle {
++        self.lifecycle
++    }
++
++    #[must_use]
++    pub(crate) fn lifecycle_text(&self) -> &'static str {
++        match self.lifecycle {
++            DeviceLifecycle::PendingEnrollment => "Pending enrollment",
++            DeviceLifecycle::Enrolled => "Enrolled",
++            DeviceLifecycle::Revoked => "Revoked",
++        }
++    }
++}
++
++/// Fail-closed decoder error for one successful registered-device-list response body.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum LocalRegisteredDeviceListDecodeError {
++    MissingResult,
++    UnexpectedResult,
++    EntryCount,
++    EntryLength,
++    EntryUtf8,
++    EntryDeviceId,
++    EntryLifecycle,
++    TrailingBytes,
++}
++
++/// Builds the read-only registered-device-list management request.
++pub fn build_registered_device_list_management_request(
++    request_id: LocalIpcRequestId,
++) -> Result<LocalIpcFrame, LocalManagementClientError> {
++    build_bridge_management_request(request_id, &BridgeCommand::DeviceList)
++}
++
++/// Decodes one bounded registered-device list after the common two-byte success status prefix.
++pub fn decode_registered_device_list_success_body(
++    payload: &[u8],
++) -> Result<Vec<LocalRegisteredDeviceEntry>, LocalRegisteredDeviceListDecodeError> {
++    const STATUS_PREFIX_LENGTH: usize = 2;
++    const REGISTERED_DEVICES_RESULT: u8 = 7;
++    const MAX_REGISTERED_DEVICE_ENTRIES: usize = 4096;
++
++    let body = payload
++        .get(STATUS_PREFIX_LENGTH..)
++        .ok_or(LocalRegisteredDeviceListDecodeError::MissingResult)?;
++    if body.first().copied() != Some(REGISTERED_DEVICES_RESULT) {
++        return Err(LocalRegisteredDeviceListDecodeError::UnexpectedResult);
++    }
++    let count_bytes = body
++        .get(1..3)
++        .ok_or(LocalRegisteredDeviceListDecodeError::EntryCount)?;
++    let count = usize::from(u16::from_be_bytes([count_bytes[0], count_bytes[1]]));
++    if count > MAX_REGISTERED_DEVICE_ENTRIES {
++        return Err(LocalRegisteredDeviceListDecodeError::EntryCount);
++    }
++
++    let mut cursor = 3_usize;
++    let mut entries = Vec::with_capacity(count);
++    for _ in 0..count {
++        let len_bytes = body
++            .get(cursor..cursor + 2)
++            .ok_or(LocalRegisteredDeviceListDecodeError::EntryLength)?;
++        let device_id_len = usize::from(u16::from_be_bytes([len_bytes[0], len_bytes[1]]));
++        cursor += 2;
++        if device_id_len == 0 {
++            return Err(LocalRegisteredDeviceListDecodeError::EntryLength);
++        }
++        let device_id_bytes = body
++            .get(cursor..cursor + device_id_len)
++            .ok_or(LocalRegisteredDeviceListDecodeError::EntryLength)?;
++        let device_id = std::str::from_utf8(device_id_bytes)
++            .map_err(|_| LocalRegisteredDeviceListDecodeError::EntryUtf8)?;
++        let device_id = DeviceId::new(device_id.to_owned())
++            .map_err(|_| LocalRegisteredDeviceListDecodeError::EntryDeviceId)?;
++        cursor += device_id_len;
++        let lifecycle = match body.get(cursor).copied() {
++            Some(1) => DeviceLifecycle::PendingEnrollment,
++            Some(2) => DeviceLifecycle::Enrolled,
++            Some(3) => DeviceLifecycle::Revoked,
++            _ => return Err(LocalRegisteredDeviceListDecodeError::EntryLifecycle),
++        };
++        cursor += 1;
++        entries.push(LocalRegisteredDeviceEntry {
++            device_id,
++            lifecycle,
++        });
++    }
++    if cursor != body.len() {
++        return Err(LocalRegisteredDeviceListDecodeError::TrailingBytes);
++    }
++    Ok(entries)
++}
++
+ /// One decoded read-only file-list entry returned by the Agent.
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ pub struct LocalFileListEntry {
+@@ -178,7 +286,8 @@ mod tests {
+ 
+     use super::{
+         LocalManagementClientError, build_bridge_management_request,
+-        build_file_list_management_request, decode_file_list_success_body,
++        build_file_list_management_request, build_registered_device_list_management_request,
++        decode_file_list_success_body, decode_registered_device_list_success_body,
+     };
+ 
+     fn id(value: u64) -> LocalIpcRequestId {
+@@ -275,6 +384,41 @@ mod tests {
+         );
+     }
+ 
++    #[test]
++    fn registered_device_list_builder_uses_additive_device_list_bridge_command() {
++        let frame = build_registered_device_list_management_request(id(155))
++            .expect("registered-device request builds");
++        let local = decode_local_management_request_frame(&frame).expect("local envelope decodes");
++        assert_eq!(
++            BridgeCommand::decode(local.bridge_payload()).expect("bridge decodes"),
++            BridgeCommand::DeviceList
++        );
++        assert_eq!(BridgeCommand::DeviceList.operation_code(), 19);
++    }
++
++    #[test]
++    fn registered_device_success_body_decodes_lifecycle_and_rejects_malformed_entries() {
++        let payload = [
++            0, 0, 7, 0, 2,
++            0, 8, b'd', b'e', b'v', b'i', b'c', b'e', b'-', b'a', 2,
++            0, 8, b'd', b'e', b'v', b'i', b'c', b'e', b'-', b'b', 3,
++        ];
++        let entries = decode_registered_device_list_success_body(&payload)
++            .expect("registered-device body decodes");
++        assert_eq!(entries.len(), 2);
++        assert_eq!(entries[0].device_id(), "device-a");
++        assert_eq!(entries[0].lifecycle_text(), "Enrolled");
++        assert_eq!(entries[1].device_id(), "device-b");
++        assert_eq!(entries[1].lifecycle_text(), "Revoked");
++
++        let mut trailing = payload.to_vec();
++        trailing.push(9);
++        assert!(decode_registered_device_list_success_body(&trailing).is_err());
++
++        let invalid_lifecycle = [0, 0, 7, 0, 1, 0, 1, b'x', 9];
++        assert!(decode_registered_device_list_success_body(&invalid_lifecycle).is_err());
++    }
++
+     #[test]
+     fn live_file_list_builder_accepts_root_and_rejects_noncanonical_paths() {
+         let root = build_file_list_management_request(id(156), "").expect("root listing builds");
+diff --git a/apps/desktop/src/ui.rs b/apps/desktop/src/ui.rs
+index 20938f9..3d35828 100644
+--- a/apps/desktop/src/ui.rs
++++ b/apps/desktop/src/ui.rs
+@@ -17,12 +17,16 @@ use prw_terminal::TerminalProfile;
+ use sha2::{Digest, Sha256};
+ 
+ use crate::ipc;
+-use crate::local_management_ipc::LocalFileListEntry;
++use crate::local_management_ipc::{LocalFileListEntry, LocalRegisteredDeviceEntry};
+ use crate::management::{TerminalPresentation, TerminalPresentationState, UploadPresentation};
+ use crate::state::{DesktopPresentationState, NavigationDestination};
+ 
+ const REFRESH_BUTTON_IDLE_LABEL: &str = "Refresh status";
+ const REFRESH_BUTTON_BUSY_LABEL: &str = "Refreshing…";
++const MACHINES_DEVICE_REFRESH_IDLE_LABEL: &str = "Refresh registered devices";
++const MACHINES_DEVICE_REFRESH_BUSY_LABEL: &str = "Loading devices…";
++const MACHINES_DEVICE_NOT_LOADED_STATUS: &str = "Registered devices: not loaded";
++const MACHINES_REACHABILITY_NOT_OBSERVED: &str = "Not observed by this local surface";
+ const COPY_SNAPSHOT_IDLE_LABEL: &str = "Copy current snapshot";
+ const COPY_SNAPSHOT_DONE_LABEL: &str = "Copied";
+ const TERMINAL_OPEN_LABEL: &str = "Open POSIX shell session";
+@@ -56,8 +60,8 @@ const FILES_SUBTITLE: &str = concat!(
+     "Paths are relative; this surface does not read file contents, mutate files, transfer data, open terminals, or create forwarding."
+ );
+ const MACHINES_SUBTITLE: &str = concat!(
+-    "Current local owner-host status from the same bounded Agent snapshot as Overview. ",
+-    "This surface does not enumerate remote devices, infer identity from endpoint data, or grant capabilities."
++    "Read-only registered-device inventory from the owner-PC authority through the local Agent. ",
++    "Reachability is shown only from authoritative live observation; this checkpoint does not infer Online/Offline from endpoint data and does not mutate device authority."
+ );
+ const ACTIVITY_SUBTITLE: &str = concat!(
+     "Latest local diagnostics snapshot. ",
+@@ -83,6 +87,13 @@ struct StatusProbeTargets {
+     activity_refresh_button: gtk::Button,
+ }
+ 
++#[derive(Clone)]
++struct MachinesPageTargets {
++    refresh_button: gtk::Button,
++    status: gtk::Label,
++    entries: gtk::Box,
++}
++
+ #[derive(Clone)]
+ struct FilesPageTargets {
+     path_entry: gtk::Entry,
+@@ -173,6 +184,7 @@ pub fn build(app: &adw::Application) {
+         machines_dns_label,
+         machines_detail_label,
+         machines_refresh_button,
++        machines_page_targets,
+     ) = machines_page();
+ 
+     let (
+@@ -234,6 +246,7 @@ pub fn build(app: &adw::Application) {
+     render_probe_state(&connecting, &probe_targets);
+     connect_refresh_controls(&probe_targets);
+     start_status_probe(probe_targets);
++    start_registered_device_probe(&machines_page_targets);
+ }
+ 
+ fn overview_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label, gtk::Button) {
+@@ -275,7 +288,14 @@ fn overview_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label, gtk::Button
+     (page, agent_label, dns_label, detail_label, refresh_button)
+ }
+ 
+-fn machines_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label, gtk::Button) {
++fn machines_page() -> (
++    gtk::Box,
++    gtk::Label,
++    gtk::Label,
++    gtk::Label,
++    gtk::Button,
++    MachinesPageTargets,
++) {
+     let page = gtk::Box::new(gtk::Orientation::Vertical, 18);
+     page.set_margin_top(PAGE_OUTER_MARGIN);
+     page.set_margin_bottom(PAGE_OUTER_MARGIN);
+@@ -293,6 +313,29 @@ fn machines_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label, gtk::Button
+     subtitle.add_css_class(DIM_LABEL_CSS_CLASS);
+     page.append(&subtitle);
+ 
++    let device_refresh_button = gtk::Button::with_label(MACHINES_DEVICE_REFRESH_IDLE_LABEL);
++    device_refresh_button.set_halign(gtk::Align::Start);
++    page.append(&device_refresh_button);
++
++    let devices_title = gtk::Label::new(Some("Registered devices"));
++    devices_title.set_xalign(0.0);
++    devices_title.add_css_class(HEADING_CSS_CLASS);
++    page.append(&devices_title);
++
++    let device_status = gtk::Label::new(Some(MACHINES_DEVICE_NOT_LOADED_STATUS));
++    device_status.set_xalign(0.0);
++    device_status.set_wrap(true);
++    device_status.add_css_class(DIM_LABEL_CSS_CLASS);
++    page.append(&device_status);
++
++    let device_entries = gtk::Box::new(gtk::Orientation::Vertical, 8);
++    page.append(&device_entries);
++
++    let local_status_title = gtk::Label::new(Some("Local owner-host status"));
++    local_status_title.set_xalign(0.0);
++    local_status_title.add_css_class(HEADING_CSS_CLASS);
++    page.append(&local_status_title);
++
+     let refresh_button = gtk::Button::with_label(REFRESH_BUTTON_IDLE_LABEL);
+     refresh_button.set_halign(gtk::Align::Start);
+     page.append(&refresh_button);
+@@ -309,7 +352,113 @@ fn machines_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label, gtk::Button
+     detail_label.add_css_class(DIM_LABEL_CSS_CLASS);
+     page.append(&detail_label);
+ 
+-    (page, agent_label, dns_label, detail_label, refresh_button)
++    let targets = MachinesPageTargets {
++        refresh_button: device_refresh_button,
++        status: device_status,
++        entries: device_entries,
++    };
++    let click_targets = targets.clone();
++    targets
++        .refresh_button
++        .connect_clicked(move |_| start_registered_device_probe(&click_targets));
++
++    (
++        page,
++        agent_label,
++        dns_label,
++        detail_label,
++        refresh_button,
++        targets,
++    )
++}
++
++fn clear_registered_device_entries(entries: &gtk::Box) {
++    while let Some(child) = entries.first_child() {
++        entries.remove(&child);
++    }
++}
++
++fn append_registered_device_entry(entries: &gtk::Box, device: &LocalRegisteredDeviceEntry) {
++    let label = gtk::Label::new(Some(&format!(
++        "Device: {}\nLifecycle: {}\nReachability: {}",
++        device.device_id(),
++        device.lifecycle_text(),
++        MACHINES_REACHABILITY_NOT_OBSERVED
++    )));
++    label.set_xalign(0.0);
++    label.set_selectable(true);
++    label.set_wrap(true);
++    entries.append(&label);
++}
++
++fn start_registered_device_probe(targets: &MachinesPageTargets) {
++    targets.refresh_button.set_sensitive(false);
++    targets
++        .refresh_button
++        .set_label(MACHINES_DEVICE_REFRESH_BUSY_LABEL);
++    targets.status.set_text("Loading registered devices…");
++
++    let (sender, receiver) = mpsc::sync_channel(1);
++    let spawn_result = std::thread::Builder::new()
++        .name("prw-desktop-registered-device-read".to_owned())
++        .spawn(move || {
++            let _ = sender.send(ipc::query_registered_devices());
++        });
++
++    if spawn_result.is_err() {
++        targets
++            .status
++            .set_text("Unable to start registered-device read worker");
++        targets.refresh_button.set_sensitive(true);
++        targets
++            .refresh_button
++            .set_label(MACHINES_DEVICE_REFRESH_IDLE_LABEL);
++        return;
++    }
++
++    let targets = targets.clone();
++    let _source_id = glib::timeout_add_local(WORKER_RESULT_POLL_INTERVAL, move || {
++        match receiver.try_recv() {
++            Ok(Ok(devices)) => {
++                clear_registered_device_entries(&targets.entries);
++                for device in &devices {
++                    append_registered_device_entry(&targets.entries, device);
++                }
++                targets.status.set_text(&format!(
++                    "Registered devices: {}. Reachability is not inferred from routing data.",
++                    devices.len()
++                ));
++                targets.refresh_button.set_sensitive(true);
++                targets
++                    .refresh_button
++                    .set_label(MACHINES_DEVICE_REFRESH_IDLE_LABEL);
++                glib::ControlFlow::Break
++            }
++            Ok(Err(error)) => {
++                clear_registered_device_entries(&targets.entries);
++                targets
++                    .status
++                    .set_text(&format!("Registered-device read unavailable: {error}"));
++                targets.refresh_button.set_sensitive(true);
++                targets
++                    .refresh_button
++                    .set_label(MACHINES_DEVICE_REFRESH_IDLE_LABEL);
++                glib::ControlFlow::Break
++            }
++            Err(TryRecvError::Empty) => glib::ControlFlow::Continue,
++            Err(TryRecvError::Disconnected) => {
++                clear_registered_device_entries(&targets.entries);
++                targets
++                    .status
++                    .set_text("Registered-device read worker ended without a result");
++                targets.refresh_button.set_sensitive(true);
++                targets
++                    .refresh_button
++                    .set_label(MACHINES_DEVICE_REFRESH_IDLE_LABEL);
++                glib::ControlFlow::Break
++            }
++        }
++    });
+ }
+ 
+ fn next_terminal_session_id() -> u64 {
+@@ -1833,14 +1982,18 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn machines_subtitle_locks_existing_read_only_snapshot_boundary() {
++    fn machines_subtitle_locks_registered_device_read_boundary() {
+         assert_eq!(
+             MACHINES_SUBTITLE,
+             concat!(
+-                "Current local owner-host status from the same bounded Agent snapshot as Overview. ",
+-                "This surface does not enumerate remote devices, infer identity from endpoint data, or grant capabilities."
++                "Read-only registered-device inventory from the owner-PC authority through the local Agent. ",
++                "Reachability is shown only from authoritative live observation; this checkpoint does not infer Online/Offline from endpoint data and does not mutate device authority."
+             )
+         );
++        assert_eq!(
++            MACHINES_REACHABILITY_NOT_OBSERVED,
++            "Not observed by this local surface"
++        );
+     }
+ 
+     #[test]
+diff --git a/crates/prw-agent/src/candidate_publication_requester_rendezvous_start_intent_policy_source.rs b/crates/prw-agent/src/candidate_publication_requester_rendezvous_start_intent_policy_source.rs
+index f737701..9a89c16 100644
+--- a/crates/prw-agent/src/candidate_publication_requester_rendezvous_start_intent_policy_source.rs
++++ b/crates/prw-agent/src/candidate_publication_requester_rendezvous_start_intent_policy_source.rs
+@@ -333,6 +333,7 @@ mod tests {
+             Capability::FilesWrite,
+             Capability::FilesDelete,
+             Capability::ForwardingCreate,
++            Capability::DeviceRead,
+             Capability::DeviceManage,
+             Capability::PolicyManage,
+         ] {
+diff --git a/crates/prw-agent/src/linux_bootstrap.rs b/crates/prw-agent/src/linux_bootstrap.rs
+index 5cc7567..81ddf16 100644
+--- a/crates/prw-agent/src/linux_bootstrap.rs
++++ b/crates/prw-agent/src/linux_bootstrap.rs
+@@ -147,7 +147,8 @@ impl LinuxAgentProductionRemoteCapabilityDispatcher {
+     ) -> Result<Vec<u8>, LinuxAgentProductionRemoteCapabilityDispatchError> {
+         match command {
+             BridgeCommand::AgentStatus => Ok(encode_status_snapshot(self.status_snapshot).to_vec()),
+-            BridgeCommand::FileList(_)
++            BridgeCommand::DeviceList
++            | BridgeCommand::FileList(_)
+             | BridgeCommand::FileStat(_)
+             | BridgeCommand::FileCreate { .. }
+             | BridgeCommand::DirectoryCreate(_)
+@@ -3562,6 +3563,7 @@ mod tests {
+             Capability::FilesWrite,
+             Capability::FilesDelete,
+             Capability::ForwardingCreate,
++            Capability::DeviceRead,
+             Capability::DeviceManage,
+             Capability::PolicyManage,
+         ] {
+diff --git a/crates/prw-agent/src/local_commands/management_agent_status_runtime.rs b/crates/prw-agent/src/local_commands/management_agent_status_runtime.rs
+index 8c549a6..88283ef 100644
+--- a/crates/prw-agent/src/local_commands/management_agent_status_runtime.rs
++++ b/crates/prw-agent/src/local_commands/management_agent_status_runtime.rs
+@@ -1,7 +1,7 @@
+-//! Narrow command-3 `AgentStatus` + `FileList` + bounded upload runtime adapter.
++//! Narrow command-3 `AgentStatus` + `DeviceList` + `FileList` + bounded upload runtime adapter.
+ //!
+ //! The production slice remains explicitly narrower than the generic typed-management
+-//! surface. `AgentStatus` and `FileList` preserve their existing behavior. A connection
++//! surface. `AgentStatus`, read-only `DeviceList`, and `FileList` preserve bounded behavior. A connection
+ //! may additionally own at most one fresh create-only upload using `UploadBegin`,
+ //! `UploadChunk`, `UploadFinalize`, and internal/client-requested `UploadAbort`.
+ //! `UploadResume`, `DownloadChunk`, file mutation commands outside upload, terminal, and
+@@ -16,6 +16,7 @@ use std::path::PathBuf;
+ use prw_file_service::FileServiceError;
+ use prw_file_transfer::{FileTransferError, TransferId, UploadTransferManager};
+ use prw_policy::{BoundedLocalManagementDecisions, BoundedLocalManagementPolicy, Decision};
++use prw_registry::durable_registry_sqlite_custody::open_existing_owner_pc_sqlite_authority_from_env;
+ use prw_remote_bridge::BridgeCommand;
+ 
+ use super::LocalAgentResponseStatus;
+@@ -43,6 +44,7 @@ const fn agent_status_file_list_policy() -> BoundedLocalManagementPolicy {
+         files_read: Decision::Allow,
+         files_write: Decision::Deny,
+         forwarding_create: Decision::Deny,
++        device_read: Decision::Allow,
+     })
+ }
+ 
+@@ -55,6 +57,7 @@ const fn agent_status_file_list_upload_policy() -> BoundedLocalManagementPolicy
+         files_read: Decision::Allow,
+         files_write: Decision::Allow,
+         forwarding_create: Decision::Deny,
++        device_read: Decision::Allow,
+     })
+ }
+ 
+@@ -162,8 +165,9 @@ impl<'authority> LocalBoundedUploadRuntime<'authority> {
+ /// Processes one canonical command-3 request through the existing read-only slice.
+ ///
+ /// This compatibility path owns no mutable transfer state. Canonical admission still
+-/// binds the request to the authenticated same-UID Linux peer. `FileList` remains
+-/// descriptor-anchored to `$HOME`. Every other command fails closed.
++/// binds the request to the authenticated same-UID Linux peer. `DeviceList` reads only the
++/// existing owner-PC registry authority, while `FileList` remains descriptor-anchored to
++/// `$HOME`. Every other command fails closed.
+ ///
+ /// # Errors
+ ///
+@@ -206,6 +210,17 @@ where
+                 agent_status,
+             )),
+         ),
++        BridgeCommand::DeviceList => {
++            let result = open_existing_owner_pc_sqlite_authority_from_env()
++                .map_err(|_| LocalManagementTypedProviderDispatchError::RegistryRead)
++                .and_then(|registry| {
++                    registry
++                        .registered_devices()
++                        .map(LocalManagementTypedProviderResult::RegisteredDevices)
++                        .map_err(|_| LocalManagementTypedProviderDispatchError::RegistryRead)
++                });
++            build_management_provider_response(request_id, result)
++        }
+         BridgeCommand::FileList(path) => {
+             let Ok(filesystem) = open_filesystem() else {
+                 return build_terminal_response_frame(
+@@ -231,7 +246,8 @@ where
+ 
+ /// Processes one command-3 request through the production bounded-upload extension.
+ ///
+-/// Only `AgentStatus`, `FileList`, fresh upload begin/chunk/finalize, and upload abort
++/// Only `AgentStatus`, read-only `DeviceList`, `FileList`, fresh upload begin/chunk/finalize,
++/// and upload abort
+ /// are reachable after capability admission. `UploadResume`, `DownloadChunk`, `FileStat`,
+ /// other file mutation, terminal, and forwarding commands remain closed. Once an upload
+ /// begins, command-3 requests on that connection are restricted to the matching upload's
+@@ -270,6 +286,14 @@ pub(super) fn process_authenticated_linux_agent_status_file_list_upload_manageme
+         BridgeCommand::AgentStatus => Ok(LocalManagementTypedProviderResult::AgentStatus(
+             agent_status,
+         )),
++        BridgeCommand::DeviceList => open_existing_owner_pc_sqlite_authority_from_env()
++            .map_err(|_| LocalManagementTypedProviderDispatchError::RegistryRead)
++            .and_then(|registry| {
++                registry
++                    .registered_devices()
++                    .map(LocalManagementTypedProviderResult::RegisteredDevices)
++                    .map_err(|_| LocalManagementTypedProviderDispatchError::RegistryRead)
++            }),
+         BridgeCommand::FileList(path) => runtime
+             .filesystem
+             .root()
+@@ -419,6 +443,7 @@ mod tests {
+             Decision::Allow
+         );
+         assert_eq!(policy.evaluate(Capability::FilesRead), Decision::Allow);
++        assert_eq!(policy.evaluate(Capability::DeviceRead), Decision::Allow);
+         for capability in [
+             Capability::PrivateDnsConfigRead,
+             Capability::TerminalOpen,
+@@ -441,6 +466,7 @@ mod tests {
+             Capability::AgentStatusRead,
+             Capability::FilesRead,
+             Capability::FilesWrite,
++            Capability::DeviceRead,
+         ] {
+             assert_eq!(policy.evaluate(capability), Decision::Allow);
+         }
+diff --git a/crates/prw-agent/src/local_commands/management_boundary_transaction.rs b/crates/prw-agent/src/local_commands/management_boundary_transaction.rs
+index 6b1e845..a68c7b3 100644
+--- a/crates/prw-agent/src/local_commands/management_boundary_transaction.rs
++++ b/crates/prw-agent/src/local_commands/management_boundary_transaction.rs
+@@ -305,6 +305,7 @@ mod tests {
+             files_read: Decision::Deny,
+             files_write: Decision::Deny,
+             forwarding_create: Decision::Deny,
++            device_read: Decision::Deny,
+         })
+     }
+ 
+diff --git a/crates/prw-agent/src/local_commands/management_dispatch.rs b/crates/prw-agent/src/local_commands/management_dispatch.rs
+index 196fcad..4f2a19f 100644
+--- a/crates/prw-agent/src/local_commands/management_dispatch.rs
++++ b/crates/prw-agent/src/local_commands/management_dispatch.rs
+@@ -194,7 +194,7 @@ pub(super) const fn required_authority_family(
+     command: &BridgeCommand,
+ ) -> LocalManagementAuthorityFamily {
+     match command {
+-        BridgeCommand::AgentStatus => LocalManagementAuthorityFamily::Agent,
++        BridgeCommand::AgentStatus | BridgeCommand::DeviceList => LocalManagementAuthorityFamily::Agent,
+         BridgeCommand::FileList(_)
+         | BridgeCommand::FileStat(_)
+         | BridgeCommand::FileCreate { .. }
+diff --git a/crates/prw-agent/src/local_commands/management_response.rs b/crates/prw-agent/src/local_commands/management_response.rs
+index 80c05fa..ea5d4d1 100644
+--- a/crates/prw-agent/src/local_commands/management_response.rs
++++ b/crates/prw-agent/src/local_commands/management_response.rs
+@@ -5,9 +5,11 @@
+ //! command body used after typed provider dispatch. Provider errors are collapsed into the
+ //! existing coarse local statuses and never serialize provider strings or host detail.
+ 
++use prw_core::DeviceLifecycle;
+ use prw_file_service::{FileServiceError, RemoteDirectoryEntry, RemoteFileType};
+ use prw_file_transfer::FileTransferError;
+ use prw_forwarding::ForwardingError;
++use prw_registry::RegisteredDevice;
+ use prw_terminal::TerminalError;
+ 
+ use super::LocalAgentResponseStatus;
+@@ -28,6 +30,7 @@ const RESULT_METADATA: u8 = 3;
+ const RESULT_EMPTY: u8 = 4;
+ const RESULT_OFFSET: u8 = 5;
+ const RESULT_BYTES: u8 = 6;
++const RESULT_REGISTERED_DEVICES: u8 = 7;
+ 
+ const FILE_TYPE_REGULAR: u8 = 1;
+ const FILE_TYPE_DIRECTORY: u8 = 2;
+@@ -41,6 +44,8 @@ pub(super) enum LocalManagementSuccessBodyEncodeError {
+     DirectoryEntryCount,
+     /// One provider entry name did not fit the locked two-byte name-length field.
+     DirectoryEntryNameLength,
++    /// One device identifier or device count did not fit the bounded response representation.
++    RegisteredDeviceShape,
+     /// Encoded result exceeded the existing local terminal-response body bound.
+     BodyTooLarge,
+ }
+@@ -84,7 +89,8 @@ pub(super) fn build_management_provider_response(
+ /// - `3`: metadata, `u8 type + u64 size`;
+ /// - `4`: empty acknowledgement;
+ /// - `5`: exact big-endian `u64` offset;
+-/// - `6`: bounded raw bytes.
++/// - `6`: bounded raw bytes;
++/// - `7`: registered devices, `u16 count`, then repeated `u16 id_len + id + u8 lifecycle`.
+ ///
+ /// # Errors
+ ///
+@@ -118,6 +124,9 @@ pub(super) fn encode_success_body(
+             body.push(RESULT_BYTES);
+             body.extend_from_slice(bytes);
+         }
++        LocalManagementTypedProviderResult::RegisteredDevices(devices) => {
++            encode_registered_devices(&mut body, devices)?;
++        }
+     }
+ 
+     if body.len() > LOCAL_IPC_MAX_TERMINAL_BODY_LENGTH {
+@@ -126,6 +135,37 @@ pub(super) fn encode_success_body(
+     Ok(body)
+ }
+ 
++fn encode_registered_devices(
++    body: &mut Vec<u8>,
++    devices: &[RegisteredDevice],
++) -> Result<(), LocalManagementSuccessBodyEncodeError> {
++    let count = u16::try_from(devices.len())
++        .map_err(|_| LocalManagementSuccessBodyEncodeError::RegisteredDeviceShape)?;
++    body.push(RESULT_REGISTERED_DEVICES);
++    body.extend_from_slice(&count.to_be_bytes());
++
++    for device in devices {
++        let device_id = device.binding().device_id.as_str().as_bytes();
++        let device_id_len = u16::try_from(device_id.len())
++            .map_err(|_| LocalManagementSuccessBodyEncodeError::RegisteredDeviceShape)?;
++        body.extend_from_slice(&device_id_len.to_be_bytes());
++        body.extend_from_slice(device_id);
++        body.push(device_lifecycle_code(device.binding().lifecycle));
++        if body.len() > LOCAL_IPC_MAX_TERMINAL_BODY_LENGTH {
++            return Err(LocalManagementSuccessBodyEncodeError::BodyTooLarge);
++        }
++    }
++    Ok(())
++}
++
++const fn device_lifecycle_code(lifecycle: DeviceLifecycle) -> u8 {
++    match lifecycle {
++        DeviceLifecycle::PendingEnrollment => 1,
++        DeviceLifecycle::Enrolled => 2,
++        DeviceLifecycle::Revoked => 3,
++    }
++}
++
+ fn encode_directory_entries(
+     body: &mut Vec<u8>,
+     entries: &[RemoteDirectoryEntry],
+@@ -167,6 +207,9 @@ const fn error_status(
+         | LocalManagementTypedProviderDispatchError::PrincipalMismatch => {
+             LocalAgentResponseStatus::Conflict
+         }
++        LocalManagementTypedProviderDispatchError::RegistryRead => {
++            LocalAgentResponseStatus::InternalError
++        }
+         LocalManagementTypedProviderDispatchError::File(error) => file_error_status(error),
+         LocalManagementTypedProviderDispatchError::Transfer(error) => transfer_error_status(error),
+         LocalManagementTypedProviderDispatchError::Terminal(error) => terminal_error_status(error),
+@@ -248,3 +291,58 @@ const fn forwarding_error_status(error: ForwardingError) -> LocalAgentResponseSt
+         _ => LocalAgentResponseStatus::InternalError,
+     }
+ }
++
++
++#[cfg(test)]
++mod tests {
++    use prw_control_plane::{
++        DeviceIdentityAlgorithm, DeviceIdentityBinding, DeviceIdentityPublicKeyEncoding,
++        PublicIdentityMaterial,
++    };
++    use prw_core::{DeviceId, DeviceLifecycle, UserId, WorkspaceId};
++    use prw_registry::{WorkspaceDeviceRegistry, WorkspaceRole};
++
++    use super::{encode_success_body, LocalManagementTypedProviderResult};
++
++    #[test]
++    fn registered_device_success_body_uses_bounded_tag_seven_shape() {
++        let workspace_id = WorkspaceId::new("workspace-devices").expect("workspace");
++        let user_id = UserId::new("owner-devices").expect("user");
++        let mut registry = WorkspaceDeviceRegistry::new();
++        registry
++            .add_membership(
++                workspace_id.clone(),
++                user_id.clone(),
++                WorkspaceRole::Owner,
++            )
++            .expect("membership");
++        let public_identity = PublicIdentityMaterial::new(
++            DeviceIdentityAlgorithm::EcdsaP256Sha256,
++            DeviceIdentityPublicKeyEncoding::SubjectPublicKeyInfoDer,
++            [0x42],
++        )
++        .expect("public identity");
++        let device = registry
++            .register_device(DeviceIdentityBinding {
++                workspace_id,
++                user_id,
++                device_id: DeviceId::new("device-alpha").expect("device"),
++                public_identity,
++                lifecycle: DeviceLifecycle::Enrolled,
++            })
++            .expect("device registers")
++            .clone();
++
++        let body = encode_success_body(&LocalManagementTypedProviderResult::RegisteredDevices(
++            vec![device],
++        ))
++        .expect("registered device response encodes");
++        assert_eq!(
++            body,
++            [
++                7, 0, 1, 0, 12, b'd', b'e', b'v', b'i', b'c', b'e', b'-', b'a', b'l', b'p',
++                b'h', b'a', 2,
++            ]
++        );
++    }
++}
+diff --git a/crates/prw-agent/src/local_commands/management_typed_provider_dispatch.rs b/crates/prw-agent/src/local_commands/management_typed_provider_dispatch.rs
+index f67bbd7..2686b5a 100644
+--- a/crates/prw-agent/src/local_commands/management_typed_provider_dispatch.rs
++++ b/crates/prw-agent/src/local_commands/management_typed_provider_dispatch.rs
+@@ -10,6 +10,7 @@ use std::ptr;
+ use prw_file_service::{FileServiceError, RemoteDirectoryEntry, RemoteMetadata};
+ use prw_file_transfer::{FileTransferError, download_chunk};
+ use prw_forwarding::{ForwardingError, ForwardingSessionPrincipal, PortForwardBackend};
++use prw_registry::RegisteredDevice;
+ use prw_remote_bridge::BridgeCommand;
+ use prw_terminal::{TerminalBackend, TerminalError, TerminalSessionPrincipal};
+ 
+@@ -24,6 +25,8 @@ use super::status_snapshot::LocalAgentStatusSnapshot;
+ pub(super) enum LocalManagementTypedProviderResult {
+     /// Existing bounded Agent status snapshot.
+     AgentStatus(LocalAgentStatusSnapshot),
++    /// Read-only registered-device records from the owner-PC authority.
++    RegisteredDevices(Vec<RegisteredDevice>),
+     /// Existing descriptor-anchored bounded directory listing.
+     DirectoryEntries(Vec<RemoteDirectoryEntry>),
+     /// Existing descriptor-anchored bounded metadata snapshot.
+@@ -45,6 +48,8 @@ pub(super) enum LocalManagementTypedProviderDispatchError {
+     FilesystemAuthorityMismatch,
+     /// Terminal/forwarding operation attempted to cross an existing principal binding.
+     PrincipalMismatch,
++    /// Read-only registered-device authority could not be observed safely.
++    RegistryRead,
+     /// Descriptor-anchored file operation failed.
+     File(FileServiceError),
+     /// Descriptor-anchored transfer operation failed.
+@@ -85,6 +90,7 @@ where
+         BridgeCommand::AgentStatus => Ok(LocalManagementTypedProviderResult::AgentStatus(
+             agent_status,
+         )),
++        BridgeCommand::DeviceList => Err(LocalManagementTypedProviderDispatchError::RegistryRead),
+         BridgeCommand::FileList(_)
+         | BridgeCommand::FileStat(_)
+         | BridgeCommand::FileCreate { .. }
+diff --git a/crates/prw-policy/src/lib.rs b/crates/prw-policy/src/lib.rs
+index f9e1dfe..9e6d33c 100644
+--- a/crates/prw-policy/src/lib.rs
++++ b/crates/prw-policy/src/lib.rs
+@@ -24,6 +24,8 @@ pub enum Capability {
+     ForwardingCreate,
+     /// Begin requester-side rendezvous toward one registry-validated logical target.
+     RequesterRendezvousStart,
++    /// Read registered-device identity and lifecycle metadata without mutating device authority.
++    DeviceRead,
+     /// Manage a device.
+     DeviceManage,
+     /// Manage authorization policy.
+@@ -110,6 +112,7 @@ impl PolicyEvaluator for BoundedLocalReadPolicy {
+             | Capability::FilesDelete
+             | Capability::ForwardingCreate
+             | Capability::RequesterRendezvousStart
++            | Capability::DeviceRead
+             | Capability::DeviceManage
+             | Capability::PolicyManage => Decision::Deny,
+         }
+@@ -137,6 +140,8 @@ pub struct BoundedLocalManagementDecisions {
+     pub files_write: Decision,
+     /// Forwarding-create/close decision.
+     pub forwarding_create: Decision,
++    /// Registered-device read decision.
++    pub device_read: Decision,
+ }
+ 
+ impl BoundedLocalManagementDecisions {
+@@ -151,6 +156,7 @@ impl BoundedLocalManagementDecisions {
+             files_read: Decision::Deny,
+             files_write: Decision::Deny,
+             forwarding_create: Decision::Deny,
++            device_read: Decision::Deny,
+         }
+     }
+ }
+@@ -162,7 +168,7 @@ impl BoundedLocalManagementDecisions {
+ /// production Agent. Each capability used by the existing typed `BridgeCommand` surface
+ /// has an independent decision. Capabilities with no admitted management command in that
+ /// surface (`FilesDelete`, `RequesterRendezvousStart`, `DeviceManage`, `PolicyManage`) are always
+-/// denied.
++/// denied. Registered-device reads are represented separately from device mutation.
+ ///
+ /// There is intentionally no `allow_all` constructor.
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+@@ -194,6 +200,7 @@ impl PolicyEvaluator for BoundedLocalManagementPolicy {
+             Capability::FilesRead => self.decisions.files_read,
+             Capability::FilesWrite => self.decisions.files_write,
+             Capability::ForwardingCreate => self.decisions.forwarding_create,
++            Capability::DeviceRead => self.decisions.device_read,
+             Capability::FilesDelete
+             | Capability::RequesterRendezvousStart
+             | Capability::DeviceManage
+@@ -237,6 +244,7 @@ mod tests {
+             Capability::FilesDelete,
+             Capability::ForwardingCreate,
+             Capability::RequesterRendezvousStart,
++            Capability::DeviceRead,
+             Capability::DeviceManage,
+             Capability::PolicyManage,
+         ] {
+@@ -307,6 +315,7 @@ mod tests {
+             Capability::FilesDelete,
+             Capability::ForwardingCreate,
+             Capability::RequesterRendezvousStart,
++            Capability::DeviceRead,
+             Capability::DeviceManage,
+             Capability::PolicyManage,
+         ] {
+@@ -350,6 +359,7 @@ mod tests {
+             files_read: Decision::Allow,
+             files_write: Decision::Deny,
+             forwarding_create: Decision::Allow,
++            device_read: Decision::Allow,
+         });
+ 
+         assert_eq!(
+@@ -368,6 +378,7 @@ mod tests {
+             policy.evaluate(Capability::ForwardingCreate),
+             Decision::Allow
+         );
++        assert_eq!(policy.evaluate(Capability::DeviceRead), Decision::Allow);
+         assert_eq!(
+             policy.evaluate(Capability::RequesterRendezvousStart),
+             Decision::Deny
+@@ -384,8 +395,10 @@ mod tests {
+             files_read: Decision::Allow,
+             files_write: Decision::Allow,
+             forwarding_create: Decision::Allow,
++            device_read: Decision::Allow,
+         });
+ 
++        assert_eq!(policy.evaluate(Capability::DeviceRead), Decision::Allow);
+         for capability in [
+             Capability::FilesDelete,
+             Capability::RequesterRendezvousStart,
+@@ -409,6 +422,7 @@ mod tests {
+             Capability::FilesDelete,
+             Capability::ForwardingCreate,
+             Capability::RequesterRendezvousStart,
++            Capability::DeviceRead,
+             Capability::DeviceManage,
+             Capability::PolicyManage,
+         ] {
+diff --git a/crates/prw-registry/src/durable_registry_sqlite_store.rs b/crates/prw-registry/src/durable_registry_sqlite_store.rs
+index 1bcc1a6..16eed29 100644
+--- a/crates/prw-registry/src/durable_registry_sqlite_store.rs
++++ b/crates/prw-registry/src/durable_registry_sqlite_store.rs
+@@ -186,6 +186,21 @@ impl DurableRegistrySqliteStore {
+         load_device_from_connection(&self.connection, device_id)
+     }
+ 
++    /// Lists all current registered-device records in stable device-id order.
++    ///
++    /// This is a read-only owner-PC projection over the existing v1 schema. It performs no
++    /// enrollment, lifecycle, transport-identity, schema, or custody mutation.
++    ///
++    /// # Errors
++    ///
++    /// Fails closed when the local authority cannot be read, exceeds the locked registry bound,
++    /// or contains malformed device identifiers or bound records.
++    pub fn registered_devices(
++        &self,
++    ) -> Result<Vec<RegisteredDevice>, DurableRegistryAuthorityError> {
++        load_registered_devices_from_connection(&self.connection)
++    }
++
+     /// Creates one active membership only when the exact key is absent.
+     ///
+     /// # Errors
+@@ -653,6 +668,46 @@ fn load_membership_from_connection(
+         .transpose()
+ }
+ 
++fn load_registered_devices_from_connection(
++    connection: &Connection,
++) -> Result<Vec<RegisteredDevice>, DurableRegistryAuthorityError> {
++    let mut statement = connection
++        .prepare(
++            "SELECT device_id, record
++             FROM prw_registry_devices
++             ORDER BY device_id ASC;",
++        )
++        .map_err(|_| DurableRegistryAuthorityError::ReadUnavailable)?;
++    let mut rows = statement
++        .query([])
++        .map_err(|_| DurableRegistryAuthorityError::ReadUnavailable)?;
++    let mut devices = Vec::new();
++
++    while let Some(row) = rows
++        .next()
++        .map_err(|_| DurableRegistryAuthorityError::ReadUnavailable)?
++    {
++        if devices.len() >= crate::MAX_REGISTERED_DEVICES {
++            return Err(DurableRegistryAuthorityError::InvalidAuthority);
++        }
++        let raw_device_id: String = row
++            .get(0)
++            .map_err(|_| DurableRegistryAuthorityError::InvalidAuthority)?;
++        let record: Vec<u8> = row
++            .get(1)
++            .map_err(|_| DurableRegistryAuthorityError::InvalidAuthority)?;
++        let device_id = DeviceId::new(raw_device_id)
++            .map_err(|_| DurableRegistryAuthorityError::InvalidAuthority)?;
++        let key = encode_device_key(&device_id)
++            .map_err(|_| DurableRegistryAuthorityError::InvalidAuthority)?;
++        let device = decode_bound_device_record(&key, &record, &device_id)
++            .map_err(|_| DurableRegistryAuthorityError::InvalidAuthority)?;
++        devices.push(device);
++    }
++
++    Ok(devices)
++}
++
+ fn load_device_from_connection(
+     connection: &Connection,
+     device_id: &DeviceId,
+@@ -912,6 +967,57 @@ mod tests {
+         let _ = fs::remove_file(malformed_path.with_extension("sqlite3-shm"));
+     }
+ 
++    #[test]
++    fn registered_devices_read_only_projection_is_stably_ordered_and_preserves_lifecycle() {
++        let path = test_database_path("registered-device-list");
++        let signer = signer();
++        {
++            let store =
++                DurableRegistrySqliteStore::open(&path).expect("open local sqlite authority");
++            let workspace_id = WorkspaceId::new("workspace-list").expect("workspace");
++            let user_id = UserId::new("owner-list").expect("user");
++
++            for (device_id, lifecycle, transport_byte) in [
++                ("device-z", DeviceLifecycle::Enrolled, 31_u8),
++                ("device-a", DeviceLifecycle::Revoked, 32_u8),
++                ("device-m", DeviceLifecycle::Enrolled, 33_u8),
++            ] {
++                let binding = DeviceIdentityBinding {
++                    workspace_id: workspace_id.clone(),
++                    user_id: user_id.clone(),
++                    device_id: DeviceId::new(device_id).expect("device"),
++                    public_identity: signer.public_identity().clone(),
++                    lifecycle,
++                };
++                insert_device(
++                    &store,
++                    &registered_device(
++                        binding,
++                        TransportIdentity::new([transport_byte; 32]).expect("transport"),
++                    ),
++                );
++            }
++        }
++
++        let read_only = DurableRegistrySqliteStore::open_existing_read_only(&path)
++            .expect("open current authority read-only");
++        let devices = read_only
++            .registered_devices()
++            .expect("registered devices read-only");
++        assert_eq!(devices.len(), 3);
++        assert_eq!(devices[0].binding().device_id.as_str(), "device-a");
++        assert_eq!(devices[0].binding().lifecycle, DeviceLifecycle::Revoked);
++        assert_eq!(devices[1].binding().device_id.as_str(), "device-m");
++        assert_eq!(devices[1].binding().lifecycle, DeviceLifecycle::Enrolled);
++        assert_eq!(devices[2].binding().device_id.as_str(), "device-z");
++        assert_eq!(devices[2].binding().lifecycle, DeviceLifecycle::Enrolled);
++        drop(read_only);
++
++        let _ = fs::remove_file(&path);
++        let _ = fs::remove_file(path.with_extension("sqlite3-wal"));
++        let _ = fs::remove_file(path.with_extension("sqlite3-shm"));
++    }
++
+     #[test]
+     fn reads_current_transport_through_neutral_semantics() {
+         let path = test_database_path("transport");
+diff --git a/crates/prw-remote-bridge/src/lib.rs b/crates/prw-remote-bridge/src/lib.rs
+index ea12f6e..c4f0572 100644
+--- a/crates/prw-remote-bridge/src/lib.rs
++++ b/crates/prw-remote-bridge/src/lib.rs
+@@ -102,6 +102,8 @@ impl RemoteSessionLease {
+ pub enum BridgeCommand {
+     /// Read the bounded Agent status snapshot.
+     AgentStatus,
++    /// List registered devices without mutating device authority.
++    DeviceList,
+     /// List one validated relative directory.
+     FileList(RemotePath),
+     /// Stat one validated relative path.
+@@ -185,6 +187,7 @@ impl BridgeCommand {
+             Self::TerminalClose(_) => 16,
+             Self::ForwardOpen { .. } => 17,
+             Self::ForwardClose(_) => 18,
++            Self::DeviceList => 19,
+         }
+     }
+ 
+@@ -193,6 +196,7 @@ impl BridgeCommand {
+     pub const fn required_capability(&self) -> Capability {
+         match self {
+             Self::AgentStatus => Capability::AgentStatusRead,
++            Self::DeviceList => Capability::DeviceRead,
+             Self::FileList(_) | Self::FileStat(_) | Self::DownloadChunk { .. } => {
+                 Capability::FilesRead
+             }
+@@ -220,7 +224,7 @@ impl BridgeCommand {
+     pub fn encode(&self) -> Result<Vec<u8>, RemoteBridgeError> {
+         let mut body = Vec::new();
+         match self {
+-            Self::AgentStatus => {}
++            Self::AgentStatus | Self::DeviceList => {}
+             Self::FileList(path) | Self::FileStat(path) | Self::DirectoryCreate(path) => {
+                 write_path(&mut body, path)?;
+             }
+@@ -415,6 +419,7 @@ impl BridgeCommand {
+                 PortForwardId::new(reader.u64()?)
+                     .map_err(|_| RemoteBridgeError::InvalidRequestPayload)?,
+             ),
++            19 => Self::DeviceList,
+             _ => return Err(RemoteBridgeError::InvalidRequestPayload),
+         };
+         reader.finish()?;
+diff --git a/crates/prw-remote-bridge/tests/end_to_end.rs b/crates/prw-remote-bridge/tests/end_to_end.rs
+index be7cfbd..b4b8bcb 100644
+--- a/crates/prw-remote-bridge/tests/end_to_end.rs
++++ b/crates/prw-remote-bridge/tests/end_to_end.rs
+@@ -198,6 +198,7 @@ fn commands() -> Vec<BridgeCommand> {
+             ),
+         },
+         BridgeCommand::ForwardClose(forward_id(17)),
++        BridgeCommand::DeviceList,
+     ]
+ }
+ 
+@@ -222,6 +223,7 @@ fn all_operation_codes_round_trip_and_map_to_exact_capabilities() {
+         Capability::TerminalExec,
+         Capability::ForwardingCreate,
+         Capability::ForwardingCreate,
++        Capability::DeviceRead,
+     ];
+     let commands = commands();
+     assert_eq!(commands.len(), expected.len());
