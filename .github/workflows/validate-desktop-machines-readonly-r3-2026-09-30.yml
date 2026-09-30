@@ -1,0 +1,102 @@
+name: Ownspace Desktop Machines read-only validation R3
+
+on:
+  push:
+    branches:
+      - validation/desktop-machines-readonly-2026-09-30-r3
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      BASE_SHA: 1b32e19e8b21aebfcd7527b572994f19356fb8bc
+      BASE_TREE: b1116d53d1039b70f41203cd0ad4b87b2fe04fd5
+      EXPECTED_BRANCH: validation/desktop-machines-readonly-2026-09-30-r3
+      PATCH_PATH: .validation/OWNSPACE_MILESTONE3_MACHINES_READONLY_R1.patch
+      PATCH_SHA256: 68d84dad87b8eebd6e2942b206592c63ee090f7fabeca3b5d75fb538c358cd84
+      PATCH_GIT_BLOB: 8cc0c929b4395592654159dcf38c08157135447c
+      EXPECTED_WORKFLOW: .github/workflows/validate-desktop-machines-readonly-r3-2026-09-30.yml
+
+    steps:
+      - name: Checkout isolated carrier
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify carrier, patch identity, and exact 15-path reconstruction
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = "$EXPECTED_BRANCH"
+          test "$(git merge-base "$BASE_SHA" HEAD)" = "$BASE_SHA"
+          test "$(git rev-list --count "$BASE_SHA"..HEAD)" -eq 1
+          test "$(git rev-parse "$BASE_SHA^{tree}")" = "$BASE_TREE"
+
+          mapfile -t carrier < <(git diff --name-only "$BASE_SHA"...HEAD | sort)
+          printf '%s\n' "$EXPECTED_WORKFLOW" "$PATCH_PATH" | sort > "$RUNNER_TEMP/expected_carrier.txt"
+          printf '%s\n' "${carrier[@]}" > "$RUNNER_TEMP/actual_carrier.txt"
+          diff -u "$RUNNER_TEMP/expected_carrier.txt" "$RUNNER_TEMP/actual_carrier.txt"
+          test "${#carrier[@]}" -eq 2
+          git diff --check "$BASE_SHA"...HEAD -- "$EXPECTED_WORKFLOW"
+
+          echo "$PATCH_SHA256  $PATCH_PATH" | sha256sum -c -
+          test "$(git hash-object "$PATCH_PATH")" = "$PATCH_GIT_BLOB"
+          git apply --check "$PATCH_PATH"
+          git apply "$PATCH_PATH"
+          git diff --check
+
+          mapfile -t changed < <(git diff --name-only | sort)
+          printf '%s\n' 'apps/desktop/README.md' 'apps/desktop/src/ipc.rs' 'apps/desktop/src/local_management_ipc.rs' 'apps/desktop/src/ui.rs' 'crates/prw-agent/src/candidate_publication_requester_rendezvous_start_intent_policy_source.rs' 'crates/prw-agent/src/linux_bootstrap.rs' 'crates/prw-agent/src/local_commands/management_agent_status_runtime.rs' 'crates/prw-agent/src/local_commands/management_boundary_transaction.rs' 'crates/prw-agent/src/local_commands/management_dispatch.rs' 'crates/prw-agent/src/local_commands/management_response.rs' 'crates/prw-agent/src/local_commands/management_typed_provider_dispatch.rs' 'crates/prw-policy/src/lib.rs' 'crates/prw-registry/src/durable_registry_sqlite_store.rs' 'crates/prw-remote-bridge/src/lib.rs' 'crates/prw-remote-bridge/tests/end_to_end.rs' | sort > "$RUNNER_TEMP/expected_source_paths.txt"
+          printf '%s\n' "${changed[@]}" > "$RUNNER_TEMP/actual_source_paths.txt"
+          diff -u "$RUNNER_TEMP/expected_source_paths.txt" "$RUNNER_TEMP/actual_source_paths.txt"
+          test "${#changed[@]}" -eq 15
+
+      - name: Install exact Rust and native Desktop validation dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config protobuf-compiler libgtk-4-dev libadwaita-1-dev
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
+          rustup default 1.97.1
+          rustc --version
+          cargo --version
+          pkg-config --modversion gtk4
+          pkg-config --modversion libadwaita-1
+
+      - name: Verify locked metadata
+        run: cargo metadata --locked --format-version 1 >/dev/null
+
+      - name: Formatting check
+        run: cargo fmt --all -- --check
+
+      - name: Policy tests
+        run: cargo test --locked -p prw-policy
+
+      - name: Registry tests
+        run: cargo test --locked -p prw-registry
+
+      - name: Remote bridge tests
+        run: cargo test --locked -p prw-remote-bridge
+
+      - name: Agent tests
+        run: cargo test --locked -p prw-agent
+
+      - name: Desktop tests
+        run: cargo test --locked -p prw-desktop
+
+      - name: Agent and Desktop compile check
+        run: cargo check --locked -p prw-agent -p prw-desktop --all-targets
+
+      - name: Affected-crate Clippy
+        run: cargo clippy --locked -p prw-policy -p prw-registry -p prw-remote-bridge -p prw-agent -p prw-desktop --all-targets -- -D warnings
+
+      - name: Agent release build
+        run: cargo build --locked --release -p prw-agent --bin prw-agent
+
+      - name: Desktop release build
+        run: cargo build --locked --release -p prw-desktop --bin prw-desktop
