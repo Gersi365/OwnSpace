@@ -17,8 +17,12 @@ use super::inbound_state::{
 };
 #[cfg(target_os = "linux")]
 use super::management_agent_status_boundary::{
-    LocalAgentStatusManagementBoundaryError, process_one_agent_status_management_at_boundary,
+    LocalAgentStatusManagementBoundaryError,
+    process_one_agent_status_file_list_upload_management_at_boundary,
+    process_one_agent_status_management_at_boundary,
 };
+#[cfg(target_os = "linux")]
+use super::management_agent_status_runtime::LocalBoundedUploadRuntime;
 use super::private_dns_snapshot::LocalPrivateDnsSnapshot;
 use super::response_writer::LocalTerminalResponseWriteState;
 use super::status_snapshot::LocalAgentStatusSnapshot;
@@ -115,6 +119,50 @@ impl LocalServerConnectionState {
         )
         .map_err(LocalAgentStatusManagementServerConnectionError::Transaction)
     }
+
+    /// Processes one boundary request through the bounded upload management extension.
+    ///
+    /// Aggregate framing/write poison ownership remains unchanged. The supplied runtime is
+    /// connection-scoped and carries only the already-opened `$HOME` transfer authority.
+    #[cfg(target_os = "linux")]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "authenticated peer, bounded upload state and protocol snapshots remain explicit"
+    )]
+    pub(crate) fn process_one_agent_status_file_list_upload_management_at_boundary<R, W, RE, S>(
+        &mut self,
+        reader: &mut R,
+        writer: &mut W,
+        connection: &AuthenticatedLocalLinuxConnection<S>,
+        read_evaluator: &RE,
+        status_snapshot: LocalAgentStatusSnapshot,
+        private_dns_snapshot: &LocalPrivateDnsSnapshot,
+        runtime: &mut LocalBoundedUploadRuntime<'_>,
+    ) -> Result<LocalBoundaryRequestResponseOutcome, LocalAgentStatusManagementServerConnectionError>
+    where
+        R: Read,
+        W: Write,
+        RE: PolicyEvaluator + ?Sized,
+    {
+        if let Some(reason) = self.unusable_reason() {
+            return Err(
+                LocalAgentStatusManagementServerConnectionError::ConnectionUnusable(reason),
+            );
+        }
+
+        process_one_agent_status_file_list_upload_management_at_boundary(
+            reader,
+            writer,
+            &mut self.inbound,
+            &mut self.response_write,
+            connection,
+            read_evaluator,
+            status_snapshot,
+            private_dns_snapshot,
+            runtime,
+        )
+        .map_err(LocalAgentStatusManagementServerConnectionError::Transaction)
+    }
 }
 
 /// Processes one Request through the aggregate server connection state.
@@ -201,7 +249,7 @@ pub fn process_one_at_boundary_on_server_connection<
 pub enum LocalAgentStatusManagementServerConnectionError {
     /// Aggregate state was already unusable before any I/O.
     ConnectionUnusable(LocalServerConnectionUnusableReason),
-    /// The fixed `AgentStatus` boundary failed after authoritative state transitions.
+    /// The fixed bounded-management boundary failed after authoritative state transitions.
     Transaction(LocalAgentStatusManagementBoundaryError),
 }
 

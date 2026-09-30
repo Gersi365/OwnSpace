@@ -121,7 +121,7 @@ impl LocalManagementLocalPeerAuthority {
 /// host-root selection API. A later trusted configuration/bootstrap assembly must
 /// choose the host path before local management dispatch can receive this authority.
 #[derive(Debug)]
-pub(super) struct LocalManagementFilesystemAuthority {
+pub struct LocalManagementFilesystemAuthority {
     root: AnchoredFileRoot,
 }
 
@@ -133,7 +133,7 @@ impl LocalManagementFilesystemAuthority {
     /// Returns the file-service root-opening failure without retaining partial
     /// authority.
     #[must_use = "opened filesystem authority must be retained to authorize file providers"]
-    pub(super) fn open_trusted_root(path: &Path) -> Result<Self, FileServiceError> {
+    pub(crate) fn open_trusted_root(path: &Path) -> Result<Self, FileServiceError> {
         AnchoredFileRoot::open(path).map(|root| Self { root })
     }
 

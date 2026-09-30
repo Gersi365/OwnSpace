@@ -778,7 +778,10 @@ mod tests {
                         let terminal = validate_terminal_response_frame(&response)
                             .expect("denial response validates");
                         assert_eq!(terminal.request_id(), id(982));
-                        assert_eq!(terminal.status(), LocalAgentResponseStatus::Unauthorized);
+                        assert_eq!(
+                            terminal.status(),
+                            LocalAgentResponseStatus::UnsupportedCommand
+                        );
 
                         shutdown
                             .request_shutdown_and_wake()

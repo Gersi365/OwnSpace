@@ -2657,6 +2657,7 @@ dependencies = [
  "prw-remote-bridge",
  "prw-terminal",
  "rustix",
+ "sha2 0.10.9",
 ]
 
 [[package]]

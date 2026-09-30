@@ -1,8 +1,9 @@
-//! Shared local boundary for legacy commands 1/2 plus fixed command-3 `AgentStatus`/`FileList`.
+//! Shared local boundary for legacy commands 1/2 plus fixed command-3 management slices.
 //!
 //! Generic framing is acquired before command classification. Legacy commands retain
-//! their existing decoder/policy/responder path. Code 3 is delegated only to the
-//! fixed AgentStatus/FileList runtime adapter, which owns no mutable provider lifecycle.
+//! their existing decoder/policy/responder path. Code 3 is delegated either to the
+//! existing `AgentStatus`/`FileList` compatibility adapter or to the explicitly bounded
+//! upload extension supplied by the connection-scoped worker.
 
 #![cfg(target_os = "linux")]
 
@@ -12,7 +13,10 @@ use prw_policy::PolicyEvaluator;
 
 use super::boundary_request_response_transaction::LocalBoundaryRequestResponseOutcome;
 use super::inbound_state::LocalInboundRequestState;
-use super::management_agent_status_runtime::process_authenticated_linux_agent_status_file_list_management;
+use super::management_agent_status_runtime::{
+    LocalBoundedUploadRuntime, process_authenticated_linux_agent_status_file_list_management,
+    process_authenticated_linux_agent_status_file_list_upload_management,
+};
 use super::management_request::LOCAL_MANAGEMENT_BRIDGE_COMMAND_CODE;
 use super::policy_response::{
     LocalPolicyResponseBuildError, build_policy_gated_read_only_response,
@@ -30,7 +34,7 @@ use crate::frame_object::boundary_reader::{LocalIpcFrameBoundaryRead, read_frame
 use crate::frame_object::reader::LocalIpcFrameReadError;
 use crate::linux_identity::authenticated_connection::AuthenticatedLocalLinuxConnection;
 
-/// One narrow `AgentStatus` management boundary failure after authoritative state transitions.
+/// One narrow local-management boundary failure after authoritative state transitions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocalAgentStatusManagementBoundaryError {
     /// Generic frame acquisition failed and poisoned the inbound direction.
@@ -39,22 +43,22 @@ pub enum LocalAgentStatusManagementBoundaryError {
     ReadOnlyDecode(LocalAgentRequestFrameDecodeError),
     /// Legacy policy-response construction failed before response write.
     ReadOnlyResponse(LocalPolicyResponseBuildError),
-    /// Fixed `AgentStatus`/`FileList` management response construction failed before response write.
+    /// Fixed command-3 management response construction failed before response write.
     ManagementResponse(LocalTerminalResponseBuildError),
     /// Guarded response writing failed.
     ResponseWrite(LocalTerminalResponseWriteError),
 }
 
-/// Processes one clean-EOF-aware local request with an AgentStatus/FileList-only command-3 slice.
+/// Processes one clean-EOF-aware local request with the existing `AgentStatus`/`FileList` slice.
 ///
-/// Command 3 receives no caller-supplied management policy or provider context. Commands
+/// Command 3 receives no caller-supplied management policy or mutable provider context. Commands
 /// 1/2 retain the existing read-only evaluator and exact response path.
 ///
 /// # Errors
 ///
 /// Preserves generic frame/read poisoning, legacy decode failures and guarded response
 /// write failures. Canonical command-3 admission failures are encoded as correlated
-/// terminal responses by the fixed AgentStatus/FileList runtime adapter.
+/// terminal responses by the fixed runtime adapter.
 #[allow(
     clippy::too_many_arguments,
     reason = "authenticated connection, legacy policy and protocol snapshots remain explicit"
@@ -73,6 +77,100 @@ where
     R: Read,
     W: Write,
     RE: PolicyEvaluator + ?Sized,
+{
+    process_one_agent_status_management_at_boundary_with_processor(
+        reader,
+        writer,
+        inbound_state,
+        response_write_state,
+        connection,
+        read_evaluator,
+        status_snapshot,
+        private_dns_snapshot,
+        |frame, connection, status_snapshot| {
+            process_authenticated_linux_agent_status_file_list_management(
+                frame,
+                connection,
+                status_snapshot,
+            )
+        },
+    )
+}
+
+/// Processes one clean-EOF-aware local request with the bounded fresh-upload extension.
+///
+/// The supplied runtime is connection-scoped and owns at most one active upload. The
+/// command gate inside that runtime keeps resume/download/file mutation/terminal/forwarding
+/// outside this production slice while legacy commands 1/2 retain their existing path.
+///
+/// # Errors
+///
+/// Preserves the same aggregate framing and guarded-write failure semantics as the
+/// compatibility path above.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "authenticated connection, bounded upload state and protocol snapshots remain explicit"
+)]
+pub fn process_one_agent_status_file_list_upload_management_at_boundary<R, W, RE, S>(
+    reader: &mut R,
+    writer: &mut W,
+    inbound_state: &mut LocalInboundRequestState,
+    response_write_state: &mut LocalTerminalResponseWriteState,
+    connection: &AuthenticatedLocalLinuxConnection<S>,
+    read_evaluator: &RE,
+    status_snapshot: LocalAgentStatusSnapshot,
+    private_dns_snapshot: &LocalPrivateDnsSnapshot,
+    runtime: &mut LocalBoundedUploadRuntime<'_>,
+) -> Result<LocalBoundaryRequestResponseOutcome, LocalAgentStatusManagementBoundaryError>
+where
+    R: Read,
+    W: Write,
+    RE: PolicyEvaluator + ?Sized,
+{
+    process_one_agent_status_management_at_boundary_with_processor(
+        reader,
+        writer,
+        inbound_state,
+        response_write_state,
+        connection,
+        read_evaluator,
+        status_snapshot,
+        private_dns_snapshot,
+        |frame, connection, status_snapshot| {
+            process_authenticated_linux_agent_status_file_list_upload_management(
+                frame,
+                connection,
+                status_snapshot,
+                runtime,
+            )
+        },
+    )
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "shared boundary mechanics keep authority-bearing inputs explicit"
+)]
+fn process_one_agent_status_management_at_boundary_with_processor<R, W, RE, S, M>(
+    reader: &mut R,
+    writer: &mut W,
+    inbound_state: &mut LocalInboundRequestState,
+    response_write_state: &mut LocalTerminalResponseWriteState,
+    connection: &AuthenticatedLocalLinuxConnection<S>,
+    read_evaluator: &RE,
+    status_snapshot: LocalAgentStatusSnapshot,
+    private_dns_snapshot: &LocalPrivateDnsSnapshot,
+    mut process_management: M,
+) -> Result<LocalBoundaryRequestResponseOutcome, LocalAgentStatusManagementBoundaryError>
+where
+    R: Read,
+    W: Write,
+    RE: PolicyEvaluator + ?Sized,
+    M: FnMut(
+        &LocalIpcFrame,
+        &AuthenticatedLocalLinuxConnection<S>,
+        LocalAgentStatusSnapshot,
+    ) -> Result<LocalIpcFrame, LocalTerminalResponseBuildError>,
 {
     if inbound_state.is_read_poisoned() {
         return Err(LocalAgentStatusManagementBoundaryError::FrameRead(
@@ -97,12 +195,8 @@ where
     };
 
     let response = if payload_command_code(&frame) == Some(LOCAL_MANAGEMENT_BRIDGE_COMMAND_CODE) {
-        process_authenticated_linux_agent_status_file_list_management(
-            &frame,
-            connection,
-            status_snapshot,
-        )
-        .map_err(LocalAgentStatusManagementBoundaryError::ManagementResponse)?
+        process_management(&frame, connection, status_snapshot)
+            .map_err(LocalAgentStatusManagementBoundaryError::ManagementResponse)?
     } else {
         let request = match decode_local_command_request_frame(&frame) {
             Ok(request) => request,

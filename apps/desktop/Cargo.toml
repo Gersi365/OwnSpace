@@ -17,6 +17,7 @@ prw-private-dns = { path = "../../crates/prw-private-dns" }
 prw-remote-bridge = { path = "../../crates/prw-remote-bridge" }
 prw-terminal = { path = "../../crates/prw-terminal" }
 rustix = { version = "=1.1.4", default-features = false, features = ["std", "process"] }
+sha2 = "=0.10.9"
 
 [lints]
 workspace = true

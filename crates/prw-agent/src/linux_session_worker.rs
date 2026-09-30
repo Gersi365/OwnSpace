@@ -71,9 +71,13 @@ pub enum LocalLinuxSessionWorkerStop {
         /// Number of terminal responses written before EOF.
         responses_written: usize,
     },
-    /// The caller-supplied maximum Request count was consumed exactly.
+    /// The worker reached its applicable bounded Request limit.
+    ///
+    /// For the legacy worker this is exactly the configured request budget. The bounded-upload
+    /// management worker may exceed that base budget only while one upload transaction is active,
+    /// under its separate transfer-derived hard limit.
     RequestBudgetExhausted {
-        /// Number of terminal responses written; equal to the configured budget.
+        /// Number of terminal responses written before the applicable bounded limit closed the worker.
         responses_written: usize,
     },
 }
@@ -144,11 +148,11 @@ pub fn run_authenticated_session_worker<E: PolicyEvaluator + ?Sized>(
     })
 }
 
-/// Runs one authenticated session through the fixed AgentStatus-management worker.
+/// Runs one authenticated session through the fixed bounded-management worker.
 ///
 /// This crate-internal adapter preserves the shared worker result envelope used by
 /// scoped spawning, registry ownership, completion classification and runtime teardown.
-/// The underlying VU child worker remains private and owns the fixed management policy.
+/// The underlying child worker owns the fixed narrow management policy and upload cleanup.
 ///
 /// # Errors
 ///
@@ -175,6 +179,9 @@ pub(super) fn run_authenticated_session_worker_with_agent_status_management<
     .map_err(|error| {
         match error {
             management_agent_status::LocalLinuxAgentStatusManagementSessionWorkerError::Processing {
+                responses_written,
+            }
+            | management_agent_status::LocalLinuxAgentStatusManagementSessionWorkerError::Cleanup {
                 responses_written,
             } => LocalLinuxSessionWorkerError::AgentStatusManagementProcessing {
                 responses_written,
