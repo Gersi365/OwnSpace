@@ -1,0 +1,61 @@
+diff --git a/apps/desktop/src/management.rs b/apps/desktop/src/management.rs
+index 3677874..adc0999 100644
+--- a/apps/desktop/src/management.rs
++++ b/apps/desktop/src/management.rs
+@@ -673,7 +673,10 @@ mod tests {
+         let read = terminal.request_read(16_384).expect("terminal read");
+         assert!(matches!(
+             BridgeCommand::decode(&read).expect("decode read"),
+-            BridgeCommand::TerminalRead { maximum_bytes: 16_384, .. }
++            BridgeCommand::TerminalRead {
++                maximum_bytes: 16_384,
++                ..
++            }
+         ));
+ 
+         let close = terminal.request_close().expect("terminal close intent");
+diff --git a/apps/desktop/src/ui.rs b/apps/desktop/src/ui.rs
+index 899cb4f..f4a5b03 100644
+--- a/apps/desktop/src/ui.rs
++++ b/apps/desktop/src/ui.rs
+@@ -624,17 +624,21 @@ fn start_terminal_operation(
+         match receiver.try_recv() {
+             Ok(Ok(result)) => {
+                 let acknowledgement = match (&operation, &result) {
+-                    (TerminalOperation::Open, TerminalOperationResult::Acknowledged) => poll_targets
+-                        .terminal
+-                        .borrow_mut()
+-                        .apply_open_acknowledgement(),
++                    (TerminalOperation::Open, TerminalOperationResult::Acknowledged) => {
++                        poll_targets
++                            .terminal
++                            .borrow_mut()
++                            .apply_open_acknowledgement()
++                    }
+                     (TerminalOperation::Input, TerminalOperationResult::Acknowledged)
+                     | (TerminalOperation::Resize, TerminalOperationResult::Acknowledged)
+                     | (TerminalOperation::Read, TerminalOperationResult::Output(_)) => Ok(()),
+-                    (TerminalOperation::Close, TerminalOperationResult::Acknowledged) => poll_targets
+-                        .terminal
+-                        .borrow_mut()
+-                        .apply_close_acknowledgement(),
++                    (TerminalOperation::Close, TerminalOperationResult::Acknowledged) => {
++                        poll_targets
++                            .terminal
++                            .borrow_mut()
++                            .apply_close_acknowledgement()
++                    }
+                     _ => Err(crate::management::ManagementError::InvalidAcknowledgement),
+                 };
+ 
+@@ -662,7 +666,9 @@ fn start_terminal_operation(
+                         (TerminalOperation::Read, TerminalOperationResult::Output(bytes)) => {
+                             append_terminal_output(&poll_targets.output, &bytes);
+                             if bytes.is_empty() {
+-                                poll_targets.status.set_text("No new terminal output available");
++                                poll_targets
++                                    .status
++                                    .set_text("No new terminal output available");
+                             } else {
+                                 poll_targets.status.set_text(&format!(
+                                     "Read {} bytes of bounded terminal output",
