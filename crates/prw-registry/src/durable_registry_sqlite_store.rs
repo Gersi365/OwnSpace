@@ -186,6 +186,21 @@ impl DurableRegistrySqliteStore {
         load_device_from_connection(&self.connection, device_id)
     }
 
+    /// Lists all current registered-device records in stable device-id order.
+    ///
+    /// This is a read-only owner-PC projection over the existing v1 schema. It performs no
+    /// enrollment, lifecycle, transport-identity, schema, or custody mutation.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when the local authority cannot be read, exceeds the locked registry bound,
+    /// or contains malformed device identifiers or bound records.
+    pub fn registered_devices(
+        &self,
+    ) -> Result<Vec<RegisteredDevice>, DurableRegistryAuthorityError> {
+        load_registered_devices_from_connection(&self.connection)
+    }
+
     /// Creates one active membership only when the exact key is absent.
     ///
     /// # Errors
@@ -653,6 +668,46 @@ fn load_membership_from_connection(
         .transpose()
 }
 
+fn load_registered_devices_from_connection(
+    connection: &Connection,
+) -> Result<Vec<RegisteredDevice>, DurableRegistryAuthorityError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT device_id, record
+             FROM prw_registry_devices
+             ORDER BY device_id ASC;",
+        )
+        .map_err(|_| DurableRegistryAuthorityError::ReadUnavailable)?;
+    let mut rows = statement
+        .query([])
+        .map_err(|_| DurableRegistryAuthorityError::ReadUnavailable)?;
+    let mut devices = Vec::new();
+
+    while let Some(row) = rows
+        .next()
+        .map_err(|_| DurableRegistryAuthorityError::ReadUnavailable)?
+    {
+        if devices.len() >= crate::MAX_REGISTERED_DEVICES {
+            return Err(DurableRegistryAuthorityError::InvalidAuthority);
+        }
+        let raw_device_id: String = row
+            .get(0)
+            .map_err(|_| DurableRegistryAuthorityError::InvalidAuthority)?;
+        let record: Vec<u8> = row
+            .get(1)
+            .map_err(|_| DurableRegistryAuthorityError::InvalidAuthority)?;
+        let device_id = DeviceId::new(raw_device_id)
+            .map_err(|_| DurableRegistryAuthorityError::InvalidAuthority)?;
+        let key = encode_device_key(&device_id)
+            .map_err(|_| DurableRegistryAuthorityError::InvalidAuthority)?;
+        let device = decode_bound_device_record(&key, &record, &device_id)
+            .map_err(|_| DurableRegistryAuthorityError::InvalidAuthority)?;
+        devices.push(device);
+    }
+
+    Ok(devices)
+}
+
 fn load_device_from_connection(
     connection: &Connection,
     device_id: &DeviceId,
@@ -910,6 +965,57 @@ mod tests {
         let _ = fs::remove_file(&malformed_path);
         let _ = fs::remove_file(malformed_path.with_extension("sqlite3-wal"));
         let _ = fs::remove_file(malformed_path.with_extension("sqlite3-shm"));
+    }
+
+    #[test]
+    fn registered_devices_read_only_projection_is_stably_ordered_and_preserves_lifecycle() {
+        let path = test_database_path("registered-device-list");
+        let signer = signer();
+        {
+            let store =
+                DurableRegistrySqliteStore::open(&path).expect("open local sqlite authority");
+            let workspace_id = WorkspaceId::new("workspace-list").expect("workspace");
+            let user_id = UserId::new("owner-list").expect("user");
+
+            for (device_id, lifecycle, transport_byte) in [
+                ("device-z", DeviceLifecycle::Enrolled, 31_u8),
+                ("device-a", DeviceLifecycle::Revoked, 32_u8),
+                ("device-m", DeviceLifecycle::Enrolled, 33_u8),
+            ] {
+                let binding = DeviceIdentityBinding {
+                    workspace_id: workspace_id.clone(),
+                    user_id: user_id.clone(),
+                    device_id: DeviceId::new(device_id).expect("device"),
+                    public_identity: signer.public_identity().clone(),
+                    lifecycle,
+                };
+                insert_device(
+                    &store,
+                    &registered_device(
+                        binding,
+                        TransportIdentity::new([transport_byte; 32]).expect("transport"),
+                    ),
+                );
+            }
+        }
+
+        let read_only = DurableRegistrySqliteStore::open_existing_read_only(&path)
+            .expect("open current authority read-only");
+        let devices = read_only
+            .registered_devices()
+            .expect("registered devices read-only");
+        assert_eq!(devices.len(), 3);
+        assert_eq!(devices[0].binding().device_id.as_str(), "device-a");
+        assert_eq!(devices[0].binding().lifecycle, DeviceLifecycle::Revoked);
+        assert_eq!(devices[1].binding().device_id.as_str(), "device-m");
+        assert_eq!(devices[1].binding().lifecycle, DeviceLifecycle::Enrolled);
+        assert_eq!(devices[2].binding().device_id.as_str(), "device-z");
+        assert_eq!(devices[2].binding().lifecycle, DeviceLifecycle::Enrolled);
+        drop(read_only);
+
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(path.with_extension("sqlite3-wal"));
+        let _ = fs::remove_file(path.with_extension("sqlite3-shm"));
     }
 
     #[test]

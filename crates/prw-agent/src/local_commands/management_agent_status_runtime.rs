@@ -1,7 +1,7 @@
-//! Narrow command-3 `AgentStatus` + `FileList` + bounded upload runtime adapter.
+//! Narrow command-3 `AgentStatus` + `DeviceList` + `FileList` + bounded upload runtime adapter.
 //!
 //! The production slice remains explicitly narrower than the generic typed-management
-//! surface. `AgentStatus` and `FileList` preserve their existing behavior. A connection
+//! surface. `AgentStatus`, read-only `DeviceList`, and `FileList` preserve bounded behavior. A connection
 //! may additionally own at most one fresh create-only upload using `UploadBegin`,
 //! `UploadChunk`, `UploadFinalize`, and internal/client-requested `UploadAbort`.
 //! `UploadResume`, `DownloadChunk`, file mutation commands outside upload, terminal, and
@@ -16,6 +16,7 @@ use std::path::PathBuf;
 use prw_file_service::FileServiceError;
 use prw_file_transfer::{FileTransferError, TransferId, UploadTransferManager};
 use prw_policy::{BoundedLocalManagementDecisions, BoundedLocalManagementPolicy, Decision};
+use prw_registry::durable_registry_sqlite_custody::open_existing_owner_pc_sqlite_authority_from_env;
 use prw_remote_bridge::BridgeCommand;
 
 use super::LocalAgentResponseStatus;
@@ -43,6 +44,7 @@ const fn agent_status_file_list_policy() -> BoundedLocalManagementPolicy {
         files_read: Decision::Allow,
         files_write: Decision::Deny,
         forwarding_create: Decision::Deny,
+        device_read: Decision::Allow,
     })
 }
 
@@ -55,6 +57,7 @@ const fn agent_status_file_list_upload_policy() -> BoundedLocalManagementPolicy 
         files_read: Decision::Allow,
         files_write: Decision::Allow,
         forwarding_create: Decision::Deny,
+        device_read: Decision::Allow,
     })
 }
 
@@ -162,8 +165,9 @@ impl<'authority> LocalBoundedUploadRuntime<'authority> {
 /// Processes one canonical command-3 request through the existing read-only slice.
 ///
 /// This compatibility path owns no mutable transfer state. Canonical admission still
-/// binds the request to the authenticated same-UID Linux peer. `FileList` remains
-/// descriptor-anchored to `$HOME`. Every other command fails closed.
+/// binds the request to the authenticated same-UID Linux peer. `DeviceList` reads only the
+/// existing owner-PC registry authority, while `FileList` remains descriptor-anchored to
+/// `$HOME`. Every other command fails closed.
 ///
 /// # Errors
 ///
@@ -206,6 +210,17 @@ where
                 agent_status,
             )),
         ),
+        BridgeCommand::DeviceList => {
+            let result = open_existing_owner_pc_sqlite_authority_from_env()
+                .map_err(|_| LocalManagementTypedProviderDispatchError::RegistryRead)
+                .and_then(|registry| {
+                    registry
+                        .registered_devices()
+                        .map(LocalManagementTypedProviderResult::RegisteredDevices)
+                        .map_err(|_| LocalManagementTypedProviderDispatchError::RegistryRead)
+                });
+            build_management_provider_response(request_id, result)
+        }
         BridgeCommand::FileList(path) => {
             let Ok(filesystem) = open_filesystem() else {
                 return build_terminal_response_frame(
@@ -231,7 +246,8 @@ where
 
 /// Processes one command-3 request through the production bounded-upload extension.
 ///
-/// Only `AgentStatus`, `FileList`, fresh upload begin/chunk/finalize, and upload abort
+/// Only `AgentStatus`, read-only `DeviceList`, `FileList`, fresh upload begin/chunk/finalize,
+/// and upload abort
 /// are reachable after capability admission. `UploadResume`, `DownloadChunk`, `FileStat`,
 /// other file mutation, terminal, and forwarding commands remain closed. Once an upload
 /// begins, command-3 requests on that connection are restricted to the matching upload's
@@ -270,6 +286,14 @@ pub(super) fn process_authenticated_linux_agent_status_file_list_upload_manageme
         BridgeCommand::AgentStatus => Ok(LocalManagementTypedProviderResult::AgentStatus(
             agent_status,
         )),
+        BridgeCommand::DeviceList => open_existing_owner_pc_sqlite_authority_from_env()
+            .map_err(|_| LocalManagementTypedProviderDispatchError::RegistryRead)
+            .and_then(|registry| {
+                registry
+                    .registered_devices()
+                    .map(LocalManagementTypedProviderResult::RegisteredDevices)
+                    .map_err(|_| LocalManagementTypedProviderDispatchError::RegistryRead)
+            }),
         BridgeCommand::FileList(path) => runtime
             .filesystem
             .root()
@@ -419,6 +443,7 @@ mod tests {
             Decision::Allow
         );
         assert_eq!(policy.evaluate(Capability::FilesRead), Decision::Allow);
+        assert_eq!(policy.evaluate(Capability::DeviceRead), Decision::Allow);
         for capability in [
             Capability::PrivateDnsConfigRead,
             Capability::TerminalOpen,
@@ -441,6 +466,7 @@ mod tests {
             Capability::AgentStatusRead,
             Capability::FilesRead,
             Capability::FilesWrite,
+            Capability::DeviceRead,
         ] {
             assert_eq!(policy.evaluate(capability), Decision::Allow);
         }

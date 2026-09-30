@@ -24,6 +24,8 @@ pub enum Capability {
     ForwardingCreate,
     /// Begin requester-side rendezvous toward one registry-validated logical target.
     RequesterRendezvousStart,
+    /// Read registered-device identity and lifecycle metadata without mutating device authority.
+    DeviceRead,
     /// Manage a device.
     DeviceManage,
     /// Manage authorization policy.
@@ -110,6 +112,7 @@ impl PolicyEvaluator for BoundedLocalReadPolicy {
             | Capability::FilesDelete
             | Capability::ForwardingCreate
             | Capability::RequesterRendezvousStart
+            | Capability::DeviceRead
             | Capability::DeviceManage
             | Capability::PolicyManage => Decision::Deny,
         }
@@ -137,6 +140,8 @@ pub struct BoundedLocalManagementDecisions {
     pub files_write: Decision,
     /// Forwarding-create/close decision.
     pub forwarding_create: Decision,
+    /// Registered-device read decision.
+    pub device_read: Decision,
 }
 
 impl BoundedLocalManagementDecisions {
@@ -151,6 +156,7 @@ impl BoundedLocalManagementDecisions {
             files_read: Decision::Deny,
             files_write: Decision::Deny,
             forwarding_create: Decision::Deny,
+            device_read: Decision::Deny,
         }
     }
 }
@@ -162,7 +168,7 @@ impl BoundedLocalManagementDecisions {
 /// production Agent. Each capability used by the existing typed `BridgeCommand` surface
 /// has an independent decision. Capabilities with no admitted management command in that
 /// surface (`FilesDelete`, `RequesterRendezvousStart`, `DeviceManage`, `PolicyManage`) are always
-/// denied.
+/// denied. Registered-device reads are represented separately from device mutation.
 ///
 /// There is intentionally no `allow_all` constructor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -194,6 +200,7 @@ impl PolicyEvaluator for BoundedLocalManagementPolicy {
             Capability::FilesRead => self.decisions.files_read,
             Capability::FilesWrite => self.decisions.files_write,
             Capability::ForwardingCreate => self.decisions.forwarding_create,
+            Capability::DeviceRead => self.decisions.device_read,
             Capability::FilesDelete
             | Capability::RequesterRendezvousStart
             | Capability::DeviceManage
@@ -237,6 +244,7 @@ mod tests {
             Capability::FilesDelete,
             Capability::ForwardingCreate,
             Capability::RequesterRendezvousStart,
+            Capability::DeviceRead,
             Capability::DeviceManage,
             Capability::PolicyManage,
         ] {
@@ -307,6 +315,7 @@ mod tests {
             Capability::FilesDelete,
             Capability::ForwardingCreate,
             Capability::RequesterRendezvousStart,
+            Capability::DeviceRead,
             Capability::DeviceManage,
             Capability::PolicyManage,
         ] {
@@ -350,6 +359,7 @@ mod tests {
             files_read: Decision::Allow,
             files_write: Decision::Deny,
             forwarding_create: Decision::Allow,
+            device_read: Decision::Allow,
         });
 
         assert_eq!(
@@ -368,6 +378,7 @@ mod tests {
             policy.evaluate(Capability::ForwardingCreate),
             Decision::Allow
         );
+        assert_eq!(policy.evaluate(Capability::DeviceRead), Decision::Allow);
         assert_eq!(
             policy.evaluate(Capability::RequesterRendezvousStart),
             Decision::Deny
@@ -384,8 +395,10 @@ mod tests {
             files_read: Decision::Allow,
             files_write: Decision::Allow,
             forwarding_create: Decision::Allow,
+            device_read: Decision::Allow,
         });
 
+        assert_eq!(policy.evaluate(Capability::DeviceRead), Decision::Allow);
         for capability in [
             Capability::FilesDelete,
             Capability::RequesterRendezvousStart,
@@ -409,6 +422,7 @@ mod tests {
             Capability::FilesDelete,
             Capability::ForwardingCreate,
             Capability::RequesterRendezvousStart,
+            Capability::DeviceRead,
             Capability::DeviceManage,
             Capability::PolicyManage,
         ] {

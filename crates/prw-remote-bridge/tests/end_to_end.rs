@@ -198,6 +198,7 @@ fn commands() -> Vec<BridgeCommand> {
             ),
         },
         BridgeCommand::ForwardClose(forward_id(17)),
+        BridgeCommand::DeviceList,
     ]
 }
 
@@ -222,6 +223,7 @@ fn all_operation_codes_round_trip_and_map_to_exact_capabilities() {
         Capability::TerminalExec,
         Capability::ForwardingCreate,
         Capability::ForwardingCreate,
+        Capability::DeviceRead,
     ];
     let commands = commands();
     assert_eq!(commands.len(), expected.len());

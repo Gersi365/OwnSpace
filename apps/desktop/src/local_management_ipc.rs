@@ -10,6 +10,7 @@ use prw_agent::{
         LocalManagementRequestBuildError, build_local_management_request_frame,
     },
 };
+use prw_core::{DeviceId, DeviceLifecycle};
 use prw_file_service::{MAX_DIRECTORY_ENTRIES, RemotePath};
 use prw_remote_bridge::{BridgeCommand, RemoteBridgeError};
 
@@ -43,6 +44,113 @@ pub fn build_bridge_management_request(
         .map_err(LocalManagementClientError::Bridge)?;
     build_local_management_request_frame(request_id, &bridge_payload)
         .map_err(LocalManagementClientError::Local)
+}
+
+/// One decoded registered-device entry returned by the Agent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalRegisteredDeviceEntry {
+    device_id: DeviceId,
+    lifecycle: DeviceLifecycle,
+}
+
+impl LocalRegisteredDeviceEntry {
+    #[must_use]
+    pub(crate) fn device_id(&self) -> &str {
+        self.device_id.as_str()
+    }
+
+    #[must_use]
+    pub(crate) const fn lifecycle(&self) -> DeviceLifecycle {
+        self.lifecycle
+    }
+
+    #[must_use]
+    pub(crate) const fn lifecycle_text(&self) -> &'static str {
+        match self.lifecycle {
+            DeviceLifecycle::PendingEnrollment => "Pending enrollment",
+            DeviceLifecycle::Enrolled => "Enrolled",
+            DeviceLifecycle::Revoked => "Revoked",
+        }
+    }
+}
+
+/// Fail-closed decoder error for one successful registered-device-list response body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalRegisteredDeviceListDecodeError {
+    MissingResult,
+    UnexpectedResult,
+    EntryCount,
+    EntryLength,
+    EntryUtf8,
+    EntryDeviceId,
+    EntryLifecycle,
+    TrailingBytes,
+}
+
+/// Builds the read-only registered-device-list management request.
+pub fn build_registered_device_list_management_request(
+    request_id: LocalIpcRequestId,
+) -> Result<LocalIpcFrame, LocalManagementClientError> {
+    build_bridge_management_request(request_id, &BridgeCommand::DeviceList)
+}
+
+/// Decodes one bounded registered-device list after the common two-byte success status prefix.
+pub fn decode_registered_device_list_success_body(
+    payload: &[u8],
+) -> Result<Vec<LocalRegisteredDeviceEntry>, LocalRegisteredDeviceListDecodeError> {
+    const STATUS_PREFIX_LENGTH: usize = 2;
+    const REGISTERED_DEVICES_RESULT: u8 = 7;
+    const MAX_REGISTERED_DEVICE_ENTRIES: usize = 4096;
+
+    let body = payload
+        .get(STATUS_PREFIX_LENGTH..)
+        .ok_or(LocalRegisteredDeviceListDecodeError::MissingResult)?;
+    if body.first().copied() != Some(REGISTERED_DEVICES_RESULT) {
+        return Err(LocalRegisteredDeviceListDecodeError::UnexpectedResult);
+    }
+    let count_bytes = body
+        .get(1..3)
+        .ok_or(LocalRegisteredDeviceListDecodeError::EntryCount)?;
+    let count = usize::from(u16::from_be_bytes([count_bytes[0], count_bytes[1]]));
+    if count > MAX_REGISTERED_DEVICE_ENTRIES {
+        return Err(LocalRegisteredDeviceListDecodeError::EntryCount);
+    }
+
+    let mut cursor = 3_usize;
+    let mut entries = Vec::with_capacity(count);
+    for _ in 0..count {
+        let len_bytes = body
+            .get(cursor..cursor + 2)
+            .ok_or(LocalRegisteredDeviceListDecodeError::EntryLength)?;
+        let device_id_len = usize::from(u16::from_be_bytes([len_bytes[0], len_bytes[1]]));
+        cursor += 2;
+        if device_id_len == 0 {
+            return Err(LocalRegisteredDeviceListDecodeError::EntryLength);
+        }
+        let device_id_bytes = body
+            .get(cursor..cursor + device_id_len)
+            .ok_or(LocalRegisteredDeviceListDecodeError::EntryLength)?;
+        let device_id = std::str::from_utf8(device_id_bytes)
+            .map_err(|_| LocalRegisteredDeviceListDecodeError::EntryUtf8)?;
+        let device_id = DeviceId::new(device_id.to_owned())
+            .map_err(|_| LocalRegisteredDeviceListDecodeError::EntryDeviceId)?;
+        cursor += device_id_len;
+        let lifecycle = match body.get(cursor).copied() {
+            Some(1) => DeviceLifecycle::PendingEnrollment,
+            Some(2) => DeviceLifecycle::Enrolled,
+            Some(3) => DeviceLifecycle::Revoked,
+            _ => return Err(LocalRegisteredDeviceListDecodeError::EntryLifecycle),
+        };
+        cursor += 1;
+        entries.push(LocalRegisteredDeviceEntry {
+            device_id,
+            lifecycle,
+        });
+    }
+    if cursor != body.len() {
+        return Err(LocalRegisteredDeviceListDecodeError::TrailingBytes);
+    }
+    Ok(entries)
 }
 
 /// One decoded read-only file-list entry returned by the Agent.
@@ -178,7 +286,8 @@ mod tests {
 
     use super::{
         LocalManagementClientError, build_bridge_management_request,
-        build_file_list_management_request, decode_file_list_success_body,
+        build_file_list_management_request, build_registered_device_list_management_request,
+        decode_file_list_success_body, decode_registered_device_list_success_body,
     };
 
     fn id(value: u64) -> LocalIpcRequestId {
@@ -273,6 +382,40 @@ mod tests {
             local_payload.len(),
             LOCAL_MANAGEMENT_REQUEST_PREFIX_LENGTH + bridge_payload.len()
         );
+    }
+
+    #[test]
+    fn registered_device_list_builder_uses_additive_device_list_bridge_command() {
+        let frame = build_registered_device_list_management_request(id(155))
+            .expect("registered-device request builds");
+        let local = decode_local_management_request_frame(&frame).expect("local envelope decodes");
+        assert_eq!(
+            BridgeCommand::decode(local.bridge_payload()).expect("bridge decodes"),
+            BridgeCommand::DeviceList
+        );
+        assert_eq!(BridgeCommand::DeviceList.operation_code(), 19);
+    }
+
+    #[test]
+    fn registered_device_success_body_decodes_lifecycle_and_rejects_malformed_entries() {
+        let payload = [
+            0, 0, 7, 0, 2, 0, 8, b'd', b'e', b'v', b'i', b'c', b'e', b'-', b'a', 2, 0, 8, b'd',
+            b'e', b'v', b'i', b'c', b'e', b'-', b'b', 3,
+        ];
+        let entries = decode_registered_device_list_success_body(&payload)
+            .expect("registered-device body decodes");
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].device_id(), "device-a");
+        assert_eq!(entries[0].lifecycle_text(), "Enrolled");
+        assert_eq!(entries[1].device_id(), "device-b");
+        assert_eq!(entries[1].lifecycle_text(), "Revoked");
+
+        let mut trailing = payload.to_vec();
+        trailing.push(9);
+        assert!(decode_registered_device_list_success_body(&trailing).is_err());
+
+        let invalid_lifecycle = [0, 0, 7, 0, 1, 0, 1, b'x', 9];
+        assert!(decode_registered_device_list_success_body(&invalid_lifecycle).is_err());
     }
 
     #[test]

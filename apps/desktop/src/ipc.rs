@@ -25,7 +25,9 @@ use prw_agent::{
 use rustix::process::geteuid;
 
 use crate::local_management_ipc::{
-    LocalFileListEntry, build_file_list_management_request, decode_file_list_success_body,
+    LocalFileListEntry, LocalRegisteredDeviceEntry, build_file_list_management_request,
+    build_registered_device_list_management_request, decode_file_list_success_body,
+    decode_registered_device_list_success_body,
 };
 use crate::state::{AgentAvailability, DesktopPresentationState};
 
@@ -37,6 +39,7 @@ const UPLOAD_BEGIN_REQUEST_ID: u64 = 7;
 const UPLOAD_CHUNK_REQUEST_ID: u64 = 8;
 const UPLOAD_FINALIZE_REQUEST_ID: u64 = 9;
 const UPLOAD_ABORT_REQUEST_ID: u64 = 10;
+const DEVICE_LIST_REQUEST_ID: u64 = 11;
 const MANAGEMENT_STATUS_PREFIX_LENGTH: usize = 2;
 const MANAGEMENT_EMPTY_RESULT: u8 = 4;
 const MANAGEMENT_OFFSET_RESULT: u8 = 5;
@@ -203,6 +206,21 @@ pub fn query_file_list(path: &str) -> Result<Vec<LocalFileListEntry>, DesktopIpc
         .map_err(|_| DesktopIpcError::ManagementRequestInvalid)?;
     let frame = query_prebuilt_success_frame(&endpoint, request_id, &request)?;
     decode_file_list_success_body(frame.payload().as_bytes())
+        .map_err(|_| DesktopIpcError::ResponseInvalid)
+}
+
+/// Queries the owner-PC registered-device projection through the authenticated local Agent.
+///
+/// The response contains only registry device identity and lifecycle metadata. Reachability is not
+/// inferred from endpoints or transport identity by this query.
+pub fn query_registered_devices() -> Result<Vec<LocalRegisteredDeviceEntry>, DesktopIpcError> {
+    let endpoint = endpoint_from_environment()?;
+    let request_id = LocalIpcRequestId::new(DEVICE_LIST_REQUEST_ID)
+        .map_err(|_| DesktopIpcError::RequestIdGenerationFailed)?;
+    let request = build_registered_device_list_management_request(request_id)
+        .map_err(|_| DesktopIpcError::ManagementRequestInvalid)?;
+    let frame = query_prebuilt_success_frame(&endpoint, request_id, &request)?;
+    decode_registered_device_list_success_body(frame.payload().as_bytes())
         .map_err(|_| DesktopIpcError::ResponseInvalid)
 }
 

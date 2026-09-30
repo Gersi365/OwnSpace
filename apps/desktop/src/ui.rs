@@ -17,12 +17,16 @@ use prw_terminal::TerminalProfile;
 use sha2::{Digest, Sha256};
 
 use crate::ipc;
-use crate::local_management_ipc::LocalFileListEntry;
+use crate::local_management_ipc::{LocalFileListEntry, LocalRegisteredDeviceEntry};
 use crate::management::{TerminalPresentation, TerminalPresentationState, UploadPresentation};
 use crate::state::{DesktopPresentationState, NavigationDestination};
 
 const REFRESH_BUTTON_IDLE_LABEL: &str = "Refresh status";
 const REFRESH_BUTTON_BUSY_LABEL: &str = "Refreshing…";
+const MACHINES_DEVICE_REFRESH_IDLE_LABEL: &str = "Refresh registered devices";
+const MACHINES_DEVICE_REFRESH_BUSY_LABEL: &str = "Loading devices…";
+const MACHINES_DEVICE_NOT_LOADED_STATUS: &str = "Registered devices: not loaded";
+const MACHINES_REACHABILITY_NOT_OBSERVED: &str = "Not observed by this local surface";
 const COPY_SNAPSHOT_IDLE_LABEL: &str = "Copy current snapshot";
 const COPY_SNAPSHOT_DONE_LABEL: &str = "Copied";
 const TERMINAL_OPEN_LABEL: &str = "Open POSIX shell session";
@@ -56,8 +60,8 @@ const FILES_SUBTITLE: &str = concat!(
     "Paths are relative; this surface does not read file contents, mutate files, transfer data, open terminals, or create forwarding."
 );
 const MACHINES_SUBTITLE: &str = concat!(
-    "Current local owner-host status from the same bounded Agent snapshot as Overview. ",
-    "This surface does not enumerate remote devices, infer identity from endpoint data, or grant capabilities."
+    "Read-only registered-device inventory from the owner-PC authority through the local Agent. ",
+    "Reachability is shown only from authoritative live observation; this checkpoint does not infer Online/Offline from endpoint data and does not mutate device authority."
 );
 const ACTIVITY_SUBTITLE: &str = concat!(
     "Latest local diagnostics snapshot. ",
@@ -81,6 +85,13 @@ struct StatusProbeTargets {
     overview_refresh_button: gtk::Button,
     machines_refresh_button: gtk::Button,
     activity_refresh_button: gtk::Button,
+}
+
+#[derive(Clone)]
+struct MachinesPageTargets {
+    refresh_button: gtk::Button,
+    status: gtk::Label,
+    entries: gtk::Box,
 }
 
 #[derive(Clone)]
@@ -173,6 +184,7 @@ pub fn build(app: &adw::Application) {
         machines_dns_label,
         machines_detail_label,
         machines_refresh_button,
+        machines_page_targets,
     ) = machines_page();
 
     let (
@@ -234,6 +246,7 @@ pub fn build(app: &adw::Application) {
     render_probe_state(&connecting, &probe_targets);
     connect_refresh_controls(&probe_targets);
     start_status_probe(probe_targets);
+    start_registered_device_probe(&machines_page_targets);
 }
 
 fn overview_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label, gtk::Button) {
@@ -275,7 +288,14 @@ fn overview_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label, gtk::Button
     (page, agent_label, dns_label, detail_label, refresh_button)
 }
 
-fn machines_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label, gtk::Button) {
+fn machines_page() -> (
+    gtk::Box,
+    gtk::Label,
+    gtk::Label,
+    gtk::Label,
+    gtk::Button,
+    MachinesPageTargets,
+) {
     let page = gtk::Box::new(gtk::Orientation::Vertical, 18);
     page.set_margin_top(PAGE_OUTER_MARGIN);
     page.set_margin_bottom(PAGE_OUTER_MARGIN);
@@ -293,6 +313,29 @@ fn machines_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label, gtk::Button
     subtitle.add_css_class(DIM_LABEL_CSS_CLASS);
     page.append(&subtitle);
 
+    let device_refresh_button = gtk::Button::with_label(MACHINES_DEVICE_REFRESH_IDLE_LABEL);
+    device_refresh_button.set_halign(gtk::Align::Start);
+    page.append(&device_refresh_button);
+
+    let devices_title = gtk::Label::new(Some("Registered devices"));
+    devices_title.set_xalign(0.0);
+    devices_title.add_css_class(HEADING_CSS_CLASS);
+    page.append(&devices_title);
+
+    let device_status = gtk::Label::new(Some(MACHINES_DEVICE_NOT_LOADED_STATUS));
+    device_status.set_xalign(0.0);
+    device_status.set_wrap(true);
+    device_status.add_css_class(DIM_LABEL_CSS_CLASS);
+    page.append(&device_status);
+
+    let device_entries = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    page.append(&device_entries);
+
+    let local_status_title = gtk::Label::new(Some("Local owner-host status"));
+    local_status_title.set_xalign(0.0);
+    local_status_title.add_css_class(HEADING_CSS_CLASS);
+    page.append(&local_status_title);
+
     let refresh_button = gtk::Button::with_label(REFRESH_BUTTON_IDLE_LABEL);
     refresh_button.set_halign(gtk::Align::Start);
     page.append(&refresh_button);
@@ -309,7 +352,113 @@ fn machines_page() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Label, gtk::Button
     detail_label.add_css_class(DIM_LABEL_CSS_CLASS);
     page.append(&detail_label);
 
-    (page, agent_label, dns_label, detail_label, refresh_button)
+    let targets = MachinesPageTargets {
+        refresh_button: device_refresh_button,
+        status: device_status,
+        entries: device_entries,
+    };
+    let click_targets = targets.clone();
+    targets
+        .refresh_button
+        .connect_clicked(move |_| start_registered_device_probe(&click_targets));
+
+    (
+        page,
+        agent_label,
+        dns_label,
+        detail_label,
+        refresh_button,
+        targets,
+    )
+}
+
+fn clear_registered_device_entries(entries: &gtk::Box) {
+    while let Some(child) = entries.first_child() {
+        entries.remove(&child);
+    }
+}
+
+fn append_registered_device_entry(entries: &gtk::Box, device: &LocalRegisteredDeviceEntry) {
+    let label = gtk::Label::new(Some(&format!(
+        "Device: {}\nLifecycle: {}\nReachability: {}",
+        device.device_id(),
+        device.lifecycle_text(),
+        MACHINES_REACHABILITY_NOT_OBSERVED
+    )));
+    label.set_xalign(0.0);
+    label.set_selectable(true);
+    label.set_wrap(true);
+    entries.append(&label);
+}
+
+fn start_registered_device_probe(targets: &MachinesPageTargets) {
+    targets.refresh_button.set_sensitive(false);
+    targets
+        .refresh_button
+        .set_label(MACHINES_DEVICE_REFRESH_BUSY_LABEL);
+    targets.status.set_text("Loading registered devices…");
+
+    let (sender, receiver) = mpsc::sync_channel(1);
+    let spawn_result = std::thread::Builder::new()
+        .name("prw-desktop-registered-device-read".to_owned())
+        .spawn(move || {
+            let _ = sender.send(ipc::query_registered_devices());
+        });
+
+    if spawn_result.is_err() {
+        targets
+            .status
+            .set_text("Unable to start registered-device read worker");
+        targets.refresh_button.set_sensitive(true);
+        targets
+            .refresh_button
+            .set_label(MACHINES_DEVICE_REFRESH_IDLE_LABEL);
+        return;
+    }
+
+    let targets = targets.clone();
+    let _source_id = glib::timeout_add_local(WORKER_RESULT_POLL_INTERVAL, move || {
+        match receiver.try_recv() {
+            Ok(Ok(devices)) => {
+                clear_registered_device_entries(&targets.entries);
+                for device in &devices {
+                    append_registered_device_entry(&targets.entries, device);
+                }
+                targets.status.set_text(&format!(
+                    "Registered devices: {}. Reachability is not inferred from routing data.",
+                    devices.len()
+                ));
+                targets.refresh_button.set_sensitive(true);
+                targets
+                    .refresh_button
+                    .set_label(MACHINES_DEVICE_REFRESH_IDLE_LABEL);
+                glib::ControlFlow::Break
+            }
+            Ok(Err(error)) => {
+                clear_registered_device_entries(&targets.entries);
+                targets
+                    .status
+                    .set_text(&format!("Registered-device read unavailable: {error}"));
+                targets.refresh_button.set_sensitive(true);
+                targets
+                    .refresh_button
+                    .set_label(MACHINES_DEVICE_REFRESH_IDLE_LABEL);
+                glib::ControlFlow::Break
+            }
+            Err(TryRecvError::Empty) => glib::ControlFlow::Continue,
+            Err(TryRecvError::Disconnected) => {
+                clear_registered_device_entries(&targets.entries);
+                targets
+                    .status
+                    .set_text("Registered-device read worker ended without a result");
+                targets.refresh_button.set_sensitive(true);
+                targets
+                    .refresh_button
+                    .set_label(MACHINES_DEVICE_REFRESH_IDLE_LABEL);
+                glib::ControlFlow::Break
+            }
+        }
+    });
 }
 
 fn next_terminal_session_id() -> u64 {
@@ -1833,13 +1982,17 @@ mod tests {
     }
 
     #[test]
-    fn machines_subtitle_locks_existing_read_only_snapshot_boundary() {
+    fn machines_subtitle_locks_registered_device_read_boundary() {
         assert_eq!(
             MACHINES_SUBTITLE,
             concat!(
-                "Current local owner-host status from the same bounded Agent snapshot as Overview. ",
-                "This surface does not enumerate remote devices, infer identity from endpoint data, or grant capabilities."
+                "Read-only registered-device inventory from the owner-PC authority through the local Agent. ",
+                "Reachability is shown only from authoritative live observation; this checkpoint does not infer Online/Offline from endpoint data and does not mutate device authority."
             )
+        );
+        assert_eq!(
+            super::MACHINES_REACHABILITY_NOT_OBSERVED,
+            "Not observed by this local surface"
         );
     }
 

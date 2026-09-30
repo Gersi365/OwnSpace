@@ -305,6 +305,7 @@ mod tests {
             files_read: Decision::Deny,
             files_write: Decision::Deny,
             forwarding_create: Decision::Deny,
+            device_read: Decision::Deny,
         })
     }
 

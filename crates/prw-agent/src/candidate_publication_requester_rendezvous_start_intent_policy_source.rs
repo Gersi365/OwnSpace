@@ -333,6 +333,7 @@ mod tests {
             Capability::FilesWrite,
             Capability::FilesDelete,
             Capability::ForwardingCreate,
+            Capability::DeviceRead,
             Capability::DeviceManage,
             Capability::PolicyManage,
         ] {

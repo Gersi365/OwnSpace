@@ -194,7 +194,9 @@ pub(super) const fn required_authority_family(
     command: &BridgeCommand,
 ) -> LocalManagementAuthorityFamily {
     match command {
-        BridgeCommand::AgentStatus => LocalManagementAuthorityFamily::Agent,
+        BridgeCommand::AgentStatus | BridgeCommand::DeviceList => {
+            LocalManagementAuthorityFamily::Agent
+        }
         BridgeCommand::FileList(_)
         | BridgeCommand::FileStat(_)
         | BridgeCommand::FileCreate { .. }

@@ -10,6 +10,7 @@ use std::ptr;
 use prw_file_service::{FileServiceError, RemoteDirectoryEntry, RemoteMetadata};
 use prw_file_transfer::{FileTransferError, download_chunk};
 use prw_forwarding::{ForwardingError, ForwardingSessionPrincipal, PortForwardBackend};
+use prw_registry::RegisteredDevice;
 use prw_remote_bridge::BridgeCommand;
 use prw_terminal::{TerminalBackend, TerminalError, TerminalSessionPrincipal};
 
@@ -24,6 +25,8 @@ use super::status_snapshot::LocalAgentStatusSnapshot;
 pub(super) enum LocalManagementTypedProviderResult {
     /// Existing bounded Agent status snapshot.
     AgentStatus(LocalAgentStatusSnapshot),
+    /// Read-only registered-device records from the owner-PC authority.
+    RegisteredDevices(Vec<RegisteredDevice>),
     /// Existing descriptor-anchored bounded directory listing.
     DirectoryEntries(Vec<RemoteDirectoryEntry>),
     /// Existing descriptor-anchored bounded metadata snapshot.
@@ -45,6 +48,8 @@ pub(super) enum LocalManagementTypedProviderDispatchError {
     FilesystemAuthorityMismatch,
     /// Terminal/forwarding operation attempted to cross an existing principal binding.
     PrincipalMismatch,
+    /// Read-only registered-device authority could not be observed safely.
+    RegistryRead,
     /// Descriptor-anchored file operation failed.
     File(FileServiceError),
     /// Descriptor-anchored transfer operation failed.
@@ -85,6 +90,7 @@ where
         BridgeCommand::AgentStatus => Ok(LocalManagementTypedProviderResult::AgentStatus(
             agent_status,
         )),
+        BridgeCommand::DeviceList => Err(LocalManagementTypedProviderDispatchError::RegistryRead),
         BridgeCommand::FileList(_)
         | BridgeCommand::FileStat(_)
         | BridgeCommand::FileCreate { .. }

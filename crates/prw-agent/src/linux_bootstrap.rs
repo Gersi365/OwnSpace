@@ -147,7 +147,8 @@ impl LinuxAgentProductionRemoteCapabilityDispatcher {
     ) -> Result<Vec<u8>, LinuxAgentProductionRemoteCapabilityDispatchError> {
         match command {
             BridgeCommand::AgentStatus => Ok(encode_status_snapshot(self.status_snapshot).to_vec()),
-            BridgeCommand::FileList(_)
+            BridgeCommand::DeviceList
+            | BridgeCommand::FileList(_)
             | BridgeCommand::FileStat(_)
             | BridgeCommand::FileCreate { .. }
             | BridgeCommand::DirectoryCreate(_)
@@ -3562,6 +3563,7 @@ mod tests {
             Capability::FilesWrite,
             Capability::FilesDelete,
             Capability::ForwardingCreate,
+            Capability::DeviceRead,
             Capability::DeviceManage,
             Capability::PolicyManage,
         ] {

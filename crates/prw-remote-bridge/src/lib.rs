@@ -102,6 +102,8 @@ impl RemoteSessionLease {
 pub enum BridgeCommand {
     /// Read the bounded Agent status snapshot.
     AgentStatus,
+    /// List registered devices without mutating device authority.
+    DeviceList,
     /// List one validated relative directory.
     FileList(RemotePath),
     /// Stat one validated relative path.
@@ -185,6 +187,7 @@ impl BridgeCommand {
             Self::TerminalClose(_) => 16,
             Self::ForwardOpen { .. } => 17,
             Self::ForwardClose(_) => 18,
+            Self::DeviceList => 19,
         }
     }
 
@@ -193,6 +196,7 @@ impl BridgeCommand {
     pub const fn required_capability(&self) -> Capability {
         match self {
             Self::AgentStatus => Capability::AgentStatusRead,
+            Self::DeviceList => Capability::DeviceRead,
             Self::FileList(_) | Self::FileStat(_) | Self::DownloadChunk { .. } => {
                 Capability::FilesRead
             }
@@ -220,7 +224,7 @@ impl BridgeCommand {
     pub fn encode(&self) -> Result<Vec<u8>, RemoteBridgeError> {
         let mut body = Vec::new();
         match self {
-            Self::AgentStatus => {}
+            Self::AgentStatus | Self::DeviceList => {}
             Self::FileList(path) | Self::FileStat(path) | Self::DirectoryCreate(path) => {
                 write_path(&mut body, path)?;
             }
@@ -415,6 +419,7 @@ impl BridgeCommand {
                 PortForwardId::new(reader.u64()?)
                     .map_err(|_| RemoteBridgeError::InvalidRequestPayload)?,
             ),
+            19 => Self::DeviceList,
             _ => return Err(RemoteBridgeError::InvalidRequestPayload),
         };
         reader.finish()?;
