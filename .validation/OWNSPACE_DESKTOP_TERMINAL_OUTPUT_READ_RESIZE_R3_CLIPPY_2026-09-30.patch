@@ -1,0 +1,41 @@
+diff --git a/apps/desktop/src/ui.rs b/apps/desktop/src/ui.rs
+index f4a5b03..aee7868 100644
+--- a/apps/desktop/src/ui.rs
++++ b/apps/desktop/src/ui.rs
+@@ -569,6 +569,7 @@ fn execute_terminal_operation(
+                 .ok_or(ipc::DesktopIpcError::TerminalSessionUnavailable)?
+                 .close(payload);
+             *connection = None;
++            drop(connection);
+             result.map(|()| TerminalOperationResult::Acknowledged)
+         }
+     }
+@@ -584,6 +585,7 @@ fn append_terminal_output(output: &gtk::TextView, bytes: &[u8]) {
+     buffer.insert(&mut end, rendered.as_ref());
+ }
+ 
++#[allow(clippy::too_many_lines)]
+ fn start_terminal_operation(
+     targets: &SessionsPageTargets,
+     operation: TerminalOperation,
+@@ -630,8 +632,10 @@ fn start_terminal_operation(
+                             .borrow_mut()
+                             .apply_open_acknowledgement()
+                     }
+-                    (TerminalOperation::Input, TerminalOperationResult::Acknowledged)
+-                    | (TerminalOperation::Resize, TerminalOperationResult::Acknowledged)
++                    (
++                        TerminalOperation::Input | TerminalOperation::Resize,
++                        TerminalOperationResult::Acknowledged,
++                    )
+                     | (TerminalOperation::Read, TerminalOperationResult::Output(_)) => Ok(()),
+                     (TerminalOperation::Close, TerminalOperationResult::Acknowledged) => {
+                         poll_targets
+@@ -784,6 +788,7 @@ fn request_terminal_close(targets: &SessionsPageTargets) {
+     }
+ }
+ 
++#[allow(clippy::too_many_lines)]
+ fn sessions_page() -> gtk::Box {
+     let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
+     page.set_margin_top(PAGE_OUTER_MARGIN);
