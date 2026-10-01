@@ -1,0 +1,44 @@
+diff --git a/apps/desktop/src/local_management_ipc.rs b/apps/desktop/src/local_management_ipc.rs
+--- a/apps/desktop/src/local_management_ipc.rs
++++ b/apps/desktop/src/local_management_ipc.rs
+@@ -526,7 +526,13 @@
+                 BridgeCommand::FileStat(RemotePath::parse(path).expect("canonical path"))
+             );
+         }
+-        for invalid in ["/etc", "../escape", "docs/../escape", "docs//nested", r"docs\notes"] {
++        for invalid in [
++            "/etc",
++            "../escape",
++            "docs/../escape",
++            "docs//nested",
++            r"docs\notes",
++        ] {
+             assert!(matches!(
+                 build_file_stat_management_request(id(161), invalid),
+                 Err(LocalManagementClientError::InvalidFilePath)
+diff --git a/apps/desktop/src/ui.rs b/apps/desktop/src/ui.rs
+--- a/apps/desktop/src/ui.rs
++++ b/apps/desktop/src/ui.rs
+@@ -1619,7 +1619,9 @@
+ 
+     set_file_list_controls_enabled(targets, false);
+     targets.stat_button.set_label(FILES_STAT_BUSY_LABEL);
+-    targets.metadata_label.set_text("Inspecting authorized metadata…");
++    targets
++        .metadata_label
++        .set_text("Inspecting authorized metadata…");
+ 
+     let worker_path = path.clone();
+     let (sender, receiver) = mpsc::sync_channel(1);
+@@ -2195,7 +2197,10 @@
+         assert_eq!(FILES_REFRESH_LABEL, "Refresh");
+         assert_eq!(FILES_STAT_IDLE_LABEL, "Inspect metadata");
+         assert_eq!(FILES_STAT_BUSY_LABEL, "Inspecting…");
+-        assert_eq!(FILES_STAT_UNLOADED_LABEL, "Metadata snapshot: not requested");
++        assert_eq!(
++            FILES_STAT_UNLOADED_LABEL,
++            "Metadata snapshot: not requested"
++        );
+         assert_eq!(
+             FILES_SUBTITLE,
+             concat!(
