@@ -1,0 +1,221 @@
+diff --git a/crates/prw-agent/src/local_commands/management_agent_status_runtime.rs b/crates/prw-agent/src/local_commands/management_agent_status_runtime.rs
+index 9e91d72..ee84fb8 100644
+--- a/crates/prw-agent/src/local_commands/management_agent_status_runtime.rs
++++ b/crates/prw-agent/src/local_commands/management_agent_status_runtime.rs
+@@ -1,8 +1,9 @@
+ //! Narrow production command-3 runtime for local status/files/upload plus one local terminal.
+ //!
+ //! The production slice remains explicitly narrower than the generic typed-management
+-//! surface. `AgentStatus`, read-only `DeviceList`, and `FileList` preserve bounded behavior. A connection
+-//! may additionally own at most one fresh create-only upload or one fixed-profile local PTY terminal.
++//! surface. `AgentStatus`, read-only `DeviceList`, `FileList`, and `FileStat` preserve bounded
++//! behavior. A connection may additionally own at most one fresh create-only upload or one fixed-profile
++//! local PTY terminal.
+ //! Upload and terminal lifecycles are mutually exclusive on one authenticated connection.
+ //! `UploadResume`, `DownloadChunk`, file mutation commands outside upload, forwarding, and
+ //! non-POSIX terminal profiles remain unsupported or denied. Filesystem authority is anchored to the
+@@ -372,8 +373,9 @@ where
+ 
+ /// Processes one command-3 request through the production upload + local-terminal extension.
+ ///
+-/// `AgentStatus`, read-only `DeviceList`, `FileList`, fresh upload begin/chunk/finalize/abort,
+-/// and fixed-profile local terminal open/input/resize/read/close are reachable after capability
++/// `AgentStatus`, read-only `DeviceList`, `FileList`, `FileStat`, fresh upload
++/// begin/chunk/finalize/abort, and fixed-profile local terminal open/input/resize/read/close
++/// are reachable after capability
+ /// admission. `UploadResume`, `DownloadChunk`, other file mutation, and forwarding remain closed.
+ /// An active upload and active terminal are mutually exclusive on one authenticated connection.
+ ///
+@@ -451,6 +453,12 @@ pub(super) fn process_authenticated_linux_agent_status_file_list_upload_manageme
+             .list_directory(path)
+             .map(LocalManagementTypedProviderResult::DirectoryEntries)
+             .map_err(LocalManagementTypedProviderDispatchError::File),
++        BridgeCommand::FileStat(path) => runtime
++            .filesystem
++            .root()
++            .metadata(path)
++            .map(LocalManagementTypedProviderResult::Metadata)
++            .map_err(LocalManagementTypedProviderDispatchError::File),
+         BridgeCommand::UploadBegin(plan) => runtime
+             .begin(plan)
+             .map(LocalManagementTypedProviderResult::Offset)
+@@ -496,8 +504,7 @@ pub(super) fn process_authenticated_linux_agent_status_file_list_upload_manageme
+         BridgeCommand::TerminalClose(session_id) => runtime
+             .terminal_close(terminal_principal, *session_id)
+             .map(|()| LocalManagementTypedProviderResult::Empty),
+-        BridgeCommand::FileStat(_)
+-        | BridgeCommand::FileCreate { .. }
++        BridgeCommand::FileCreate { .. }
+         | BridgeCommand::DirectoryCreate(_)
+         | BridgeCommand::UploadResume(_)
+         | BridgeCommand::DownloadChunk { .. }
+@@ -696,6 +703,129 @@ mod tests {
+         fs::remove_dir_all(root).expect("test root removes");
+     }
+ 
++    #[test]
++    fn production_file_stat_reports_correlated_type_and_size_without_following_symlinks() {
++        let root = test_root();
++        fs::write(root.join("notes.txt"), b"notes").expect("regular test file creates");
++        fs::create_dir(root.join("docs")).expect("test directory creates");
++        std::os::unix::fs::symlink("notes.txt", root.join("shortcut"))
++            .expect("test symlink creates");
++        let filesystem = open_home_filesystem_authority_from_raw(Some(root.as_os_str()))
++            .expect("test filesystem authority opens");
++        let mut runtime = LocalBoundedUploadRuntime::new(&filesystem);
++        let (server, _client) = UnixStream::pair().expect("local pair creates");
++        let connection = AuthenticatedLocalLinuxConnection::try_new(server)
++            .expect("same-UID local pair authenticates");
++        let snapshot = LocalAgentStatusSnapshot::current(LocalAgentRuntimeState::Ready);
++
++        for (request_id, path, expected_type, expected_size) in [
++            (930, "notes.txt", 1, 5),
++            (
++                931,
++                "docs",
++                2,
++                fs::symlink_metadata(root.join("docs"))
++                    .expect("directory metadata")
++                    .len(),
++            ),
++            (
++                932,
++                "shortcut",
++                3,
++                fs::symlink_metadata(root.join("shortcut"))
++                    .expect("symlink metadata")
++                    .len(),
++            ),
++        ] {
++            let response = process_authenticated_linux_agent_status_file_list_upload_management(
++                &request(
++                    request_id,
++                    &BridgeCommand::FileStat(RemotePath::parse(path).expect("canonical path")),
++                ),
++                &connection,
++                snapshot,
++                &mut runtime,
++            )
++            .expect("FileStat response builds");
++            let terminal = validate_terminal_response_frame(&response).expect("response validates");
++            assert_eq!(terminal.request_id(), id(request_id));
++            assert_eq!(terminal.status(), LocalAgentResponseStatus::Ok);
++            let bytes = response.payload().as_bytes();
++            assert_eq!(bytes.len(), 12);
++            assert_eq!(bytes[2], 3, "existing metadata result tag");
++            assert_eq!(bytes[3], expected_type);
++            assert_eq!(
++                u64::from_be_bytes(bytes[4..12].try_into().expect("exact size body")),
++                expected_size
++            );
++        }
++
++        let missing = process_authenticated_linux_agent_status_file_list_upload_management(
++            &request(
++                933,
++                &BridgeCommand::FileStat(RemotePath::parse("missing.txt").expect("path")),
++            ),
++            &connection,
++            snapshot,
++            &mut runtime,
++        )
++        .expect("missing metadata response builds");
++        let terminal = validate_terminal_response_frame(&missing).expect("response validates");
++        assert_eq!(terminal.request_id(), id(933));
++        assert_eq!(terminal.status(), LocalAgentResponseStatus::InternalError);
++        assert_eq!(
++            missing.payload().as_bytes().len(),
++            2,
++            "no forged metadata success"
++        );
++
++        runtime.finish().expect("quiescent runtime drains");
++        fs::remove_dir_all(root).expect("test root removes");
++    }
++
++    #[test]
++    fn production_file_stat_rejects_intermediate_symlink_without_escaping_root() {
++        let root = test_root();
++        let outside = test_root();
++        fs::write(outside.join("secret.txt"), b"outside").expect("outside fixture creates");
++        std::os::unix::fs::symlink(&outside, root.join("escape"))
++            .expect("intermediate symlink creates");
++        let filesystem = open_home_filesystem_authority_from_raw(Some(root.as_os_str()))
++            .expect("test filesystem authority opens");
++        let mut runtime = LocalBoundedUploadRuntime::new(&filesystem);
++        let (server, _client) = UnixStream::pair().expect("local pair creates");
++        let connection = AuthenticatedLocalLinuxConnection::try_new(server)
++            .expect("same-UID local pair authenticates");
++        let snapshot = LocalAgentStatusSnapshot::current(LocalAgentRuntimeState::Ready);
++        let escaped = process_authenticated_linux_agent_status_file_list_upload_management(
++            &request(
++                936,
++                &BridgeCommand::FileStat(
++                    RemotePath::parse("escape/secret.txt").expect("canonical relative path"),
++                ),
++            ),
++            &connection,
++            snapshot,
++            &mut runtime,
++        )
++        .expect("intermediate symlink rejection response builds");
++        let terminal = validate_terminal_response_frame(&escaped).expect("response validates");
++        assert_eq!(terminal.request_id(), id(936));
++        assert_eq!(terminal.status(), LocalAgentResponseStatus::InternalError);
++        assert_eq!(
++            escaped.payload().as_bytes().len(),
++            2,
++            "no escaped metadata success"
++        );
++        assert_eq!(
++            fs::read(outside.join("secret.txt")).expect("outside fixture remains intact"),
++            b"outside"
++        );
++        runtime.finish().expect("quiescent runtime drains");
++        fs::remove_dir_all(root).expect("test root removes");
++        fs::remove_dir_all(outside).expect("outside fixture removes");
++    }
++
+     #[test]
+     fn other_files_read_commands_remain_unsupported_after_capability_admission() {
+         for (request_id, command) in [
+@@ -892,6 +1022,19 @@ mod tests {
+                 .status(),
+             LocalAgentResponseStatus::Conflict
+         );
++        let file_stat = process_authenticated_linux_agent_status_file_list_upload_management(
++            &request(
++                934,
++                &BridgeCommand::FileStat(RemotePath::parse("notes.txt").expect("path")),
++            ),
++            &connection,
++            snapshot,
++            &mut runtime,
++        )
++        .expect("active terminal blocks metadata request");
++        let terminal = validate_terminal_response_frame(&file_stat).expect("response validates");
++        assert_eq!(terminal.request_id(), id(934));
++        assert_eq!(terminal.status(), LocalAgentResponseStatus::Conflict);
+         runtime.finish().expect("terminal cleanup succeeds");
+         fs::remove_dir_all(root).expect("test root removes");
+     }
+@@ -979,6 +1122,19 @@ mod tests {
+         .expect("begin response builds");
+         assert_eq!(response_offset(&begin), 0);
+         assert!(runtime.is_upload_active());
++        let file_stat = process_authenticated_linux_agent_status_file_list_upload_management(
++            &request(
++                935,
++                &BridgeCommand::FileStat(RemotePath::parse("uploaded.bin").expect("path")),
++            ),
++            &connection,
++            snapshot,
++            &mut runtime,
++        )
++        .expect("active upload blocks metadata request");
++        let terminal = validate_terminal_response_frame(&file_stat).expect("response validates");
++        assert_eq!(terminal.request_id(), id(935));
++        assert_eq!(terminal.status(), LocalAgentResponseStatus::Conflict);
+ 
+         let chunk = process_authenticated_linux_agent_status_file_list_upload_management(
+             &request(
