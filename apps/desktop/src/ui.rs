@@ -49,6 +49,9 @@ const UPLOAD_SUBTITLE: &str = concat!(
 );
 const FILES_LIST_IDLE_LABEL: &str = "List files";
 const FILES_LIST_BUSY_LABEL: &str = "Listing…";
+const FILES_STAT_IDLE_LABEL: &str = "Inspect metadata";
+const FILES_STAT_BUSY_LABEL: &str = "Inspecting…";
+const FILES_STAT_UNLOADED_LABEL: &str = "Metadata snapshot: not requested";
 const FILES_REFRESH_LABEL: &str = "Refresh";
 const FILES_PATH_INVALID_STATUS: &str = "Invalid path: use a canonical relative path under home";
 const FILES_PATH_UNLOADED_LABEL: &str = "Current path: not loaded";
@@ -60,7 +63,7 @@ const TITLE_3_CSS_CLASS: &str = "title-3";
 const HEADING_CSS_CLASS: &str = "heading";
 const MONOSPACE_CSS_CLASS: &str = "monospace";
 const FILES_SUBTITLE: &str = concat!(
-    "Read-only directory listing under the local owner home authority. ",
+    "Read-only directory listing and explicit type/size metadata snapshots under the local owner home authority. ",
     "Paths are relative; this surface does not read file contents, mutate files, transfer data, open terminals, or create forwarding."
 );
 const MACHINES_SUBTITLE: &str = concat!(
@@ -102,11 +105,13 @@ struct MachinesPageTargets {
 struct FilesPageTargets {
     path_entry: gtk::Entry,
     list_button: gtk::Button,
+    stat_button: gtk::Button,
     home_button: gtk::Button,
     up_button: gtk::Button,
     refresh_button: gtk::Button,
     current_path_label: gtk::Label,
     status: gtk::Label,
+    metadata_label: gtk::Label,
     entries: gtk::Box,
     current_path: Rc<RefCell<String>>,
     has_successful_listing: Rc<Cell<bool>>,
@@ -1475,6 +1480,7 @@ fn clear_file_list_entries(entries: &gtk::Box) {
 fn set_file_list_controls_enabled(targets: &FilesPageTargets, enabled: bool) {
     targets.path_entry.set_sensitive(enabled);
     targets.list_button.set_sensitive(enabled);
+    targets.stat_button.set_sensitive(enabled);
     targets.home_button.set_sensitive(enabled);
     targets
         .refresh_button
@@ -1533,6 +1539,7 @@ fn request_manual_file_listing(targets: &FilesPageTargets, path: String) {
 
 fn request_file_listing(targets: &FilesPageTargets, path: String) {
     set_file_list_controls_enabled(targets, false);
+    targets.metadata_label.set_text(FILES_STAT_UNLOADED_LABEL);
     targets.list_button.set_label(FILES_LIST_BUSY_LABEL);
     targets
         .status
@@ -1604,6 +1611,70 @@ fn request_file_listing(targets: &FilesPageTargets, path: String) {
     });
 }
 
+fn request_file_stat(targets: &FilesPageTargets, path: String) {
+    if !file_list_manual_path_is_canonical(&path) {
+        targets.metadata_label.set_text(FILES_PATH_INVALID_STATUS);
+        return;
+    }
+
+    set_file_list_controls_enabled(targets, false);
+    targets.stat_button.set_label(FILES_STAT_BUSY_LABEL);
+    targets
+        .metadata_label
+        .set_text("Inspecting authorized metadata…");
+
+    let worker_path = path.clone();
+    let (sender, receiver) = mpsc::sync_channel(1);
+    let spawn_result = std::thread::Builder::new()
+        .name("prw-desktop-readonly-file-stat".to_owned())
+        .spawn(move || {
+            let _ = sender.send(ipc::query_file_stat(&worker_path));
+        });
+
+    if spawn_result.is_err() {
+        targets
+            .metadata_label
+            .set_text("Unable to start the read-only metadata worker");
+        targets.stat_button.set_label(FILES_STAT_IDLE_LABEL);
+        set_file_list_controls_enabled(targets, true);
+        return;
+    }
+
+    let poll_targets = targets.clone();
+    let _source_id = glib::timeout_add_local(WORKER_RESULT_POLL_INTERVAL, move || {
+        match receiver.try_recv() {
+            Ok(Ok(snapshot)) => {
+                let display_path = if path.is_empty() { "home" } else { &path };
+                poll_targets.metadata_label.set_text(&format!(
+                    "Metadata snapshot ({display_path}): type {}, size {} bytes",
+                    snapshot.kind_text(),
+                    snapshot.size()
+                ));
+                poll_targets.stat_button.set_label(FILES_STAT_IDLE_LABEL);
+                set_file_list_controls_enabled(&poll_targets, true);
+                glib::ControlFlow::Break
+            }
+            Ok(Err(error)) => {
+                poll_targets
+                    .metadata_label
+                    .set_text(&format!("Metadata unavailable: {error}"));
+                poll_targets.stat_button.set_label(FILES_STAT_IDLE_LABEL);
+                set_file_list_controls_enabled(&poll_targets, true);
+                glib::ControlFlow::Break
+            }
+            Err(TryRecvError::Empty) => glib::ControlFlow::Continue,
+            Err(TryRecvError::Disconnected) => {
+                poll_targets
+                    .metadata_label
+                    .set_text("Read-only metadata worker ended without a result");
+                poll_targets.stat_button.set_label(FILES_STAT_IDLE_LABEL);
+                set_file_list_controls_enabled(&poll_targets, true);
+                glib::ControlFlow::Break
+            }
+        }
+    });
+}
+
 fn files_page() -> gtk::Box {
     let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
     page.set_margin_top(PAGE_OUTER_MARGIN);
@@ -1638,16 +1709,24 @@ fn files_page() -> gtk::Box {
     let refresh_button = gtk::Button::with_label(FILES_REFRESH_LABEL);
     refresh_button.set_sensitive(false);
     let list_button = gtk::Button::with_label(FILES_LIST_IDLE_LABEL);
+    let stat_button = gtk::Button::with_label(FILES_STAT_IDLE_LABEL);
     navigation.append(&home_button);
     navigation.append(&up_button);
     navigation.append(&refresh_button);
     navigation.append(&list_button);
+    navigation.append(&stat_button);
     page.append(&navigation);
 
     let status = gtk::Label::new(Some("No directory listing requested yet"));
     status.set_xalign(0.0);
     status.add_css_class(TITLE_3_CSS_CLASS);
     page.append(&status);
+
+    let metadata_label = gtk::Label::new(Some(FILES_STAT_UNLOADED_LABEL));
+    metadata_label.set_xalign(0.0);
+    metadata_label.set_wrap(true);
+    metadata_label.set_selectable(true);
+    page.append(&metadata_label);
 
     let entries = gtk::Box::new(gtk::Orientation::Vertical, 6);
     let scroller = gtk::ScrolledWindow::new();
@@ -1659,11 +1738,13 @@ fn files_page() -> gtk::Box {
     let targets = FilesPageTargets {
         path_entry,
         list_button,
+        stat_button,
         home_button,
         up_button,
         refresh_button,
         current_path_label,
         status,
+        metadata_label,
         entries,
         current_path: Rc::new(RefCell::new(String::new())),
         has_successful_listing: Rc::new(Cell::new(false)),
@@ -1673,6 +1754,12 @@ fn files_page() -> gtk::Box {
     targets.list_button.connect_clicked(move |_| {
         let path = list_targets.path_entry.text().to_string();
         request_manual_file_listing(&list_targets, path);
+    });
+
+    let stat_targets = targets.clone();
+    targets.stat_button.connect_clicked(move |_| {
+        let path = stat_targets.path_entry.text().to_string();
+        request_file_stat(&stat_targets, path);
     });
 
     let entry_targets = targets.clone();
@@ -2086,7 +2173,8 @@ mod tests {
     use super::{
         ACTIVITY_SUBTITLE, COPY_SNAPSHOT_DONE_LABEL, COPY_SNAPSHOT_IDLE_LABEL,
         FILES_LIST_BUSY_LABEL, FILES_LIST_IDLE_LABEL, FILES_PATH_INVALID_STATUS,
-        FILES_PATH_UNLOADED_LABEL, FILES_REFRESH_LABEL, FILES_SUBTITLE, MACHINES_SUBTITLE,
+        FILES_PATH_UNLOADED_LABEL, FILES_REFRESH_LABEL, FILES_STAT_BUSY_LABEL,
+        FILES_STAT_IDLE_LABEL, FILES_STAT_UNLOADED_LABEL, FILES_SUBTITLE, MACHINES_SUBTITLE,
         REFRESH_BUTTON_BUSY_LABEL, REFRESH_BUTTON_IDLE_LABEL, UPLOAD_BUTTON_BUSY_LABEL,
         UPLOAD_BUTTON_IDLE_LABEL, UPLOAD_SUBTITLE, UploadCleanupStatus,
         activity_snapshot_clipboard_text, desktop_local_ipc_protocol_text, desktop_version_text,
@@ -2103,14 +2191,20 @@ mod tests {
     }
 
     #[test]
-    fn files_surface_labels_lock_read_only_file_list_boundary() {
+    fn file_stat_files_surface_labels_lock_read_only_file_list_and_stat_boundary() {
         assert_eq!(FILES_LIST_IDLE_LABEL, "List files");
         assert_eq!(FILES_LIST_BUSY_LABEL, "Listing…");
         assert_eq!(FILES_REFRESH_LABEL, "Refresh");
+        assert_eq!(FILES_STAT_IDLE_LABEL, "Inspect metadata");
+        assert_eq!(FILES_STAT_BUSY_LABEL, "Inspecting…");
+        assert_eq!(
+            FILES_STAT_UNLOADED_LABEL,
+            "Metadata snapshot: not requested"
+        );
         assert_eq!(
             FILES_SUBTITLE,
             concat!(
-                "Read-only directory listing under the local owner home authority. ",
+                "Read-only directory listing and explicit type/size metadata snapshots under the local owner home authority. ",
                 "Paths are relative; this surface does not read file contents, mutate files, transfer data, open terminals, or create forwarding."
             )
         );

@@ -11,7 +11,7 @@ use prw_agent::{
     },
 };
 use prw_core::{DeviceId, DeviceLifecycle};
-use prw_file_service::{MAX_DIRECTORY_ENTRIES, RemotePath};
+use prw_file_service::{MAX_DIRECTORY_ENTRIES, RemoteFileType, RemotePath};
 use prw_remote_bridge::{BridgeCommand, RemoteBridgeError};
 
 /// Pure client-side failure while composing one typed local management request.
@@ -21,7 +21,7 @@ pub enum LocalManagementClientError {
     Bridge(RemoteBridgeError),
     /// Agent-owned local command-3 framing rejected the encoded body.
     Local(LocalManagementRequestBuildError),
-    /// The requested file-list path is not a canonical relative remote path.
+    /// The requested file path is not a canonical relative remote path.
     InvalidFilePath,
 }
 
@@ -211,6 +211,80 @@ pub fn build_file_list_management_request(
     build_bridge_management_request(request_id, &BridgeCommand::FileList(path))
 }
 
+/// Builds one read-only metadata request using the existing Agent-owned filesystem authority.
+pub fn build_file_stat_management_request(
+    request_id: LocalIpcRequestId,
+    path: &str,
+) -> Result<LocalIpcFrame, LocalManagementClientError> {
+    let path = RemotePath::parse(path).map_err(|_| LocalManagementClientError::InvalidFilePath)?;
+    build_bridge_management_request(request_id, &BridgeCommand::FileStat(path))
+}
+
+/// One Agent-observed type/size snapshot; it is not a file-content or stability guarantee.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LocalFileStatSnapshot {
+    kind: RemoteFileType,
+    size: u64,
+}
+
+impl LocalFileStatSnapshot {
+    #[must_use]
+    pub(crate) const fn kind_text(self) -> &'static str {
+        match self.kind {
+            RemoteFileType::RegularFile => "regular file",
+            RemoteFileType::Directory => "directory",
+            RemoteFileType::SymbolicLink => "symbolic link (not followed)",
+            RemoteFileType::Other => "other",
+        }
+    }
+
+    #[must_use]
+    pub(crate) const fn size(self) -> u64 {
+        self.size
+    }
+}
+
+/// Fail-closed result-body errors; a success reply must have exactly the locked metadata shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalFileStatDecodeError {
+    MissingResult,
+    UnexpectedResult,
+    InvalidLength,
+    InvalidType,
+}
+
+/// Decodes only the existing metadata tag-3, type-byte, big-endian-u64 success body.
+pub fn decode_file_stat_success_body(
+    payload: &[u8],
+) -> Result<LocalFileStatSnapshot, LocalFileStatDecodeError> {
+    const STATUS_PREFIX_LENGTH: usize = 2;
+    const METADATA_RESULT: u8 = 3;
+    const METADATA_BODY_LENGTH: usize = 10;
+
+    let body = payload
+        .get(STATUS_PREFIX_LENGTH..)
+        .ok_or(LocalFileStatDecodeError::MissingResult)?;
+    if body.first().copied() != Some(METADATA_RESULT) {
+        return Err(LocalFileStatDecodeError::UnexpectedResult);
+    }
+    if body.len() != METADATA_BODY_LENGTH {
+        return Err(LocalFileStatDecodeError::InvalidLength);
+    }
+    let kind = match body[1] {
+        1 => RemoteFileType::RegularFile,
+        2 => RemoteFileType::Directory,
+        3 => RemoteFileType::SymbolicLink,
+        4 => RemoteFileType::Other,
+        _ => return Err(LocalFileStatDecodeError::InvalidType),
+    };
+    let mut size_bytes = [0_u8; 8];
+    size_bytes.copy_from_slice(&body[2..]);
+    Ok(LocalFileStatSnapshot {
+        kind,
+        size: u64::from_be_bytes(size_bytes),
+    })
+}
+
 /// Decodes the command-specific body after the common two-byte success status prefix.
 pub fn decode_file_list_success_body(
     payload: &[u8],
@@ -286,8 +360,9 @@ mod tests {
 
     use super::{
         LocalManagementClientError, build_bridge_management_request,
-        build_file_list_management_request, build_registered_device_list_management_request,
-        decode_file_list_success_body, decode_registered_device_list_success_body,
+        build_file_list_management_request, build_file_stat_management_request,
+        build_registered_device_list_management_request, decode_file_list_success_body,
+        decode_file_stat_success_body, decode_registered_device_list_success_body,
     };
 
     fn id(value: u64) -> LocalIpcRequestId {
@@ -438,6 +513,61 @@ mod tests {
             build_file_list_management_request(id(159), "docs//nested"),
             Err(LocalManagementClientError::InvalidFilePath)
         ));
+    }
+
+    #[test]
+    fn live_file_stat_builder_reuses_canonical_relative_path_authority() {
+        for path in ["", "docs/notes.txt"] {
+            let frame = build_file_stat_management_request(id(160), path).expect("stat builds");
+            let local =
+                decode_local_management_request_frame(&frame).expect("local envelope decodes");
+            assert_eq!(
+                BridgeCommand::decode(local.bridge_payload()).expect("bridge decodes"),
+                BridgeCommand::FileStat(RemotePath::parse(path).expect("canonical path"))
+            );
+        }
+        for invalid in [
+            "/etc",
+            "../escape",
+            "docs/../escape",
+            "docs//nested",
+            r"docs\notes",
+        ] {
+            assert!(matches!(
+                build_file_stat_management_request(id(161), invalid),
+                Err(LocalManagementClientError::InvalidFilePath)
+            ));
+        }
+    }
+
+    #[test]
+    fn file_stat_decoder_accepts_exact_types_and_big_endian_size_only() {
+        for (kind, name) in [
+            (1, "regular file"),
+            (2, "directory"),
+            (3, "symbolic link (not followed)"),
+            (4, "other"),
+        ] {
+            let mut payload = vec![0, 0, 3, kind];
+            payload.extend_from_slice(&123_456_789_u64.to_be_bytes());
+            let snapshot = decode_file_stat_success_body(&payload).expect("metadata decodes");
+            assert_eq!(snapshot.kind_text(), name);
+            assert_eq!(snapshot.size(), 123_456_789);
+            let mut trailing = payload;
+            trailing.push(0);
+            assert!(decode_file_stat_success_body(&trailing).is_err());
+        }
+        for invalid in [
+            &[][..],
+            &[0][..],
+            &[0, 0][..],
+            &[0, 0, 2][..],
+            &[0, 0, 3][..],
+            &[0, 0, 3, 1][..],
+            &[0, 0, 3, 9, 0, 0, 0, 0, 0, 0, 0, 1][..],
+        ] {
+            assert!(decode_file_stat_success_body(invalid).is_err());
+        }
     }
 
     #[test]
