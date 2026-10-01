@@ -1,0 +1,458 @@
+diff --git a/apps/desktop/README.md b/apps/desktop/README.md
+index 2ceddfc..0c4a297 100644
+--- a/apps/desktop/README.md
++++ b/apps/desktop/README.md
+@@ -19,12 +19,12 @@ The desktop shell provides:
+ - a read-only Settings diagnostics page that shows the local Ownspace Desktop package version, the desktop client’s compiled-in supported local IPC protocol version, and the latest Agent-reported local IPC protocol version from the same bounded `GetAgentStatus` snapshot used by Overview and Activity; it also exposes both the compatibility-sensitive endpoint contract and the session-resolved candidate endpoint derived through the existing `LocalIpcContract`, with a local-only copy action for the resolved path and no Agent configuration mutation;
+ - a read-only Activity page that mirrors the latest local Agent/Private DNS probe snapshot, can trigger the same bounded local refresh as Overview, and can copy the currently rendered snapshot plus the session-resolved local IPC endpoint candidate to the local desktop clipboard without persisting history or emitting external telemetry;
+ - an implemented Sessions page for one local terminal session through existing command-3 terminal authority: it keeps terminal open/input/read/resize/close on one authenticated local Agent connection, where the Agent owns a fixed `/bin/sh -i` PTY as the same UID with bounded geometry/I/O and explicit process-group cleanup; Agent-owned terminal principal/capability checks remain authoritative, output reads are explicit and bounded, and resize uses the existing validated terminal geometry contract;
+-- an implemented Files page for authenticated read-only directory listing under the local owner-home authority through command-3 `FileList`, with canonical relative-path entry, Home/Up navigation, Refresh after a successful listing, explicit current-path presentation, and no file-content read/open or mutation;
++- an implemented Files page for authenticated read-only directory listing through command-3 `FileList` and separately manually requested read-only type/size metadata snapshots through existing command-3 `FileStat`, both under the Agent-owned owner-home authority, with canonical relative-path entry, Home/Up navigation, Refresh after a successful listing, explicit current-path presentation, and no file-content read/open or mutation; metadata is a snapshot, not a guarantee that later file contents are unchanged;
+ - an implemented Transfers page for one bounded local-file upload at a time through existing command-3 upload begin/chunk/finalize authority, with exact Agent-acknowledged committed offsets, SHA-256 finalization, progress/completion/failure presentation, and internal best-effort abort cleanup after an uncertain or failed active upload; download, resume, and user-triggered abort are not enabled in this checkpoint;
+ - explicit offline/error handling, including partial Private DNS query failure visibility;
+ - a bounded worker thread so local Unix-socket reads do not block the GTK main thread.
+ 
+-The implemented status/diagnostics surfaces use only the existing local `GetAgentStatus` and `GetPrivateDnsConfig` commands. Machines separately uses the additive read-only command-3 `DeviceList` path over the same authenticated local Agent socket and reads the existing owner-PC registry in strict read-only mode; it does not read SQLite directly from the Desktop. The Files page separately uses the already-authorized read-only command-3 `FileList` path over the same trusted local Agent socket. The Sessions page uses existing command-3 terminal open/input/read/resize/close operations on one retained authenticated local Agent connection; the Agent-side production terminal provider is limited to the existing POSIX-shell profile and preserves same-UID principal/capability checks, bounded I/O/geometry, and explicit connection teardown cleanup. Desktop presents terminal output only through an explicit bounded read action and exposes explicit validated columns/rows resize controls; it does not introduce background output streaming or an alternate transport. The Transfers page uses the existing upload begin/chunk/finalize transfer family and Agent-owned owner-home filesystem authority; its internal abort request is cleanup-only after a failed or uncertain active upload and does not expose resume or user-triggered abort controls.
++The implemented status/diagnostics surfaces use only the existing local `GetAgentStatus` and `GetPrivateDnsConfig` commands. Machines separately uses the additive read-only command-3 `DeviceList` path over the same authenticated local Agent socket and reads the existing owner-PC registry in strict read-only mode; it does not read SQLite directly from the Desktop. The Files page uses the already-authorized read-only command-3 `FileList` and existing `FileStat` paths over the same trusted local Agent socket; the FileStat result is strictly decoded as the existing type/size metadata body, without reading file contents or changing Agent authority. The Sessions page uses existing command-3 terminal open/input/read/resize/close operations on one retained authenticated local Agent connection; the Agent-side production terminal provider is limited to the existing POSIX-shell profile and preserves same-UID principal/capability checks, bounded I/O/geometry, and explicit connection teardown cleanup. Desktop presents terminal output only through an explicit bounded read action and exposes explicit validated columns/rows resize controls; it does not introduce background output streaming or an alternate transport. The Transfers page uses the existing upload begin/chunk/finalize transfer family and Agent-owned owner-home filesystem authority; its internal abort request is cleanup-only after a failed or uncertain active upload and does not expose resume or user-triggered abort controls.
+ 
+ The local control endpoint remains:
+ 
+@@ -41,7 +41,7 @@ The desktop client performs no TCP, D-Bus, abstract-socket, `/tmp`, shell-comman
+ Transfers now activates only bounded upload begin/chunk/finalize plus internal failure cleanup over the existing trusted local management path; it does not activate download execution, transfer resume, user-triggered abort, or full bidirectional transfer management. Sessions activates terminal open/input/read/resize/close over one retained authenticated local management connection backed by the fixed same-UID POSIX PTY provider; output presentation is driven only by explicit bounded reads and resize remains within the existing typed geometry contract. Desktop does not activate Remote Desktop or forwarding. Activity is limited to the latest in-memory local diagnostics snapshot; its refresh action reuses the same bounded local status probe as Overview, and its copy action exports only the currently rendered text plus the session-resolved local IPC endpoint candidate to the local desktop clipboard. The endpoint value is path derivation from `XDG_RUNTIME_DIR` through the existing `LocalIpcContract`; it does not perform an Agent read or assert endpoint trust, availability, or connectivity. Activity does not provide persisted history, external telemetry, or Remote Desktop clipboard integration. The current desktop management surface does not implement or activate:
+ 
+ - arbitrary run-command shortcuts, request-selected terminal executable/profile/environment/cwd, background terminal-output streaming, or alternate terminal transports;
+-- `FileStat`, `DownloadChunk`, file-content read/open, general file mutation, download execution, upload resume, or user-triggered upload abort;
++- `DownloadChunk`, file-content read/open, general file mutation, download execution, upload resume, or user-triggered upload abort; `FileStat` is activated only for explicit read-only metadata inspection;
+ - forwarding actions;
+ - enrollment/device mutations;
+ - DNS mutation;
+diff --git a/apps/desktop/src/ipc.rs b/apps/desktop/src/ipc.rs
+index d6bc105..00aeae4 100644
+--- a/apps/desktop/src/ipc.rs
++++ b/apps/desktop/src/ipc.rs
+@@ -25,9 +25,10 @@ use prw_agent::{
+ use rustix::process::geteuid;
+ 
+ use crate::local_management_ipc::{
+-    LocalFileListEntry, LocalRegisteredDeviceEntry, build_file_list_management_request,
++    LocalFileListEntry, LocalFileStatSnapshot, LocalRegisteredDeviceEntry,
++    build_file_list_management_request, build_file_stat_management_request,
+     build_registered_device_list_management_request, decode_file_list_success_body,
+-    decode_registered_device_list_success_body,
++    decode_file_stat_success_body, decode_registered_device_list_success_body,
+ };
+ use crate::state::{AgentAvailability, DesktopPresentationState};
+ 
+@@ -42,6 +43,7 @@ const UPLOAD_ABORT_REQUEST_ID: u64 = 10;
+ const DEVICE_LIST_REQUEST_ID: u64 = 11;
+ const TERMINAL_RESIZE_REQUEST_ID: u64 = 12;
+ const TERMINAL_READ_REQUEST_ID: u64 = 13;
++const FILE_STAT_REQUEST_ID: u64 = 14;
+ const MANAGEMENT_STATUS_PREFIX_LENGTH: usize = 2;
+ const MANAGEMENT_EMPTY_RESULT: u8 = 4;
+ const MANAGEMENT_OFFSET_RESULT: u8 = 5;
+@@ -204,7 +206,7 @@ pub fn query_status_probe() -> StatusProbe {
+ /// Queries one read-only directory listing through the fixed local command-3 `FileList` slice.
+ ///
+ /// Paths are canonical relative paths under the Agent-selected owner-home authority. The
+-/// desktop cannot select a host filesystem root and does not issue `FileStat`, download,
++/// desktop cannot select a host filesystem root and does not issue download,
+ /// mutation, transfer, terminal or forwarding operations here.
+ pub fn query_file_list(path: &str) -> Result<Vec<LocalFileListEntry>, DesktopIpcError> {
+     let endpoint = endpoint_from_environment()?;
+@@ -217,6 +219,19 @@ pub fn query_file_list(path: &str) -> Result<Vec<LocalFileListEntry>, DesktopIpc
+         .map_err(|_| DesktopIpcError::ResponseInvalid)
+ }
+ 
++/// Queries one read-only metadata snapshot through the same authenticated local filesystem
++/// authority as FileList. No file-content bytes, download, or mutation are requested.
++pub fn query_file_stat(path: &str) -> Result<LocalFileStatSnapshot, DesktopIpcError> {
++    let endpoint = endpoint_from_environment()?;
++    let request_id = LocalIpcRequestId::new(FILE_STAT_REQUEST_ID)
++        .map_err(|_| DesktopIpcError::RequestIdGenerationFailed)?;
++    let request = build_file_stat_management_request(request_id, path)
++        .map_err(|_| DesktopIpcError::ManagementRequestInvalid)?;
++    let frame = query_prebuilt_success_frame(&endpoint, request_id, &request)?;
++    decode_file_stat_success_body(frame.payload().as_bytes())
++        .map_err(|_| DesktopIpcError::ResponseInvalid)
++}
++
+ /// Queries the owner-PC registered-device projection through the authenticated local Agent.
+ ///
+ /// The response contains only registry device identity and lifecycle metadata. Reachability is not
+diff --git a/apps/desktop/src/local_management_ipc.rs b/apps/desktop/src/local_management_ipc.rs
+index b5a2af8..e5ee4e0 100644
+--- a/apps/desktop/src/local_management_ipc.rs
++++ b/apps/desktop/src/local_management_ipc.rs
+@@ -11,7 +11,7 @@ use prw_agent::{
+     },
+ };
+ use prw_core::{DeviceId, DeviceLifecycle};
+-use prw_file_service::{MAX_DIRECTORY_ENTRIES, RemotePath};
++use prw_file_service::{MAX_DIRECTORY_ENTRIES, RemoteFileType, RemotePath};
+ use prw_remote_bridge::{BridgeCommand, RemoteBridgeError};
+ 
+ /// Pure client-side failure while composing one typed local management request.
+@@ -21,7 +21,7 @@ pub enum LocalManagementClientError {
+     Bridge(RemoteBridgeError),
+     /// Agent-owned local command-3 framing rejected the encoded body.
+     Local(LocalManagementRequestBuildError),
+-    /// The requested file-list path is not a canonical relative remote path.
++    /// The requested file path is not a canonical relative remote path.
+     InvalidFilePath,
+ }
+ 
+@@ -211,6 +211,80 @@ pub fn build_file_list_management_request(
+     build_bridge_management_request(request_id, &BridgeCommand::FileList(path))
+ }
+ 
++/// Builds one read-only metadata request using the existing Agent-owned filesystem authority.
++pub fn build_file_stat_management_request(
++    request_id: LocalIpcRequestId,
++    path: &str,
++) -> Result<LocalIpcFrame, LocalManagementClientError> {
++    let path = RemotePath::parse(path).map_err(|_| LocalManagementClientError::InvalidFilePath)?;
++    build_bridge_management_request(request_id, &BridgeCommand::FileStat(path))
++}
++
++/// One Agent-observed type/size snapshot; it is not a file-content or stability guarantee.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub struct LocalFileStatSnapshot {
++    kind: RemoteFileType,
++    size: u64,
++}
++
++impl LocalFileStatSnapshot {
++    #[must_use]
++    pub(crate) const fn kind_text(self) -> &'static str {
++        match self.kind {
++            RemoteFileType::RegularFile => "regular file",
++            RemoteFileType::Directory => "directory",
++            RemoteFileType::SymbolicLink => "symbolic link (not followed)",
++            RemoteFileType::Other => "other",
++        }
++    }
++
++    #[must_use]
++    pub(crate) const fn size(self) -> u64 {
++        self.size
++    }
++}
++
++/// Fail-closed result-body errors; a success reply must have exactly the locked metadata shape.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum LocalFileStatDecodeError {
++    MissingResult,
++    UnexpectedResult,
++    InvalidLength,
++    InvalidType,
++}
++
++/// Decodes only the existing metadata tag-3, type-byte, big-endian-u64 success body.
++pub fn decode_file_stat_success_body(
++    payload: &[u8],
++) -> Result<LocalFileStatSnapshot, LocalFileStatDecodeError> {
++    const STATUS_PREFIX_LENGTH: usize = 2;
++    const METADATA_RESULT: u8 = 3;
++    const METADATA_BODY_LENGTH: usize = 10;
++
++    let body = payload
++        .get(STATUS_PREFIX_LENGTH..)
++        .ok_or(LocalFileStatDecodeError::MissingResult)?;
++    if body.first().copied() != Some(METADATA_RESULT) {
++        return Err(LocalFileStatDecodeError::UnexpectedResult);
++    }
++    if body.len() != METADATA_BODY_LENGTH {
++        return Err(LocalFileStatDecodeError::InvalidLength);
++    }
++    let kind = match body[1] {
++        1 => RemoteFileType::RegularFile,
++        2 => RemoteFileType::Directory,
++        3 => RemoteFileType::SymbolicLink,
++        4 => RemoteFileType::Other,
++        _ => return Err(LocalFileStatDecodeError::InvalidType),
++    };
++    let mut size_bytes = [0_u8; 8];
++    size_bytes.copy_from_slice(&body[2..]);
++    Ok(LocalFileStatSnapshot {
++        kind,
++        size: u64::from_be_bytes(size_bytes),
++    })
++}
++
+ /// Decodes the command-specific body after the common two-byte success status prefix.
+ pub fn decode_file_list_success_body(
+     payload: &[u8],
+@@ -286,8 +360,9 @@ mod tests {
+ 
+     use super::{
+         LocalManagementClientError, build_bridge_management_request,
+-        build_file_list_management_request, build_registered_device_list_management_request,
+-        decode_file_list_success_body, decode_registered_device_list_success_body,
++        build_file_list_management_request, build_file_stat_management_request,
++        build_registered_device_list_management_request, decode_file_list_success_body,
++        decode_file_stat_success_body, decode_registered_device_list_success_body,
+     };
+ 
+     fn id(value: u64) -> LocalIpcRequestId {
+@@ -440,6 +515,55 @@ mod tests {
+         ));
+     }
+ 
++    #[test]
++    fn live_file_stat_builder_reuses_canonical_relative_path_authority() {
++        for path in ["", "docs/notes.txt"] {
++            let frame = build_file_stat_management_request(id(160), path).expect("stat builds");
++            let local =
++                decode_local_management_request_frame(&frame).expect("local envelope decodes");
++            assert_eq!(
++                BridgeCommand::decode(local.bridge_payload()).expect("bridge decodes"),
++                BridgeCommand::FileStat(RemotePath::parse(path).expect("canonical path"))
++            );
++        }
++        for invalid in ["/etc", "../escape", "docs/../escape", "docs//nested", r"docs\notes"] {
++            assert!(matches!(
++                build_file_stat_management_request(id(161), invalid),
++                Err(LocalManagementClientError::InvalidFilePath)
++            ));
++        }
++    }
++
++    #[test]
++    fn file_stat_decoder_accepts_exact_types_and_big_endian_size_only() {
++        for (kind, name) in [
++            (1, "regular file"),
++            (2, "directory"),
++            (3, "symbolic link (not followed)"),
++            (4, "other"),
++        ] {
++            let mut payload = vec![0, 0, 3, kind];
++            payload.extend_from_slice(&123456789_u64.to_be_bytes());
++            let snapshot = decode_file_stat_success_body(&payload).expect("metadata decodes");
++            assert_eq!(snapshot.kind_text(), name);
++            assert_eq!(snapshot.size(), 123456789);
++            let mut trailing = payload;
++            trailing.push(0);
++            assert!(decode_file_stat_success_body(&trailing).is_err());
++        }
++        for invalid in [
++            &[][..],
++            &[0][..],
++            &[0, 0][..],
++            &[0, 0, 2][..],
++            &[0, 0, 3][..],
++            &[0, 0, 3, 1][..],
++            &[0, 0, 3, 9, 0, 0, 0, 0, 0, 0, 0, 1][..],
++        ] {
++            assert!(decode_file_stat_success_body(invalid).is_err());
++        }
++    }
++
+     #[test]
+     fn directory_entry_success_body_decodes_types_and_rejects_trailing_bytes() {
+         let payload = [
+diff --git a/apps/desktop/src/ui.rs b/apps/desktop/src/ui.rs
+index aee7868..d6a32e5 100644
+--- a/apps/desktop/src/ui.rs
++++ b/apps/desktop/src/ui.rs
+@@ -49,6 +49,9 @@ const UPLOAD_SUBTITLE: &str = concat!(
+ );
+ const FILES_LIST_IDLE_LABEL: &str = "List files";
+ const FILES_LIST_BUSY_LABEL: &str = "Listing…";
++const FILES_STAT_IDLE_LABEL: &str = "Inspect metadata";
++const FILES_STAT_BUSY_LABEL: &str = "Inspecting…";
++const FILES_STAT_UNLOADED_LABEL: &str = "Metadata snapshot: not requested";
+ const FILES_REFRESH_LABEL: &str = "Refresh";
+ const FILES_PATH_INVALID_STATUS: &str = "Invalid path: use a canonical relative path under home";
+ const FILES_PATH_UNLOADED_LABEL: &str = "Current path: not loaded";
+@@ -60,7 +63,7 @@ const TITLE_3_CSS_CLASS: &str = "title-3";
+ const HEADING_CSS_CLASS: &str = "heading";
+ const MONOSPACE_CSS_CLASS: &str = "monospace";
+ const FILES_SUBTITLE: &str = concat!(
+-    "Read-only directory listing under the local owner home authority. ",
++    "Read-only directory listing and explicit type/size metadata snapshots under the local owner home authority. ",
+     "Paths are relative; this surface does not read file contents, mutate files, transfer data, open terminals, or create forwarding."
+ );
+ const MACHINES_SUBTITLE: &str = concat!(
+@@ -102,11 +105,13 @@ struct MachinesPageTargets {
+ struct FilesPageTargets {
+     path_entry: gtk::Entry,
+     list_button: gtk::Button,
++    stat_button: gtk::Button,
+     home_button: gtk::Button,
+     up_button: gtk::Button,
+     refresh_button: gtk::Button,
+     current_path_label: gtk::Label,
+     status: gtk::Label,
++    metadata_label: gtk::Label,
+     entries: gtk::Box,
+     current_path: Rc<RefCell<String>>,
+     has_successful_listing: Rc<Cell<bool>>,
+@@ -1475,6 +1480,7 @@ fn clear_file_list_entries(entries: &gtk::Box) {
+ fn set_file_list_controls_enabled(targets: &FilesPageTargets, enabled: bool) {
+     targets.path_entry.set_sensitive(enabled);
+     targets.list_button.set_sensitive(enabled);
++    targets.stat_button.set_sensitive(enabled);
+     targets.home_button.set_sensitive(enabled);
+     targets
+         .refresh_button
+@@ -1533,6 +1539,7 @@ fn request_manual_file_listing(targets: &FilesPageTargets, path: String) {
+ 
+ fn request_file_listing(targets: &FilesPageTargets, path: String) {
+     set_file_list_controls_enabled(targets, false);
++    targets.metadata_label.set_text(FILES_STAT_UNLOADED_LABEL);
+     targets.list_button.set_label(FILES_LIST_BUSY_LABEL);
+     targets
+         .status
+@@ -1604,6 +1611,68 @@ fn request_file_listing(targets: &FilesPageTargets, path: String) {
+     });
+ }
+ 
++fn request_file_stat(targets: &FilesPageTargets, path: String) {
++    if !file_list_manual_path_is_canonical(&path) {
++        targets.metadata_label.set_text(FILES_PATH_INVALID_STATUS);
++        return;
++    }
++
++    set_file_list_controls_enabled(targets, false);
++    targets.stat_button.set_label(FILES_STAT_BUSY_LABEL);
++    targets.metadata_label.set_text("Inspecting authorized metadata…");
++
++    let worker_path = path.clone();
++    let (sender, receiver) = mpsc::sync_channel(1);
++    let spawn_result = std::thread::Builder::new()
++        .name("prw-desktop-readonly-file-stat".to_owned())
++        .spawn(move || {
++            let _ = sender.send(ipc::query_file_stat(&worker_path));
++        });
++
++    if spawn_result.is_err() {
++        targets
++            .metadata_label
++            .set_text("Unable to start the read-only metadata worker");
++        targets.stat_button.set_label(FILES_STAT_IDLE_LABEL);
++        set_file_list_controls_enabled(targets, true);
++        return;
++    }
++
++    let poll_targets = targets.clone();
++    let _source_id = glib::timeout_add_local(WORKER_RESULT_POLL_INTERVAL, move || {
++        match receiver.try_recv() {
++            Ok(Ok(snapshot)) => {
++                let display_path = if path.is_empty() { "home" } else { &path };
++                poll_targets.metadata_label.set_text(&format!(
++                    "Metadata snapshot ({display_path}): type {}, size {} bytes",
++                    snapshot.kind_text(),
++                    snapshot.size()
++                ));
++                poll_targets.stat_button.set_label(FILES_STAT_IDLE_LABEL);
++                set_file_list_controls_enabled(&poll_targets, true);
++                glib::ControlFlow::Break
++            }
++            Ok(Err(error)) => {
++                poll_targets
++                    .metadata_label
++                    .set_text(&format!("Metadata unavailable: {error}"));
++                poll_targets.stat_button.set_label(FILES_STAT_IDLE_LABEL);
++                set_file_list_controls_enabled(&poll_targets, true);
++                glib::ControlFlow::Break
++            }
++            Err(TryRecvError::Empty) => glib::ControlFlow::Continue,
++            Err(TryRecvError::Disconnected) => {
++                poll_targets
++                    .metadata_label
++                    .set_text("Read-only metadata worker ended without a result");
++                poll_targets.stat_button.set_label(FILES_STAT_IDLE_LABEL);
++                set_file_list_controls_enabled(&poll_targets, true);
++                glib::ControlFlow::Break
++            }
++        }
++    });
++}
++
+ fn files_page() -> gtk::Box {
+     let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
+     page.set_margin_top(PAGE_OUTER_MARGIN);
+@@ -1638,10 +1707,12 @@ fn files_page() -> gtk::Box {
+     let refresh_button = gtk::Button::with_label(FILES_REFRESH_LABEL);
+     refresh_button.set_sensitive(false);
+     let list_button = gtk::Button::with_label(FILES_LIST_IDLE_LABEL);
++    let stat_button = gtk::Button::with_label(FILES_STAT_IDLE_LABEL);
+     navigation.append(&home_button);
+     navigation.append(&up_button);
+     navigation.append(&refresh_button);
+     navigation.append(&list_button);
++    navigation.append(&stat_button);
+     page.append(&navigation);
+ 
+     let status = gtk::Label::new(Some("No directory listing requested yet"));
+@@ -1649,6 +1720,12 @@ fn files_page() -> gtk::Box {
+     status.add_css_class(TITLE_3_CSS_CLASS);
+     page.append(&status);
+ 
++    let metadata_label = gtk::Label::new(Some(FILES_STAT_UNLOADED_LABEL));
++    metadata_label.set_xalign(0.0);
++    metadata_label.set_wrap(true);
++    metadata_label.set_selectable(true);
++    page.append(&metadata_label);
++
+     let entries = gtk::Box::new(gtk::Orientation::Vertical, 6);
+     let scroller = gtk::ScrolledWindow::new();
+     scroller.set_hexpand(true);
+@@ -1659,11 +1736,13 @@ fn files_page() -> gtk::Box {
+     let targets = FilesPageTargets {
+         path_entry,
+         list_button,
++        stat_button,
+         home_button,
+         up_button,
+         refresh_button,
+         current_path_label,
+         status,
++        metadata_label,
+         entries,
+         current_path: Rc::new(RefCell::new(String::new())),
+         has_successful_listing: Rc::new(Cell::new(false)),
+@@ -1675,6 +1754,12 @@ fn files_page() -> gtk::Box {
+         request_manual_file_listing(&list_targets, path);
+     });
+ 
++    let stat_targets = targets.clone();
++    targets.stat_button.connect_clicked(move |_| {
++        let path = stat_targets.path_entry.text().to_string();
++        request_file_stat(&stat_targets, path);
++    });
++
+     let entry_targets = targets.clone();
+     targets.path_entry.connect_activate(move |entry| {
+         request_manual_file_listing(&entry_targets, entry.text().to_string());
+@@ -2086,7 +2171,8 @@ mod tests {
+     use super::{
+         ACTIVITY_SUBTITLE, COPY_SNAPSHOT_DONE_LABEL, COPY_SNAPSHOT_IDLE_LABEL,
+         FILES_LIST_BUSY_LABEL, FILES_LIST_IDLE_LABEL, FILES_PATH_INVALID_STATUS,
+-        FILES_PATH_UNLOADED_LABEL, FILES_REFRESH_LABEL, FILES_SUBTITLE, MACHINES_SUBTITLE,
++        FILES_PATH_UNLOADED_LABEL, FILES_REFRESH_LABEL, FILES_STAT_BUSY_LABEL,
++        FILES_STAT_IDLE_LABEL, FILES_STAT_UNLOADED_LABEL, FILES_SUBTITLE, MACHINES_SUBTITLE,
+         REFRESH_BUTTON_BUSY_LABEL, REFRESH_BUTTON_IDLE_LABEL, UPLOAD_BUTTON_BUSY_LABEL,
+         UPLOAD_BUTTON_IDLE_LABEL, UPLOAD_SUBTITLE, UploadCleanupStatus,
+         activity_snapshot_clipboard_text, desktop_local_ipc_protocol_text, desktop_version_text,
+@@ -2103,14 +2189,17 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn files_surface_labels_lock_read_only_file_list_boundary() {
++    fn file_stat_files_surface_labels_lock_read_only_file_list_and_stat_boundary() {
+         assert_eq!(FILES_LIST_IDLE_LABEL, "List files");
+         assert_eq!(FILES_LIST_BUSY_LABEL, "Listing…");
+         assert_eq!(FILES_REFRESH_LABEL, "Refresh");
++        assert_eq!(FILES_STAT_IDLE_LABEL, "Inspect metadata");
++        assert_eq!(FILES_STAT_BUSY_LABEL, "Inspecting…");
++        assert_eq!(FILES_STAT_UNLOADED_LABEL, "Metadata snapshot: not requested");
+         assert_eq!(
+             FILES_SUBTITLE,
+             concat!(
+-                "Read-only directory listing under the local owner home authority. ",
++                "Read-only directory listing and explicit type/size metadata snapshots under the local owner home authority. ",
+                 "Paths are relative; this surface does not read file contents, mutate files, transfer data, open terminals, or create forwarding."
+             )
+         );
