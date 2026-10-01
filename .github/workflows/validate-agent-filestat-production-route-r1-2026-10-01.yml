@@ -1,0 +1,174 @@
+name: Ownspace Agent FileStat production-route R1 isolated validation
+
+on:
+  push:
+    branches:
+      - validation/agent-filestat-production-route-2026-10-01-r1
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    env:
+      BASE_SHA: 1c816455264fdb161c2c1e2e148a441742a9bd50
+      BASE_TREE: 568358f38beeff58e2235dd926a4c0948bde1ffa
+      EXPECTED_BRANCH: validation/agent-filestat-production-route-2026-10-01-r1
+      EXPECTED_PATCH: validation-inputs/agent-filestat-production-route-r1-2026-10-01.patch
+      EXPECTED_WORKFLOW: .github/workflows/validate-agent-filestat-production-route-r1-2026-10-01.yml
+      PATCH_SHA256: fb6737f815a09f6d2b0116951c6b7f39ffc11d81ef6d1edfcb9258683318762b
+      SOURCE_PATH: crates/prw-agent/src/local_commands/management_agent_status_runtime.rs
+      SOURCE_BASE_SHA256: 91efc1528a0d98f697ebc92f93a4d461afdc762cb42f3b9647568d61c4b83f60
+      SOURCE_FINAL_SHA256: 137010f835aa14678eec75d8d013a835aa9314e74bca58834e706199b9ee57b3
+
+    steps:
+      - name: Checkout isolated validation carrier
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify exact base and validation-only carrier scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = "$EXPECTED_BRANCH"
+          test "$(git rev-parse HEAD^)" = "$BASE_SHA"
+          test "$(git rev-list --count "$BASE_SHA"..HEAD)" -eq 1
+          test "$(git rev-parse "$BASE_SHA^{tree}")" = "$BASE_TREE"
+          mapfile -t changed < <(git diff --name-only "$BASE_SHA"...HEAD | sort)
+          test "${#changed[@]}" -eq 2
+          test "${changed[0]}" = "$EXPECTED_WORKFLOW"
+          test "${changed[1]}" = "$EXPECTED_PATCH"
+          git diff --check "$BASE_SHA"...HEAD -- "$EXPECTED_WORKFLOW"
+          echo "$PATCH_SHA256  $EXPECTED_PATCH" | sha256sum -c -
+          test "$(git show "$BASE_SHA:$SOURCE_PATH" | sha256sum | cut -d' ' -f1)" = "$SOURCE_BASE_SHA256"
+          test "$(git rev-parse "$BASE_SHA:$SOURCE_PATH")" = 9e91d720cff6bacecd7e1c12a28d556628fd8290
+
+      - name: Reconstruct exactly one approved Agent source path reversibly
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "$SOURCE_BASE_SHA256  $SOURCE_PATH" | sha256sum -c -
+          git apply --check "$EXPECTED_PATCH"
+          git apply "$EXPECTED_PATCH"
+          git diff --check
+          mapfile -t paths < <(git diff --name-only | sort)
+          test "${#paths[@]}" -eq 1
+          test "${paths[0]}" = "$SOURCE_PATH"
+          echo "$SOURCE_FINAL_SHA256  $SOURCE_PATH" | sha256sum -c -
+          git apply --check -R "$EXPECTED_PATCH"
+          git apply -R "$EXPECTED_PATCH"
+          test -z "$(git diff --name-only)"
+          echo "$SOURCE_BASE_SHA256  $SOURCE_PATH" | sha256sum -c -
+          git apply --check "$EXPECTED_PATCH"
+          git apply "$EXPECTED_PATCH"
+          echo "$SOURCE_FINAL_SHA256  $SOURCE_PATH" | sha256sum -c -
+          git diff --check
+
+      - name: Install exact Rust toolchain and native build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config protobuf-compiler libgtk-4-dev libadwaita-1-dev
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
+          rustup default 1.97.1
+          rustc --version
+          cargo --version
+          pkg-config --modversion gtk4
+          pkg-config --modversion libadwaita-1
+
+      - name: Locked Cargo metadata
+        run: cargo metadata --locked --format-version 1 >/dev/null
+
+      - name: Rust formatting gate
+        run: cargo fmt --all -- --check
+
+      - name: Focused FileStat, compatibility and interlock regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked -p prw-agent production_file_stat_reports_correlated_type_and_size_without_following_symlinks
+          cargo test --locked -p prw-agent production_file_stat_rejects_intermediate_symlink_without_escaping_root
+          cargo test --locked -p prw-agent other_files_read_commands_remain_unsupported_after_capability_admission
+          cargo test --locked -p prw-agent production_terminal_runtime_preserves_principal_and_family_exclusion
+          cargo test --locked -p prw-agent bounded_upload_commits_exact_content_and_drains_runtime
+          cargo test --locked -p prw-agent bounded_upload_command_gate_keeps_adjacent_write_and_download_commands_closed
+          cargo test --locked -p prw-desktop file_stat_
+
+      - name: Full directly affected Agent and Desktop tests
+        run: cargo test --locked -p prw-agent -p prw-desktop
+
+      - name: Existing provider and protocol dependency tests
+        run: cargo test --locked -p prw-file-service -p prw-file-transfer -p prw-remote-bridge
+
+      - name: All-target compile gate
+        run: cargo check --locked -p prw-agent -p prw-desktop -p prw-file-service -p prw-file-transfer -p prw-remote-bridge --all-targets
+
+      - name: Clippy deny warnings
+        run: cargo clippy --locked -p prw-agent -p prw-desktop -p prw-file-service -p prw-file-transfer -p prw-remote-bridge --all-targets -- -D warnings
+
+      - name: Validation-only release binaries without packaging or deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked --release -p prw-agent --bin prw-agent
+          cargo build --locked --release -p prw-desktop --bin prw-desktop
+          test -x target/release/prw-agent
+          test -x target/release/prw-desktop
+
+      - name: Assemble checksum-bound candidate validation evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/ownspace-agent-filestat-r1"
+          mkdir -p "$output"
+          cp "$EXPECTED_PATCH" "$output/agent-filestat-production-route-r1.patch"
+          git diff --binary > "$output/reconstructed-one-path-candidate.diff"
+          {
+            echo 'Ownspace Agent FileStat R1 production-route candidate validation-only evidence'
+            echo "source_main=$BASE_SHA"
+            echo "source_tree=$BASE_TREE"
+            echo "carrier_head=$GITHUB_SHA"
+            echo "candidate_patch_sha256=$PATCH_SHA256"
+            echo "candidate_source_final_sha256=$SOURCE_FINAL_SHA256"
+            echo 'changed_source_paths=1'
+            echo 'compatibility_filestat_activation=no'
+            echo 'downloadchunk_r2_status=BLOCKED_RETAINED'
+            echo 'intended_use=validation'
+            echo 'packaging_executed=no'
+            echo 'deployment_executed=no'
+          } > "$output/BUILD_IDENTITY.txt"
+          (cd "$output" && sha256sum *.patch *.diff BUILD_IDENTITY.txt > CHECKSUMS.sha256 && sha256sum -c CHECKSUMS.sha256)
+
+      - name: Upload successful candidate validation inputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ownspace_Agent_FileStat_R1_Validated_Inputs_Run_${{ github.run_id }}
+          path: ${{ runner.temp }}/ownspace-agent-filestat-r1
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Capture isolated formatting diagnosis on failure only
+        if: failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/ownspace-agent-filestat-r1-diagnosis"
+          mkdir -p "$output"
+          cp "$EXPECTED_PATCH" "$output/approved-file-stat-candidate.patch"
+          if command -v cargo >/dev/null 2>&1; then cargo fmt --all || true; fi
+          git diff --binary > "$output/failure-workspace.diff"
+          git diff --name-only > "$output/changed-source-paths.txt"
+          (cd "$output" && sha256sum *.patch *.diff *.txt > CHECKSUMS.sha256 && sha256sum -c CHECKSUMS.sha256)
+
+      - name: Upload FileStat diagnostic input on failure only
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ownspace_Agent_FileStat_R1_Diagnostic_Run_${{ github.run_id }}
+          path: ${{ runner.temp }}/ownspace-agent-filestat-r1-diagnosis
+          if-no-files-found: warn
+          retention-days: 7
