@@ -1,0 +1,106 @@
+name: Ownspace Desktop Files FileStat read-only R4 validation
+on:
+  push:
+    branches:
+      - validation/desktop-files-filestat-readonly-2026-10-01-r4
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      BASE_SHA: 437b44286216e89a3bd19573f551f2774ecfeef9
+      BASE_TREE: b79101ffd52b2717ae961eebf8fc5fe73413148d
+      BRANCH: validation/desktop-files-filestat-readonly-2026-10-01-r4
+      PATCH: validation/desktop-files-filestat-readonly-2026-10-01-r4.patch
+      DELTA: validation/desktop-files-filestat-readonly-2026-10-01-r4-format.patch
+      CLIPPY_DELTA: validation/desktop-files-filestat-readonly-2026-10-01-r4-clippy.patch
+      WORKFLOW: .github/workflows/validate-desktop-files-filestat-readonly-2026-10-01-r4.yml
+    steps:
+      - name: Checkout isolated validation carrier
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify exact baseline, carrier, patch and bounded resulting files
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = "$BRANCH"
+          test "$(git merge-base "$BASE_SHA" HEAD)" = "$BASE_SHA"
+          test "$(git rev-list --count "$BASE_SHA"..HEAD)" -eq 4
+          test "$(git rev-parse "$BASE_SHA^{tree}")" = "$BASE_TREE"
+          mapfile -t committed < <(git diff --name-only "$BASE_SHA"...HEAD | sort)
+          test "${#committed[@]}" -eq 4
+          printf '%s\n' "${committed[@]}" | grep -Fxq -- "$WORKFLOW"
+          printf '%s\n' "${committed[@]}" | grep -Fxq -- "$PATCH"
+          printf '%s\n' "${committed[@]}" | grep -Fxq -- "$DELTA"
+          printf '%s\n' "${committed[@]}" | grep -Fxq -- "$CLIPPY_DELTA"
+          git diff --check "$BASE_SHA"...HEAD -- "$WORKFLOW"
+          echo 'c82d8a8f225b196b9d5d8156f16a28cf680a00aaa68d95485bab194f448894e6  validation/desktop-files-filestat-readonly-2026-10-01-r4.patch' | sha256sum -c -
+          git apply --check "$PATCH"
+          git apply "$PATCH"
+          echo '607793b7503c5ff95795f17368e8ae020ab30dafa20c64548f25e4f082316090  validation/desktop-files-filestat-readonly-2026-10-01-r4-format.patch' | sha256sum -c -
+          git apply --check "$DELTA"
+          git apply "$DELTA"
+          echo '0a89081292674f2017a0bd369b1ce1357fa762bf5444633210e913dbde653ff9  validation/desktop-files-filestat-readonly-2026-10-01-r4-clippy.patch' | sha256sum -c -
+          git apply --check "$CLIPPY_DELTA"
+          git apply "$CLIPPY_DELTA"
+          git diff --check
+          mapfile -t affected < <(git diff --name-only | sort)
+          test "${#affected[@]}" -eq 4
+          test "${affected[0]}" = apps/desktop/README.md
+          test "${affected[1]}" = apps/desktop/src/ipc.rs
+          test "${affected[2]}" = apps/desktop/src/local_management_ipc.rs
+          test "${affected[3]}" = apps/desktop/src/ui.rs
+          cat > "$RUNNER_TEMP/filestat-candidate.sha256" <<'EOF'
+          2527185e830d9f93e904b9647e12714331120c2a73d57ce92e573fbeac2367e0  apps/desktop/README.md
+          fd7690207dc097b2435308597bd586365fbe74071b560fb5a7a0d04037ad1436  apps/desktop/src/ipc.rs
+          70df714afb9065653ad46570614839763801314e1a8d97fd61252e6b3096b799  apps/desktop/src/local_management_ipc.rs
+          93a2d18aa0710aeb6e58a59fc1393079b1f21762546cc3e571ffe0bca35356e4  apps/desktop/src/ui.rs
+          EOF
+          sha256sum -c "$RUNNER_TEMP/filestat-candidate.sha256"
+          test "$(grep -c 'FILE_STAT_REQUEST_ID: u64 = 14' apps/desktop/src/ipc.rs)" -eq 1
+          ! git diff -U0 -- crates/prw-agent crates/prw-file-service crates/prw-file-transfer crates/prw-remote-bridge | grep '^+[^+]'
+      - name: Install native validation dependencies and exact Rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config protobuf-compiler libgtk-4-dev libadwaita-1-dev
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
+          rustup default 1.97.1
+          rustc --version
+          pkg-config --modversion gtk4
+          pkg-config --modversion libadwaita-1
+      - name: Locked Cargo metadata
+        run: cargo metadata --locked --format-version 1 > /dev/null
+      - name: Rust formatting
+        run: cargo fmt --all -- --check
+      - name: Focused FileStat Desktop tests
+        run: cargo test --locked -p prw-desktop file_stat_
+      - name: Full Desktop tests
+        run: cargo test --locked -p prw-desktop
+      - name: Desktop all-target compile
+        run: cargo check --locked -p prw-desktop --all-targets
+      - name: Desktop Clippy deny warnings
+        run: cargo clippy --locked -p prw-desktop --all-targets -- -D warnings
+      - name: Desktop validation-only release build
+        run: cargo build --locked --release -p prw-desktop --bin prw-desktop
+      - name: Retain exact candidate validation inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/filestat-r4-inputs"
+          cp "$PATCH" "$RUNNER_TEMP/filestat-r4-inputs/"
+          cp "$DELTA" "$RUNNER_TEMP/filestat-r4-inputs/"
+          cp "$CLIPPY_DELTA" "$RUNNER_TEMP/filestat-r4-inputs/"
+          cp "$RUNNER_TEMP/filestat-candidate.sha256" "$RUNNER_TEMP/filestat-r4-inputs/"
+          printf 'intended_use=validation\nbase=%s\ncarrier=%s\npatch_sha256=%s\nformat_delta_sha256=%s\nclippy_delta_sha256=%s\npackaging_executed=no\ndeployment_executed=no\n' "$BASE_SHA" "$GITHUB_SHA" c82d8a8f225b196b9d5d8156f16a28cf680a00aaa68d95485bab194f448894e6 607793b7503c5ff95795f17368e8ae020ab30dafa20c64548f25e4f082316090 0a89081292674f2017a0bd369b1ce1357fa762bf5444633210e913dbde653ff9 > "$RUNNER_TEMP/filestat-r4-inputs/IDENTITY.txt"
+      - name: Upload FileStat validation inputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ownspace_Desktop_FileStat_Read_Only_R4_${{ github.run_id }}
+          path: ${{ runner.temp }}/filestat-r4-inputs
+          if-no-files-found: error
+          retention-days: 7
