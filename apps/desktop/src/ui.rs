@@ -11,6 +11,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use adw::prelude::*;
 use gtk::glib;
 use prw_agent::{AGENT_RUNTIME_SUBDIRECTORY, AGENT_SOCKET_FILENAME, LocalIpcProtocolVersion};
+use prw_core::DeviceLifecycle;
 use prw_file_service::RemotePath;
 use prw_file_transfer::{MAX_TRANSFER_BYTES, TransferId};
 use prw_remote_bridge::MAX_BRIDGE_INLINE_BYTES;
@@ -99,6 +100,8 @@ struct MachinesPageTargets {
     refresh_button: gtk::Button,
     status: gtk::Label,
     entries: gtk::Box,
+    filter_entry: gtk::Entry,
+    snapshot: Rc<RefCell<Option<Vec<LocalRegisteredDeviceEntry>>>>,
 }
 
 #[derive(Clone)]
@@ -351,6 +354,11 @@ fn machines_page() -> (
     device_status.add_css_class(DIM_LABEL_CSS_CLASS);
     page.append(&device_status);
 
+    let filter_entry = gtk::Entry::new();
+    filter_entry.set_placeholder_text(Some("Filter by device ID or lifecycle"));
+    filter_entry.set_max_length(128);
+    page.append(&filter_entry);
+
     let device_entries = gtk::Box::new(gtk::Orientation::Vertical, 8);
     page.append(&device_entries);
 
@@ -379,7 +387,13 @@ fn machines_page() -> (
         refresh_button: device_refresh_button,
         status: device_status,
         entries: device_entries,
+        filter_entry,
+        snapshot: Rc::new(RefCell::new(None)),
     };
+    let filter_targets = targets.clone();
+    targets.filter_entry.connect_changed(move |_| {
+        render_registered_device_inventory(&filter_targets);
+    });
     let click_targets = targets.clone();
     targets
         .refresh_button
@@ -414,6 +428,49 @@ fn append_registered_device_entry(entries: &gtk::Box, device: &LocalRegisteredDe
     entries.append(&label);
 }
 
+fn registered_device_matches_filter(device_id: &str, lifecycle: &str, query: &str) -> bool {
+    let query = query.trim();
+    if query.is_empty() {
+        return true;
+    }
+    let query = query.to_lowercase();
+    device_id.to_lowercase().contains(&query) || lifecycle.to_lowercase().contains(&query)
+}
+
+fn render_registered_device_inventory(targets: &MachinesPageTargets) {
+    clear_registered_device_entries(&targets.entries);
+    let snapshot = targets.snapshot.borrow();
+    let Some(devices) = snapshot.as_ref() else {
+        targets.status.set_text(MACHINES_DEVICE_NOT_LOADED_STATUS);
+        return;
+    };
+
+    let query = targets.filter_entry.text();
+    let visible: Vec<_> = devices
+        .iter()
+        .filter(|device| {
+            registered_device_matches_filter(device.device_id(), device.lifecycle_text(), &query)
+        })
+        .collect();
+    for device in &visible {
+        append_registered_device_entry(&targets.entries, device);
+    }
+
+    let (mut enrolled, mut pending, mut revoked) = (0, 0, 0);
+    for device in devices {
+        match device.lifecycle() {
+            DeviceLifecycle::Enrolled => enrolled += 1,
+            DeviceLifecycle::PendingEnrollment => pending += 1,
+            DeviceLifecycle::Revoked => revoked += 1,
+        }
+    }
+    targets.status.set_text(&format!(
+        "Showing {} of {} registered devices (enrolled: {enrolled}, pending: {pending}, revoked: {revoked}). Reachability is not observed by this local surface.",
+        visible.len(),
+        devices.len(),
+    ));
+}
+
 fn start_registered_device_probe(targets: &MachinesPageTargets) {
     targets.refresh_button.set_sensitive(false);
     targets
@@ -442,15 +499,15 @@ fn start_registered_device_probe(targets: &MachinesPageTargets) {
     let targets = targets.clone();
     let _source_id = glib::timeout_add_local(WORKER_RESULT_POLL_INTERVAL, move || {
         match receiver.try_recv() {
-            Ok(Ok(devices)) => {
-                clear_registered_device_entries(&targets.entries);
-                for device in &devices {
-                    append_registered_device_entry(&targets.entries, device);
-                }
-                targets.status.set_text(&format!(
-                    "Registered devices: {}. Reachability is not inferred from routing data.",
-                    devices.len()
-                ));
+            Ok(Ok(mut devices)) => {
+                devices.sort_by(|left, right| {
+                    left.device_id()
+                        .to_lowercase()
+                        .cmp(&right.device_id().to_lowercase())
+                        .then_with(|| left.device_id().cmp(right.device_id()))
+                });
+                targets.snapshot.replace(Some(devices));
+                render_registered_device_inventory(&targets);
                 targets.refresh_button.set_sensitive(true);
                 targets
                     .refresh_button
@@ -458,6 +515,7 @@ fn start_registered_device_probe(targets: &MachinesPageTargets) {
                 glib::ControlFlow::Break
             }
             Ok(Err(error)) => {
+                targets.snapshot.replace(None);
                 clear_registered_device_entries(&targets.entries);
                 targets
                     .status
@@ -470,6 +528,7 @@ fn start_registered_device_probe(targets: &MachinesPageTargets) {
             }
             Err(TryRecvError::Empty) => glib::ControlFlow::Continue,
             Err(TryRecvError::Disconnected) => {
+                targets.snapshot.replace(None);
                 clear_registered_device_entries(&targets.entries);
                 targets
                     .status
@@ -2180,8 +2239,8 @@ mod tests {
         activity_snapshot_clipboard_text, desktop_local_ipc_protocol_text, desktop_version_text,
         file_list_child_path, file_list_manual_path_is_canonical, file_list_parent_path,
         file_list_path_label, file_list_refresh_enabled, local_endpoint_contract_text,
-        upload_destination_is_valid, upload_failure_status, upload_progress_fraction,
-        upload_source_path_is_valid,
+        registered_device_matches_filter, upload_destination_is_valid, upload_failure_status,
+        upload_progress_fraction, upload_source_path_is_valid,
     };
 
     #[test]
@@ -2286,6 +2345,17 @@ mod tests {
             super::MACHINES_REACHABILITY_NOT_OBSERVED,
             "Not observed by this local surface"
         );
+    }
+
+    #[test]
+    fn machines_filter_is_local_case_insensitive_and_matches_id_or_lifecycle() {
+        assert!(registered_device_matches_filter("Device-A", "Enrolled", ""));
+        assert!(registered_device_matches_filter("Device-A", "Enrolled", "  "));
+        assert!(registered_device_matches_filter("Device-A", "Enrolled", "DEVICE-a"));
+        assert!(registered_device_matches_filter("Device-A", "Pending enrollment", " pending "));
+        assert!(registered_device_matches_filter("Device-A", "Revoked", "REVOKED"));
+        assert!(!registered_device_matches_filter("Device-A", "Enrolled", "device-b"));
+        assert!(!registered_device_matches_filter("Device-A", "Enrolled", "Online"));
     }
 
     #[test]

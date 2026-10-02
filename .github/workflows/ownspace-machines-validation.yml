@@ -1,0 +1,86 @@
+name: Ownspace Machines Inventory Validation
+
+on:
+  push:
+    branches:
+      - validation/machines-inventory-ui-2026-10-02
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  machines-desktop-validation:
+    name: Machines and DeviceList validation (ubuntu-24.04)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the isolated validation branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install Linux desktop build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes pkg-config libgtk-4-dev libadwaita-1-dev protobuf-compiler
+
+      - name: Install stable Rust with formatting and Clippy components
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Validate locked Cargo workspace metadata
+        run: cargo metadata --locked --no-deps --format-version 1 > /dev/null
+
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run focused Machines filter test
+        run: cargo test --locked -p prw-desktop machines_filter_is_local_case_insensitive_and_matches_id_or_lifecycle
+
+      - name: Run focused registered DeviceList response test
+        run: cargo test --locked -p prw-agent registered_device_success_body_uses_bounded_tag_seven_shape
+
+      - name: Run affected Desktop tests
+        run: cargo test --locked --all-targets -p prw-desktop
+
+      - name: Run affected Agent tests
+        run: cargo test --locked --all-targets -p prw-agent
+
+      - name: Check all targets for affected packages
+        run: cargo check --locked --all-targets --all-features -p prw-desktop -p prw-agent
+
+      - name: Run Clippy for affected packages
+        run: cargo clippy --locked --all-targets --all-features -p prw-desktop -p prw-agent -- -D warnings
+
+      - name: Build unsigned validation-only Desktop executable
+        run: cargo build --locked --release -p prw-desktop
+
+      - name: Record source, toolchain, and executable checksum
+        run: |
+          mkdir -p target/validation
+          {
+            printf 'purpose=validation-only; unsigned; no installation or deployment\n'
+            printf 'source_commit=%s\n' "$GITHUB_SHA"
+            printf 'source_tree='
+            git rev-parse HEAD^{tree}
+            rustc --version
+            cargo --version
+            sha256sum target/release/prw-desktop
+          } > target/validation/machines-validation-manifest.txt
+
+      - name: Retain unsigned validation artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ownspace-machines-validation-unsigned-${{ github.sha }}
+          path: |
+            target/release/prw-desktop
+            target/validation/machines-validation-manifest.txt
+          if-no-files-found: error
+          retention-days: 7
