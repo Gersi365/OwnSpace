@@ -1,3 +1,6 @@
+Warning: truncated output (original token count: 22610)
+Total output lines: 2509
+
 use std::cell::{Cell, RefCell};
 use std::fs::File;
 use std::io::Read;
@@ -1084,315 +1087,7 @@ fn cleanup_failed_upload(
     upload: &mut UploadPresentation,
     session: &mut ipc::BoundedUploadSession,
 ) -> UploadCleanupStatus {
-    let payload = match upload.request_abort() {
-        Ok(payload) => payload,
-        Err(_) => return UploadCleanupStatus::Unconfirmed,
-    };
-    if session.abort(&payload).is_ok() {
-        UploadCleanupStatus::Confirmed
-    } else {
-        UploadCleanupStatus::Unconfirmed
-    }
-}
-
-fn send_upload_failure(
-    sender: &mpsc::Sender<UploadWorkerEvent>,
-    reason: &'static str,
-    cleanup: UploadCleanupStatus,
-) {
-    let _ = sender.send(UploadWorkerEvent::Failed { reason, cleanup });
-}
-
-#[allow(
-    clippy::manual_let_else,
-    clippy::needless_pass_by_value,
-    clippy::single_match_else,
-    clippy::too_many_lines
-)]
-fn run_upload_worker(source: String, destination: String, sender: mpsc::Sender<UploadWorkerEvent>) {
-    let source_path = PathBuf::from(&source);
-    let (sha256, total_bytes) = match hash_upload_source(&source_path) {
-        Ok(result) => result,
-        Err(reason) => {
-            send_upload_failure(&sender, reason, UploadCleanupStatus::NotRequired);
-            return;
-        }
-    };
-
-    let transfer_id = next_upload_transfer_id(&source, &destination, total_bytes, &sha256);
-    let mut upload = UploadPresentation::new(transfer_id, destination, total_bytes, sha256);
-    let mut session = match ipc::BoundedUploadSession::connect() {
-        Ok(session) => session,
-        Err(_) => {
-            send_upload_failure(
-                &sender,
-                "Unable to open the trusted local Agent upload session",
-                UploadCleanupStatus::NotRequired,
-            );
-            return;
-        }
-    };
-    let begin_payload = match upload.request_begin() {
-        Ok(payload) => payload,
-        Err(_) => {
-            send_upload_failure(
-                &sender,
-                "Upload plan failed local validation",
-                UploadCleanupStatus::NotRequired,
-            );
-            return;
-        }
-    };
-
-    let begin_offset = match session.begin(&begin_payload) {
-        Ok(offset) => offset,
-        Err(_) => {
-            let cleanup = cleanup_failed_upload(&mut upload, &mut session);
-            send_upload_failure(
-                &sender,
-                "Agent rejected or lost the upload begin acknowledgement",
-                cleanup,
-            );
-            return;
-        }
-    };
-    if upload.apply_begin_acknowledgement(begin_offset).is_err() {
-        let cleanup = cleanup_failed_upload(&mut upload, &mut session);
-        send_upload_failure(
-            &sender,
-            "Upload begin acknowledgement was not the exact zero offset",
-            cleanup,
-        );
-        return;
-    }
-    if sender
-        .send(UploadWorkerEvent::Progress {
-            committed: 0,
-            total: total_bytes,
-        })
-        .is_err()
-    {
-        let _ = cleanup_failed_upload(&mut upload, &mut session);
-        return;
-    }
-
-    let mut file = match File::open(&source_path) {
-        Ok(file) => file,
-        Err(_) => {
-            let cleanup = cleanup_failed_upload(&mut upload, &mut session);
-            send_upload_failure(&sender, "Local source file became unavailable", cleanup);
-            return;
-        }
-    };
-    let mut buffer = vec![0_u8; MAX_BRIDGE_INLINE_BYTES];
-
-    while upload.committed_bytes() < total_bytes {
-        let remaining = total_bytes - upload.committed_bytes();
-        let requested = usize::try_from(remaining)
-            .unwrap_or(MAX_BRIDGE_INLINE_BYTES)
-            .min(MAX_BRIDGE_INLINE_BYTES);
-        let read = match file.read(&mut buffer[..requested]) {
-            Ok(0) => {
-                let cleanup = cleanup_failed_upload(&mut upload, &mut session);
-                send_upload_failure(
-                    &sender,
-                    "Local source file ended before its hashed length",
-                    cleanup,
-                );
-                return;
-            }
-            Ok(read) => read,
-            Err(_) => {
-                let cleanup = cleanup_failed_upload(&mut upload, &mut session);
-                send_upload_failure(
-                    &sender,
-                    "Local source file could not be read during upload",
-                    cleanup,
-                );
-                return;
-            }
-        };
-
-        let payload = match upload.request_chunk(&buffer[..read]) {
-            Ok(payload) => payload,
-            Err(_) => {
-                let cleanup = cleanup_failed_upload(&mut upload, &mut session);
-                send_upload_failure(
-                    &sender,
-                    "Upload chunk failed local bounds validation",
-                    cleanup,
-                );
-                return;
-            }
-        };
-        let committed = match session.chunk(&payload) {
-            Ok(offset) => offset,
-            Err(_) => {
-                let cleanup = cleanup_failed_upload(&mut upload, &mut session);
-                send_upload_failure(
-                    &sender,
-                    "Agent rejected or lost an upload chunk acknowledgement",
-                    cleanup,
-                );
-                return;
-            }
-        };
-        if upload.apply_chunk_acknowledgement(committed).is_err() {
-            let cleanup = cleanup_failed_upload(&mut upload, &mut session);
-            send_upload_failure(
-                &sender,
-                "Upload chunk acknowledgement offset did not match",
-                cleanup,
-            );
-            return;
-        }
-        if sender
-            .send(UploadWorkerEvent::Progress {
-                committed,
-                total: total_bytes,
-            })
-            .is_err()
-        {
-            let _ = cleanup_failed_upload(&mut upload, &mut session);
-            return;
-        }
-    }
-
-    let mut trailing = [0_u8; 1];
-    match file.read(&mut trailing) {
-        Ok(0) => {}
-        Ok(_) => {
-            let cleanup = cleanup_failed_upload(&mut upload, &mut session);
-            send_upload_failure(
-                &sender,
-                "Local source file changed length during upload",
-                cleanup,
-            );
-            return;
-        }
-        Err(_) => {
-            let cleanup = cleanup_failed_upload(&mut upload, &mut session);
-            send_upload_failure(
-                &sender,
-                "Local source file could not be revalidated",
-                cleanup,
-            );
-            return;
-        }
-    }
-
-    let finalize_payload = match upload.request_finalize() {
-        Ok(payload) => payload,
-        Err(_) => {
-            let cleanup = cleanup_failed_upload(&mut upload, &mut session);
-            send_upload_failure(
-                &sender,
-                "Upload could not enter finalization state",
-                cleanup,
-            );
-            return;
-        }
-    };
-    if session.finalize(&finalize_payload).is_err() {
-        let cleanup = cleanup_failed_upload(&mut upload, &mut session);
-        send_upload_failure(
-            &sender,
-            "Agent did not confirm upload finalization",
-            cleanup,
-        );
-        return;
-    }
-    if upload.apply_finalize_acknowledgement().is_err() {
-        send_upload_failure(
-            &sender,
-            "Upload finalization succeeded but local acknowledgement state was invalid",
-            UploadCleanupStatus::NotRequired,
-        );
-        return;
-    }
-    let _ = sender.send(UploadWorkerEvent::Completed);
-}
-
-fn render_upload_controls(targets: &TransfersPageTargets) {
-    let enabled = !targets.operation_pending.get();
-    targets.source_entry.set_sensitive(enabled);
-    targets.destination_entry.set_sensitive(enabled);
-    targets.upload_button.set_sensitive(enabled);
-    targets.upload_button.set_label(if enabled {
-        UPLOAD_BUTTON_IDLE_LABEL
-    } else {
-        UPLOAD_BUTTON_BUSY_LABEL
-    });
-}
-
-fn start_upload(targets: &TransfersPageTargets) {
-    if targets.operation_pending.get() {
-        return;
-    }
-
-    let source = targets.source_entry.text().to_string();
-    let destination = targets.destination_entry.text().to_string();
-    if !upload_source_path_is_valid(&source) {
-        targets
-            .status
-            .set_text("Invalid source: enter an absolute local file path");
-        return;
-    }
-    if !upload_destination_is_valid(&destination) {
-        targets.status.set_text(
-            "Invalid destination: use a non-root canonical relative path under owner home",
-        );
-        return;
-    }
-
-    targets.operation_pending.set(true);
-    targets.progress.set_fraction(0.0);
-    targets.progress.set_text(Some("Preparing upload…"));
-    targets
-        .status
-        .set_text("Hashing local source and preparing bounded upload…");
-    render_upload_controls(targets);
-
-    let (sender, receiver) = mpsc::channel();
-    let spawn_result = std::thread::Builder::new()
-        .name("prw-desktop-bounded-upload".to_owned())
-        .spawn(move || run_upload_worker(source, destination, sender));
-    if spawn_result.is_err() {
-        targets.operation_pending.set(false);
-        targets
-            .status
-            .set_text("Unable to start bounded upload worker");
-        targets.progress.set_text(Some("Upload not started"));
-        render_upload_controls(targets);
-        return;
-    }
-
-    let poll_targets = targets.clone();
-    let _source_id = glib::timeout_add_local(WORKER_RESULT_POLL_INTERVAL, move || {
-        match receiver.try_recv() {
-            Ok(UploadWorkerEvent::Progress { committed, total }) => {
-                poll_targets
-                    .progress
-                    .set_fraction(upload_progress_fraction(committed, total));
-                poll_targets
-                    .progress
-                    .set_text(Some(&format!("{committed} / {total} bytes")));
-                poll_targets
-                    .status
-                    .set_text("Upload acknowledged by the Agent and progressing");
-                glib::ControlFlow::Continue
-            }
-            Ok(UploadWorkerEvent::Completed) => {
-                poll_targets.operation_pending.set(false);
-                poll_targets.progress.set_fraction(1.0);
-                poll_targets.progress.set_text(Some("Upload complete"));
-                poll_targets
-                    .status
-                    .set_text("Upload completed and finalized by the Agent");
-                render_upload_controls(&poll_targets);
-                glib::ControlFlow::Break
-            }
-            Ok(UploadWorkerEvent::Failed { reason, cleanup }) => {
+    let payloa…2610 tokens truncated…adWorkerEvent::Failed { reason, cleanup }) => {
                 poll_targets.operation_pending.set(false);
                 poll_targets
                     .status
@@ -2350,12 +2045,26 @@ mod tests {
     #[test]
     fn machines_filter_is_local_case_insensitive_and_matches_id_or_lifecycle() {
         assert!(registered_device_matches_filter("Device-A", "Enrolled", ""));
-        assert!(registered_device_matches_filter("Device-A", "Enrolled", "  "));
-        assert!(registered_device_matches_filter("Device-A", "Enrolled", "DEVICE-a"));
-        assert!(registered_device_matches_filter("Device-A", "Pending enrollment", " pending "));
-        assert!(registered_device_matches_filter("Device-A", "Revoked", "REVOKED"));
-        assert!(!registered_device_matches_filter("Device-A", "Enrolled", "device-b"));
-        assert!(!registered_device_matches_filter("Device-A", "Enrolled", "Online"));
+        assert!(registered_device_matches_filter(
+            "Device-A", "Enrolled", "  "
+        ));
+        assert!(registered_device_matches_filter(
+            "Device-A", "Enrolled", "DEVICE-a"
+        ));
+        assert!(registered_device_matches_filter(
+            "Device-A",
+            "Pending enrollment",
+            " pending "
+        ));
+        assert!(registered_device_matches_filter(
+            "Device-A", "Revoked", "REVOKED"
+        ));
+        assert!(!registered_device_matches_filter(
+            "Device-A", "Enrolled", "device-b"
+        ));
+        assert!(!registered_device_matches_filter(
+            "Device-A", "Enrolled", "Online"
+        ));
     }
 
     #[test]
