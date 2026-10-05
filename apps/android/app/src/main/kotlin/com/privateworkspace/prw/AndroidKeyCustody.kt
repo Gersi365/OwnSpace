@@ -1,5 +1,3 @@
-[Reading 286 lines from start (total: 286 lines, 0 remaining)]
-
 package com.privateworkspace.prw
 
 import android.annotation.SuppressLint
@@ -286,5 +284,3 @@ internal class AndroidKeyCustody(
         private const val MAX_TYPED_MESSAGE_BYTES = 4_442
     }
 }
-
-[executed on device: OWS (2e7ebe3b-518e-4a6a-b7f3-214616d73d77)]

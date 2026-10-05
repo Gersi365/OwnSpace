@@ -1,5 +1,3 @@
-[Reading 334 lines from start (total: 334 lines, 0 remaining)]
-
 package com.privateworkspace.prw
 
 import android.os.Bundle
@@ -334,5 +332,3 @@ internal class MainActivity : ComponentActivity() {
         }
     }
 }
-
-[executed on device: OWS (2e7ebe3b-518e-4a6a-b7f3-214616d73d77)]
