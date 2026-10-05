@@ -1,6 +1,9 @@
+[Reading 464 lines from start (total: 464 lines, 0 remaining)]
+
 package com.privateworkspace.prw
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import java.security.SecureRandom
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -10,6 +13,7 @@ internal enum class EnrollmentPresentationState {
     NotReady,
     Ready,
     ProofValidated,
+    ReenrollmentRequired,
     Error,
 }
 
@@ -27,14 +31,15 @@ internal data class PrwUiState(
     val detail: String = "Development bootstrap only — no production endpoint",
 )
 
-internal class MainViewModel(
-    private val custody: AndroidKeyCustody = AndroidKeyCustody(),
+internal class MainViewModel @JvmOverloads constructor(
+    application: Application,
+    private val custody: AndroidKeyCustody = AndroidKeyCustody(application.applicationContext),
     private val controller: ConnectionController = ConnectionController(),
     private val deviceManagement: DeviceManagementController = DeviceManagementController(),
     private val terminalController: TerminalSessionController = TerminalSessionController(NativeTerminalCommandEncoder),
     private val fileController: RemoteFilesController = RemoteFilesController(NativeFileCommandEncoder),
     private val networkController: NetworkManagementController = NetworkManagementController(NativeNetworkCommandEncoder),
-) : ViewModel() {
+) : AndroidViewModel(application) {
     private val mutableUiState = MutableStateFlow(PrwUiState())
     val uiState: StateFlow<PrwUiState> = mutableUiState.asStateFlow()
 
@@ -43,7 +48,7 @@ internal class MainViewModel(
         publish("Preparing non-exportable Android identity")
         runCatching {
             check(NativeBridge.protocolVersion() == 1)
-            val spki = custody.ensureDeviceIdentitySpki()
+            val spki = custody.loadEstablishedDeviceIdentitySpki()
             check(custody.deviceIdentityIsNonExportable())
             controller.transition(ConnectionState.Authenticating)
             publish("Validating typed local session proof")
@@ -73,10 +78,44 @@ internal class MainViewModel(
             controller.transition(ConnectionState.Error)
             mutableUiState.value = mutableUiState.value.copy(
                 connectionState = ConnectionState.Error,
-                identityReady = runCatching { custody.deviceIdentityIsNonExportable() }.getOrDefault(false),
+                identityReady = false,
                 nativeBridgeReady = runCatching { NativeBridge.protocolVersion() == 1 }.getOrDefault(false),
                 bootstrapValidated = false,
+                enrollmentState = if (error is AndroidReenrollmentRequiredException) {
+                    EnrollmentPresentationState.ReenrollmentRequired
+                } else {
+                    mutableUiState.value.enrollmentState
+                },
                 detail = error.message ?: "Local bootstrap failed closed",
+            )
+        }
+    }
+
+    fun beginFreshLocalEnrollment() {
+        mutableUiState.value = mutableUiState.value.copy(
+            enrollmentState = EnrollmentPresentationState.Ready,
+            bootstrapValidated = false,
+            identityReady = false,
+            detail = "Explicit fresh enrollment requested; replacing local device identity",
+        )
+        runCatching {
+            check(NativeBridge.protocolVersion() == 1)
+            custody.beginFreshDeviceEnrollment()
+            check(custody.deviceIdentityIsNonExportable())
+        }.onSuccess {
+            mutableUiState.value = mutableUiState.value.copy(
+                identityReady = true,
+                nativeBridgeReady = true,
+                bootstrapValidated = false,
+                enrollmentState = EnrollmentPresentationState.Ready,
+                detail = "Fresh local identity created by explicit enrollment action; authoritative enrollment/revocation was not contacted",
+            )
+        }.onFailure { error ->
+            mutableUiState.value = mutableUiState.value.copy(
+                identityReady = false,
+                bootstrapValidated = false,
+                enrollmentState = EnrollmentPresentationState.Error,
+                detail = error.message ?: "Fresh enrollment failed closed",
             )
         }
     }
@@ -88,7 +127,7 @@ internal class MainViewModel(
         )
         runCatching {
             check(NativeBridge.protocolVersion() == 1)
-            val spki = custody.ensureDeviceIdentitySpki()
+            val spki = custody.loadEstablishedDeviceIdentitySpki()
             check(custody.deviceIdentityIsNonExportable())
             val nonce = ByteArray(32).also(SecureRandom()::nextBytes)
             val request = EnrollmentProofRequest(
@@ -112,7 +151,12 @@ internal class MainViewModel(
             )
         }.onFailure { error ->
             mutableUiState.value = mutableUiState.value.copy(
-                enrollmentState = EnrollmentPresentationState.Error,
+                identityReady = false,
+                enrollmentState = if (error is AndroidReenrollmentRequiredException) {
+                    EnrollmentPresentationState.ReenrollmentRequired
+                } else {
+                    EnrollmentPresentationState.Error
+                },
                 detail = error.message ?: "Enrollment proof failed closed",
             )
         }
@@ -420,3 +464,5 @@ internal class MainViewModel(
         private const val DISPOSABLE_FORWARD_ID = 149_001L
     }
 }
+
+[executed on device: OWS (2e7ebe3b-518e-4a6a-b7f3-214616d73d77)]
