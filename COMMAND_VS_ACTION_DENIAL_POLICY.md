@@ -1,0 +1,2 @@
+Bllokimi i një komande nuk është automatikisht bllokim i veprimit.
+Kur platforma refuzon një komandë për shkak të formulimit, sintaksës, mënyrës së ekzekutimit ose një kufizimi teknik, kjo nuk nënkupton se përdorimi i kompjuterit të pronarit apo realizimi i objektivit është i ndaluar.
